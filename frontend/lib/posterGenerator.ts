@@ -346,7 +346,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
         const label2H = 5;
         const label2X = box2X + (box2W / 2) - (label2W / 2);
         const label2Y = box2Y - (label2H / 2);
-        doc.setFillColor(255);
+      doc.setFillColor(255, 255, 255);
         (doc as any).roundedRect(label2X, label2Y, label2W, label2H, 2.5, 2.5, 'FD');
         doc.setFontSize(9);
         doc.text('ANTES', box2X + (box2W / 2), box2Y + 1, { align: 'center' });
@@ -376,7 +376,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
         const labelH = 7;
         const labelX = antesX + (antesW / 2) - (labelW / 2);
         const labelY = bottomY - (labelH / 2);
-        doc.setFillColor(255);
+      doc.setFillColor(255, 255, 255);
         (doc as any).roundedRect(labelX, labelY, labelW, labelH, 3.5, 3.5, 'FD');
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(14);
