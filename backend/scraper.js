@@ -101,11 +101,6 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       }
       
       onProgress({ message: 'Esperando actualización de filtros...', current: 12, total: 100, percentage: 14 });
-        );
-        console.log('[DEBUG] Filter applied successfully (page count changed)');
-      } catch (e) {
-        console.log('[DEBUG] Filter might not have changed page count, or already applied');
-      }
       
       await page.waitForLoadState('networkidle');
       await page.waitForTimeout(3000);
