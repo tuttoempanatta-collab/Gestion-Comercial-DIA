@@ -304,7 +304,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       const label1H = 7;
       const label1X = box1X + (box1W / 2) - (label1W / 2);
       const label1Y = bottomY - (label1H / 2);
-      doc.setFillColor(255);
+      doc.setFillColor(255, 255, 255);
       (doc as any).roundedRect(label1X, label1Y, label1W, label1H, 3.5, 3.5, 'FD');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(12);
