@@ -66,14 +66,17 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const startSelector = '#vDESDE, #vFECHADESDE, input[name="vDESDE"]';
       const endSelector = '#vHASTA, #vFECHAHASTA, input[name="vHASTA"]';
       
+      // Add a small wait to let the portal settle
+      await page.waitForTimeout(3000);
+
       if (startDate) {
-        await page.waitForSelector(startSelector, { timeout: 10000 });
+        await page.waitForSelector(startSelector, { timeout: 20000, state: 'visible' });
         await page.fill(startSelector, formatDateForPortal(startDate));
         await page.keyboard.press('Enter');
         await page.waitForTimeout(2000);
       }
       if (endDate) {
-        await page.waitForSelector(endSelector, { timeout: 10000 });
+        await page.waitForSelector(endSelector, { timeout: 20000, state: 'visible' });
         await page.fill(endSelector, formatDateForPortal(endDate));
         await page.keyboard.press('Enter');
         await page.waitForTimeout(2000);
