@@ -48,15 +48,26 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       await page.waitForTimeout(3000);
     } catch (e) {}
 
-    // 2. Find the Data Frame
+    // 2. Find the Data Frame (Robust search)
     onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
     let dataFrame = page;
-    for (const frame of page.frames()) {
-      if (await frame.locator('input[id*="DESDE"], #GridContainerTbl').count() > 0) {
-        dataFrame = frame;
-        console.log('[DEBUG] Data frame found!');
-        break;
-      }
+    
+    // Give it a moment to load frames
+    await page.waitForTimeout(3000);
+    
+    const frames = page.frames();
+    console.log(`[DEBUG] Total frames found: ${frames.length}`);
+    
+    for (const frame of frames) {
+      try {
+        const hasInputs = await frame.locator('input[id*="DESDE"], #vDESDE').count() > 0;
+        const hasTable = await frame.locator('#GridContainerTbl, .Grid_WorkWith').count() > 0;
+        if (hasInputs || hasTable) {
+          dataFrame = frame;
+          console.log('[DEBUG] Real data frame identified!');
+          break;
+        }
+      } catch (e) {}
     }
 
     // 3. Apply Date Filters
@@ -67,31 +78,32 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const endInput = dataFrame.locator('input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]').first();
       const searchBtn = dataFrame.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
 
-      if (await startInput.isVisible() && startDate) {
-        await startInput.fill(formatDateForPortal(startDate));
-        await page.keyboard.press('Tab');
-      }
-      if (await endInput.isVisible() && endDate) {
-        await endInput.fill(formatDateForPortal(endDate));
-        await page.keyboard.press('Tab');
+      try {
+        await startInput.waitFor({ state: 'visible', timeout: 5000 });
+        if (startDate) await startInput.fill(formatDateForPortal(startDate));
+        if (endDate) await endInput.fill(formatDateForPortal(endDate));
+        await searchBtn.click().catch(() => page.keyboard.press('Enter'));
+        await dataFrame.waitForTimeout(5000);
+      } catch (e) {
+        console.log('Could not apply filters in current frame, attempting fallback...', e.message);
       }
       
-      await searchBtn.click().catch(() => page.keyboard.press('Enter'));
-      await dataFrame.waitForTimeout(5000);
-      onProgress({ message: 'Filtros aplicados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
+      onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
     }
 
     // 4. Detect total pages
     let totalPages = 1;
     try {
-      const paginationBtn = dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons').first();
+      // Try multiple selectors for pagination
+      const pagSelector = 'button.btn.btn-primary.dropdown-toggle, .PagingButtons, span[id*="PAGES"]';
+      const paginationBtn = dataFrame.locator(pagSelector).first();
       const paginationText = await paginationBtn.innerText();
       const match = paginationText.match(/de\s+(\d+)/i);
       if (match) {
         totalPages = parseInt(match[1]);
       }
     } catch (e) {
-      console.log('Could not detect total pages, defaulting to 1', e.message);
+      console.log('Could not detect total pages', e.message);
     }
 
     onProgress({ message: `Iniciando extracción de ${totalPages} páginas...`, current: 0, total: totalPages, percentage: 15 });
