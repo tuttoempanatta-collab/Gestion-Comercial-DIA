@@ -51,10 +51,11 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log(`Could not set ${pageSize} items per page`, e.message);
     }
 
-      // 2. Apply Date Filters SECOND
+    // 2. Apply Date Filters SECOND
+    if (startDate || endDate) {
       onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 7 });
       
-      await page.waitForTimeout(5000); // Give it more time to load everything
+      await page.waitForTimeout(5000);
 
       // Function to find element in any frame
       async function findInFrames(selector) {
@@ -97,7 +98,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         await searchBtn.click();
         await page.waitForTimeout(3000);
       } else {
-        await page.keyboard.press('Enter'); // Fallback
+        await page.keyboard.press('Enter');
       }
       
       onProgress({ message: 'Esperando actualización de filtros...', current: 12, total: 100, percentage: 14 });
