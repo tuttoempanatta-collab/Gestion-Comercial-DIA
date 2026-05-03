@@ -51,57 +51,56 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log(`Could not set ${pageSize} items per page`, e.message);
     }
 
-    // 2. Apply Date Filters SECOND
-    if (startDate || endDate) {
-      // Get initial page count to detect change
-      let initialPages = 1;
-      try {
-        const pBtn = page.locator('button.btn.btn-primary.dropdown-toggle').first();
-        const pText = await pBtn.innerText();
-        const m = pText.match(/de\s+(\d+)/i);
-        if (m) initialPages = parseInt(m[1]);
-      } catch (e) {}
-      
+      // 2. Apply Date Filters SECOND
       onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 7 });
       
-      // Add a small wait to let the portal settle
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(5000); // Give it more time to load everything
 
-      // Flexible selectors for date inputs
-      const startInput = page.locator('input[id*="DESDE"], input[name*="DESDE"], .Attribute_TrnDate').first();
-      const endInput = page.locator('input[id*="HASTA"], input[name*="HASTA"], .Attribute_TrnDate').last();
-      const searchBtn = page.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
+      // Function to find element in any frame
+      async function findInFrames(selector) {
+        const mainElement = page.locator(selector).first();
+        if (await mainElement.isVisible()) return mainElement;
+        
+        for (const frame of page.frames()) {
+          const frameElement = frame.locator(selector).first();
+          if (await frameElement.isVisible()) return frameElement;
+        }
+        return null;
+      }
 
-      if (startDate) {
-        await startInput.waitFor({ state: 'visible', timeout: 20000 });
+      const startSelector = 'input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]';
+      const endSelector = 'input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]';
+      const searchSelector = 'input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard';
+
+      let startInput = await findInFrames(startSelector);
+      let endInput = await findInFrames(endSelector);
+      let searchBtn = await findInFrames(searchSelector);
+
+      if (!startInput) {
+        console.log("Date inputs not found directly, waiting more...");
+        await page.waitForTimeout(5000);
+        startInput = await findInFrames(startSelector);
+        endInput = await findInFrames(endSelector);
+        searchBtn = await findInFrames(searchSelector);
+      }
+
+      if (startInput && startDate) {
         await startInput.fill(formatDateForPortal(startDate));
         await page.keyboard.press('Tab');
-        await page.waitForTimeout(1000);
       }
-      if (endDate) {
-        await endInput.waitFor({ state: 'visible', timeout: 20000 });
+      if (endInput && endDate) {
         await endInput.fill(formatDateForPortal(endDate));
         await page.keyboard.press('Tab');
-        await page.waitForTimeout(1000);
       }
       
-      // Click Buscar
-      await searchBtn.click();
-      await page.waitForTimeout(2000);
+      if (searchBtn) {
+        await searchBtn.click();
+        await page.waitForTimeout(3000);
+      } else {
+        await page.keyboard.press('Enter'); // Fallback
+      }
       
       onProgress({ message: 'Esperando actualización de filtros...', current: 12, total: 100, percentage: 14 });
-      
-      // Wait for the pagination text to change from initialPages
-      try {
-        await page.waitForFunction(
-          (oldVal) => {
-            const btn = document.querySelector('button.btn.btn-primary.dropdown-toggle');
-            if (!btn) return false;
-            const match = btn.innerText.match(/de\s+(\d+)/i);
-            return match && parseInt(match[1]) !== oldVal;
-          },
-          initialPages,
-          { timeout: 15000 }
         );
         console.log('[DEBUG] Filter applied successfully (page count changed)');
       } catch (e) {
