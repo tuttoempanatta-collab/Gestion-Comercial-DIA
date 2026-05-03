@@ -63,30 +63,31 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       } catch (e) {}
       
       onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 7 });
-      const startSelector = '#vDESDE, #vFECHADESDE, input[name="vDESDE"]';
-      const endSelector = '#vHASTA, #vFECHAHASTA, input[name="vHASTA"]';
       
       // Add a small wait to let the portal settle
       await page.waitForTimeout(3000);
 
+      // Flexible selectors for date inputs
+      const startInput = page.locator('input[id*="DESDE"], input[name*="DESDE"], .Attribute_TrnDate').first();
+      const endInput = page.locator('input[id*="HASTA"], input[name*="HASTA"], .Attribute_TrnDate').last();
+      const searchBtn = page.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
+
       if (startDate) {
-        await page.waitForSelector(startSelector, { timeout: 20000, state: 'visible' });
-        await page.fill(startSelector, formatDateForPortal(startDate));
-        await page.keyboard.press('Enter');
-        await page.waitForTimeout(2000);
+        await startInput.waitFor({ state: 'visible', timeout: 20000 });
+        await startInput.fill(formatDateForPortal(startDate));
+        await page.keyboard.press('Tab');
+        await page.waitForTimeout(1000);
       }
       if (endDate) {
-        await page.waitForSelector(endSelector, { timeout: 20000, state: 'visible' });
-        await page.fill(endSelector, formatDateForPortal(endDate));
-        await page.keyboard.press('Enter');
-        await page.waitForTimeout(2000);
+        await endInput.waitFor({ state: 'visible', timeout: 20000 });
+        await endInput.fill(formatDateForPortal(endDate));
+        await page.keyboard.press('Tab');
+        await page.waitForTimeout(1000);
       }
       
-      // Try to click Buscar multiple times if needed
-      const searchBtn = page.locator('input[value="Buscar"], #BTNBUSCAR, .Button_Standard').first();
+      // Click Buscar
       await searchBtn.click();
       await page.waitForTimeout(2000);
-      await searchBtn.click(); // Double click to be sure
       
       onProgress({ message: 'Esperando actualización de filtros...', current: 12, total: 100, percentage: 14 });
       
