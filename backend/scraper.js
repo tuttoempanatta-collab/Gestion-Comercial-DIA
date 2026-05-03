@@ -40,104 +40,78 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log('Navigation to table had issues, but attempting to continue...', e.message);
     }
     
-    // 1. Set page size FIRST
+    // 1. Set page size FIRST (Main page usually handles this)
     try {
       onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
-      await page.click('button.btn.btn-primary.dropdown-toggle');
-      await page.click(`a:has-text("${pageSize} rows")`);
-      await page.waitForLoadState('load');
+      await page.click('button.btn.btn-primary.dropdown-toggle', { timeout: 5000 }).catch(() => {});
+      await page.click(`a:has-text("${pageSize} rows")`, { timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(3000);
-    } catch (e) {
-      console.log(`Could not set ${pageSize} items per page`, e.message);
+    } catch (e) {}
+
+    // 2. Find the Data Frame
+    onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
+    let dataFrame = page;
+    for (const frame of page.frames()) {
+      if (await frame.locator('input[id*="DESDE"], #GridContainerTbl').count() > 0) {
+        dataFrame = frame;
+        console.log('[DEBUG] Data frame found!');
+        break;
+      }
     }
 
-    // 2. Apply Date Filters SECOND
+    // 3. Apply Date Filters
     if (startDate || endDate) {
-      onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 7 });
+      onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 10 });
       
-      await page.waitForTimeout(5000);
+      const startInput = dataFrame.locator('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]').first();
+      const endInput = dataFrame.locator('input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]').first();
+      const searchBtn = dataFrame.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
 
-      // Function to find element in any frame
-      async function findInFrames(selector) {
-        const mainElement = page.locator(selector).first();
-        if (await mainElement.isVisible()) return mainElement;
-        
-        for (const frame of page.frames()) {
-          const frameElement = frame.locator(selector).first();
-          if (await frameElement.isVisible()) return frameElement;
-        }
-        return null;
-      }
-
-      const startSelector = 'input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]';
-      const endSelector = 'input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]';
-      const searchSelector = 'input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard';
-
-      let startInput = await findInFrames(startSelector);
-      let endInput = await findInFrames(endSelector);
-      let searchBtn = await findInFrames(searchSelector);
-
-      if (!startInput) {
-        console.log("Date inputs not found directly, waiting more...");
-        await page.waitForTimeout(5000);
-        startInput = await findInFrames(startSelector);
-        endInput = await findInFrames(endSelector);
-        searchBtn = await findInFrames(searchSelector);
-      }
-
-      if (startInput && startDate) {
+      if (await startInput.isVisible() && startDate) {
         await startInput.fill(formatDateForPortal(startDate));
         await page.keyboard.press('Tab');
       }
-      if (endInput && endDate) {
+      if (await endInput.isVisible() && endDate) {
         await endInput.fill(formatDateForPortal(endDate));
         await page.keyboard.press('Tab');
       }
       
-      if (searchBtn) {
-        await searchBtn.click();
-        await page.waitForTimeout(3000);
-      } else {
-        await page.keyboard.press('Enter');
-      }
-      
-      onProgress({ message: 'Esperando actualización de filtros...', current: 12, total: 100, percentage: 14 });
-      
-      await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(3000);
+      await searchBtn.click().catch(() => page.keyboard.press('Enter'));
+      await dataFrame.waitForTimeout(5000);
+      onProgress({ message: 'Filtros aplicados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
     }
 
-    // 3. Detect total pages using the correct selector found by research
+    // 4. Detect total pages
     let totalPages = 1;
     try {
-      const paginationBtn = page.locator('button.btn.btn-primary.dropdown-toggle').first();
+      const paginationBtn = dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons').first();
       const paginationText = await paginationBtn.innerText();
-      console.log(`[DEBUG] Final Pagination text: ${paginationText}`);
       const match = paginationText.match(/de\s+(\d+)/i);
       if (match) {
         totalPages = parseInt(match[1]);
       }
     } catch (e) {
-      console.log('Could not detect total pages', e.message);
+      console.log('Could not detect total pages, defaulting to 1', e.message);
     }
 
     onProgress({ message: `Iniciando extracción de ${totalPages} páginas...`, current: 0, total: totalPages, percentage: 15 });
 
     let totalItems = 0;
-    let currentPage = 1;
-
-    while (currentPage <= totalPages) {
+    for (let p = 1; p <= totalPages; p++) {
       onProgress({ 
-        message: `Extrayendo página ${currentPage} de ${totalPages}...`, 
-        current: currentPage, 
-        total: totalPages, 
-        percentage: Math.min(15 + Math.floor((currentPage / totalPages) * 80), 95)
+        message: `Extrayendo página ${p} de ${totalPages}...`, 
+        current: p, 
+        total: totalPages,
+        percentage: 15 + Math.floor((p / totalPages) * 75)
       });
+
+      // Wait for table in the correct frame
+      const tableSelector = '#GridContainerTbl, .Grid_WorkWith';
+      await dataFrame.waitForSelector(tableSelector, { timeout: 30000 });
       
-      await page.waitForSelector('#GridContainerTbl', { timeout: 30000 });
       await page.waitForTimeout(1000);
 
-      const rows = await page.$$eval('#GridContainerTbl tr', (trRows) => {
+      const rows = await dataFrame.$$eval('#GridContainerTbl tr', (trRows) => {
         return trRows.map(row => {
           if (row.querySelector('th') || row.classList.contains('Grid_WorkWithHeader')) return null;
           const cells = row.querySelectorAll('td');
