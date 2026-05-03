@@ -1,0 +1,21 @@
+# Root gitignore
+node_modules/
+.env
+.DS_Store
+dist/
+build/
+.next/
+*.log
+
+# Backend specific
+backend/node_modules/
+backend/.env
+backend/*.sqlite
+backend/screenshots/
+backend/playwright_data/
+
+# Frontend specific
+frontend/node_modules/
+frontend/.env
+frontend/.next/
+frontend/out/
