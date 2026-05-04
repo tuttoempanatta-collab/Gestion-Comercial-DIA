@@ -27,9 +27,9 @@ function getCatalogDb() {
 const { getDescription } = require('./description_db');
 
 module.exports = {
-  enrichWithCatalog: (item) => {
+  enrichWithCatalog: async (item) => {
     // 1. Check for enriched description first
-    const enrichedDescription = getDescription(item.codigo);
+    const enrichedDescription = await getDescription(item.codigo);
     if (enrichedDescription) {
       item.articulo = enrichedDescription;
     }

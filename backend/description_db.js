@@ -1,4 +1,4 @@
-const { pool } = require('./db');
+const { pool } = require('./pool');
 
 module.exports = {
   getDescription: async (codigo) => {

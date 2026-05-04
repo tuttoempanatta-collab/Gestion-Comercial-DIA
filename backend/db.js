@@ -1,14 +1,4 @@
-const { Pool } = require('pg');
-const { enrichWithCatalog } = require('./catalog');
-require('dotenv').config();
-
-// Use DATABASE_URL for Supabase connection
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Required for Supabase/Render connections
-  }
-});
+const { pool } = require('./pool');
 
 module.exports = {
   pool,
@@ -29,7 +19,8 @@ module.exports = {
 
   saveCommercialAction: async (extractionId, data) => {
     // Enrich data with catalog.db (still local SQLite) if price is 0
-    const enrichedData = enrichWithCatalog(data);
+    const { enrichWithCatalog } = require('./catalog');
+    const enrichedData = await enrichWithCatalog(data);
 
     try {
       const query = `
