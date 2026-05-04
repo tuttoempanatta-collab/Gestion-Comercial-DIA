@@ -91,11 +91,19 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       try {
         await startInput.waitFor({ state: 'visible', timeout: 5000 });
         if (startDate) await startInput.fill(formatDateForPortal(startDate));
+        await dataFrame.waitForTimeout(500);
         if (endDate) await endInput.fill(formatDateForPortal(endDate));
-        await searchBtn.click().catch(() => page.keyboard.press('Enter'));
-        await dataFrame.waitForTimeout(5000);
+        await dataFrame.waitForTimeout(500);
+        
+        console.log('[DEBUG] Attempting to click Buscar...');
+        await searchBtn.click({ force: true, timeout: 5000 });
+        
+        // Wait for a significant change or just a solid pause for the portal to refresh
+        await dataFrame.waitForTimeout(6000);
       } catch (e) {
-        console.log('Could not apply filters in current frame, attempting fallback...', e.message);
+        console.log('Could not apply filters or click Buscar, trying Enter key...', e.message);
+        await page.keyboard.press('Enter');
+        await dataFrame.waitForTimeout(6000);
       }
       
       onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
