@@ -129,8 +129,23 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     onProgress({ message: `Iniciando extracción de ${totalPages} páginas...`, current: 0, total: totalPages, percentage: 15 });
 
+    // Function to find the data frame dynamically
+    const findDataFrame = async (p) => {
+      const frames = p.frames();
+      for (const f of frames) {
+        try {
+          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE, button.btn.btn-primary.dropdown-toggle');
+          if (hasTable) return f;
+        } catch (e) { /* ignore frame errors */ }
+      }
+      return p;
+    };
+
     let totalItems = 0;
     for (let p = 1; p <= totalPages; p++) {
+      // Re-find the frame at each page to be 100% sure after reloads
+      dataFrame = await findDataFrame(page);
+      
       // Check for cancellation
       if (global.cancelledExtractions?.has(extractionId)) {
         console.log(`[Ext-${extractionId}] Cancellation requested. Stopping scraper.`);
@@ -147,7 +162,14 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       // Wait for table to be ready
       const tableSelector = '#GridContainerTbl, .Grid_WorkWith';
-      await dataFrame.waitForSelector(tableSelector, { timeout: 30000 });
+      try {
+        await dataFrame.waitForSelector(tableSelector, { timeout: 15000, state: 'visible' });
+      } catch (e) {
+        console.log('[DEBUG] Table not found in current frame, re-searching all frames...');
+        dataFrame = await findDataFrame(page);
+        await dataFrame.waitForSelector(tableSelector, { timeout: 15000 });
+      }
+      
       await dataFrame.waitForTimeout(2000); // Wait for animations
 
       const rows = await dataFrame.$$eval('#GridContainerTbl tr', (trRows) => {
