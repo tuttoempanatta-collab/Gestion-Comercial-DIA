@@ -50,6 +50,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log('Navigation to table had issues, but attempting to continue...', e.message);
     }
     
+    // 0. Disable images to save RAM
+    await context.route('**/*.{png,jpg,jpeg,gif,svg}', route => route.abort());
+
     // 1. Set page size FIRST (Main page usually handles this)
     try {
       onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
