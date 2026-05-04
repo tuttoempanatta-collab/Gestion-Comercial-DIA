@@ -125,9 +125,13 @@ async function doLogin(headless = true) {
   _context = await _browser.newContext(contextOptions);
   _page    = await _context.newPage();
 
-  // Navegar al sitio MOT
-  await _page.goto(MOT_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await _page.waitForTimeout(2000);
+  // Navegar al sitio MOT de forma segura
+  try {
+    await _page.goto(MOT_URL, { waitUntil: 'commit', timeout: 45000 });
+  } catch (err) {
+    log(`Aviso: Goto lento o timeout. Intentando continuar...`);
+  }
+  await _page.waitForTimeout(4000); // Esperar que renderice el botón de Google
 
   // Verificar si ya está logueado (redirigió a home)
   if (_page.url().includes('com.mot.home') || _page.url().includes('com.mot.tareas')) {
