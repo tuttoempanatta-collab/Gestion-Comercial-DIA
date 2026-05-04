@@ -140,16 +140,24 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     onProgress({ message: `Iniciando extracción de ${totalPages} páginas...`, current: 0, total: totalPages, percentage: 15 });
 
-    // Function to find the data frame dynamically
-    const findDataFrame = async (p) => {
-      const frames = p.frames();
+    // RECURSIVE function to find the data frame anywhere in the hierarchy
+    const findDataFrameRecursive = async (parent) => {
+      const frames = parent.childFrames();
       for (const f of frames) {
         try {
-          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE, button.btn.btn-primary.dropdown-toggle');
+          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE');
           if (hasTable) return f;
-        } catch (e) { /* ignore frame errors */ }
+          // Search deeper
+          const found = await findDataFrameRecursive(f);
+          if (found) return found;
+        } catch (e) {}
       }
-      return p;
+      return null;
+    };
+
+    const findDataFrame = async (p) => {
+      const found = await findDataFrameRecursive(p.mainFrame());
+      return found || p.mainFrame();
     };
 
     // Expose the save function to the browser to save RAM
