@@ -183,32 +183,35 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       
       await dataFrame.waitForTimeout(2000); // Wait for animations
 
-      const rows = await dataFrame.$$eval('#GridContainerTbl tr', (trRows) => {
-        return trRows.map(row => {
-          if (row.querySelector('th') || row.classList.contains('Grid_WorkWithHeader')) return null;
-          const cells = row.querySelectorAll('td');
-          if (cells.length < 7) return null;
-          return {
-            codigo: cells[0]?.innerText.trim() || '',
-            articulo: cells[1]?.innerText.trim() || '',
-            combo: cells[2]?.innerText.trim() || '',
-            precio_fidelizado: cells[3]?.innerText.trim() || '',
-            fecha_desde: cells[4]?.innerText.trim() || '',
-            fecha_hasta: cells[5]?.innerText.trim() || '',
-            cantidades: (() => {
-              const comboText = (cells[2]?.innerText || '').toLowerCase();
-              if (!comboText.includes('llevando')) return '';
-              const val = cells[6]?.innerText.trim() || '1';
-              return val;
-            })()
-          };
-        }).filter(item => item !== null && item.codigo !== '');
-      });
+      const rowsLocator = dataFrame.locator('#GridContainerTbl tr');
+      const rowsCount = await rowsLocator.count();
+      console.log(`[DEBUG] Page ${p}: Found ${rowsCount} potential rows`);
 
-      console.log(`[DEBUG] Page ${p}: Extracted ${rows.length} rows`);
-      for (const row of rows) {
-        await saveCommercialAction(extractionId, row);
-        totalItems++;
+      for (let i = 0; i < rowsCount; i++) {
+        const row = rowsLocator.nth(i);
+        const cells = row.locator('td');
+        const cellsCount = await cells.count();
+        
+        if (cellsCount >= 7) {
+          const rowData = await row.evaluate(node => {
+            const tds = node.querySelectorAll('td');
+            if (node.querySelector('th') || node.classList.contains('Grid_WorkWithHeader')) return null;
+            return {
+              codigo: tds[0]?.innerText.trim() || '',
+              articulo: tds[1]?.innerText.trim() || '',
+              combo: tds[2]?.innerText.trim() || '',
+              precio_fidelizado: tds[3]?.innerText.trim() || '',
+              fecha_desde: tds[4]?.innerText.trim() || '',
+              fecha_hasta: tds[5]?.innerText.trim() || '',
+              cantidades: tds[6]?.innerText.trim() || ''
+            };
+          });
+
+          if (rowData && rowData.codigo && !isNaN(parseInt(rowData.codigo))) {
+            await saveCommercialAction(extractionId, rowData);
+            totalItems++;
+          }
+        }
       }
 
       // 5. Click Next Page if needed
