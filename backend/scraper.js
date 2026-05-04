@@ -127,11 +127,10 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         percentage: 15 + Math.floor((p / totalPages) * 75)
       });
 
-      // Wait for table in the correct frame
+      // Wait for table to be ready
       const tableSelector = '#GridContainerTbl, .Grid_WorkWith';
       await dataFrame.waitForSelector(tableSelector, { timeout: 30000 });
-      
-      await page.waitForTimeout(1000);
+      await dataFrame.waitForTimeout(2000); // Wait for animations
 
       const rows = await dataFrame.$$eval('#GridContainerTbl tr', (trRows) => {
         return trRows.map(row => {
@@ -148,47 +147,33 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             cantidades: (() => {
               const comboText = (cells[2]?.innerText || '').toLowerCase();
               if (!comboText.includes('llevando')) return '';
-              
               const val = cells[6]?.innerText.trim() || '1';
-              const num = parseInt(val.replace('.', '').replace(',', ''));
-              if (isNaN(num) || num > 100 || num <= 0) return '1';
               return val;
             })()
           };
-        }).filter(item => item !== null && item.codigo !== '' && !isNaN(parseInt(item.codigo)));
+        }).filter(item => item !== null && item.codigo !== '');
       });
 
+      console.log(`[DEBUG] Page ${p}: Extracted ${rows.length} rows`);
       for (const row of rows) {
         await saveCommercialAction(extractionId, row);
         totalItems++;
       }
 
-      if (currentPage < totalPages) {
-        // Use the correct Next button selector found: li.next a
-        const nextButton = page.locator('li.next a, a:has-text("Sig")').first();
+      // 5. Click Next Page if needed
+      if (p < totalPages) {
+        const nextSelector = 'li.next a, a:has-text("Sig"), a[id*="NEXT"]';
+        const nextButton = dataFrame.locator(nextSelector).first();
+        
         if (await nextButton.isVisible()) {
           await nextButton.click();
-          currentPage++;
-          
-          // Wait for the pagination button text to change to the new page
-          try {
-            await page.waitForFunction(
-              (expectedPage) => {
-                const btn = document.querySelector('button.btn.btn-primary.dropdown-toggle');
-                return btn && btn.innerText.includes(`Página ${expectedPage}`);
-              },
-              currentPage,
-              { timeout: 15000 }
-            );
-          } catch (e) {
-            console.log(`Timeout waiting for page ${currentPage}, continuing...`);
-            await page.waitForTimeout(2000);
-          }
+          // Wait for the table to change/reload
+          await dataFrame.waitForTimeout(4000);
         } else {
-          break;
+          console.log('[DEBUG] Next button not visible, but totalPages > current page. Attempting click by ID...');
+          await dataFrame.click('a[id*="NEXT"]').catch(() => {});
+          await dataFrame.waitForTimeout(4000);
         }
-      } else {
-        break;
       }
     }
 
