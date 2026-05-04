@@ -44,22 +44,20 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     const nxmMatch = text.match(/(\d+)\s*x\s*(\d+)/i);
     const llevandoMatch = text.match(/llevando\s*(\d+)/i);
     
-    // PRIORITIZE MANUAL OVERRIDE
-    const manualUnits = typeof item.requiredUnits === 'string' ? parseInt(item.requiredUnits) : item.requiredUnits;
+    // NxM combos (e.g. 3X2) ALWAYS take numbers from the combo text, never from manualUnits
+    // manualUnits override only applies to LLEVANDO-type combos (no NxM pattern)
+    const manualUnits = typeof item.requiredUnits === 'string' ? parseInt(item.requiredUnits as string) : item.requiredUnits;
     
-    if (manualUnits && manualUnits > 0) {
-      requiredUnits = manualUnits;
-      if (nxmMatch) {
-         comboNumber = `${requiredUnits}X${nxmMatch[2]}`;
-         subCombo = `LLEVANDO ${requiredUnits}`;
-      } else {
-         comboNumber = 'LLEVANDO';
-         subCombo = `${requiredUnits} UNIDADES`;
-      }
-    } else if (nxmMatch) {
+    if (nxmMatch) {
+      // 3X2, 2X1, etc: read directly from the combo text
       requiredUnits = parseInt(nxmMatch[1]);
       comboNumber = `${nxmMatch[1]}X${nxmMatch[2]}`;
       subCombo = `LLEVANDO ${nxmMatch[1]}`;
+    } else if (manualUnits && manualUnits > 0) {
+      // Manual override only for LLEVANDO-type combos
+      requiredUnits = manualUnits;
+      comboNumber = 'LLEVANDO';
+      subCombo = `${requiredUnits} UNIDADES`;
     } else if (llevandoMatch) {
       requiredUnits = parseInt(llevandoMatch[1]);
       comboNumber = 'LLEVANDO';

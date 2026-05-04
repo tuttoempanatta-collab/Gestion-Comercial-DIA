@@ -229,7 +229,7 @@ export default function DataPage() {
         cashbackCondition: selectedPromo?.condition,
         cashbackPercentage: selectedPromo ? `${selectedPromo.discount * 100}%` : undefined,
         cashbackDay: selectedPromo?.day,
-        requiredUnits: item.cantidades ? parseInt(item.cantidades) : undefined
+
       };
     });
     const url = generatePosters(selectedItems, true) as string
@@ -254,7 +254,7 @@ export default function DataPage() {
         cashbackCondition: selectedPromo?.condition,
         cashbackPercentage: selectedPromo ? `${selectedPromo.discount * 100}%` : undefined,
         cashbackDay: selectedPromo?.day,
-        requiredUnits: item.cantidades ? parseInt(item.cantidades) : undefined
+
       };
     });
     generatePosters(selectedItems, false)
