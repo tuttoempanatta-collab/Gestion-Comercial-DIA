@@ -92,39 +92,50 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const searchBtn = dataFrame.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
 
       try {
-        console.log('[DEBUG] Injecting dates and clicking Buscar via JS...');
+        console.log('[DEBUG] High-velocity search trigger...');
         await dataFrame.evaluate(({ start, end }) => {
           const startInp = document.querySelector('input[id*="DESDE"], input[name*="vDESDE"]');
           const endInp = document.querySelector('input[id*="HASTA"], input[name*="vHASTA"]');
           const btn = document.querySelector('input[value="Buscar"], #BTNBUSCAR, .Button_Standard');
           
-          if (startInp) startInp.value = start;
-          if (endInp) endInp.value = end;
-          if (btn) btn.click();
+          if (startInp) { startInp.value = start; startInp.dispatchEvent(new Event('change', { bubbles: true })); }
+          if (endInp) { endInp.value = end; endInp.dispatchEvent(new Event('change', { bubbles: true })); }
+          if (btn) {
+            btn.click();
+            btn.dispatchEvent(new Event('mousedown', { bubbles: true }));
+            btn.dispatchEvent(new Event('mouseup', { bubbles: true }));
+            btn.dispatchEvent(new Event('click', { bubbles: true }));
+          }
         }, { start: formatDateForPortal(startDate), end: formatDateForPortal(endDate) });
         
-        await dataFrame.waitForTimeout(8000);
+        // Wait for the results to start loading
+        await dataFrame.waitForTimeout(10000);
       } catch (e) {
-        console.log('JS Injection failed, trying standard click...', e.message);
-        await searchBtn.click({ force: true }).catch(() => {});
-        await dataFrame.waitForTimeout(8000);
+        console.log('Search trigger failed:', e.message);
       }
       
       onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
     }
 
-    // 4. Detect total pages
+    // 4. Detect total pages with retry
     let totalPages = 1;
-    try {
-      await dataFrame.waitForSelector('button.btn.btn-primary.dropdown-toggle, .PagingButtons', { timeout: 10000 });
-      const paginationBtn = dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons').first();
-      const paginationText = await paginationBtn.innerText();
-      const match = paginationText.match(/de\s+(\d+)/i);
-      if (match) {
-        totalPages = parseInt(match[1]);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await dataFrame.waitForSelector('button.btn.btn-primary.dropdown-toggle, .PagingButtons', { timeout: 15000 });
+        const paginationBtn = dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons').first();
+        const paginationText = await paginationBtn.innerText();
+        const match = paginationText.match(/de\s+(\d+)/i);
+        if (match) {
+          totalPages = parseInt(match[1]);
+          break;
+        }
+      } catch (e) {
+        if (attempt === 1) {
+          console.log('[DEBUG] Pagination not found, clicking Buscar again...');
+          await dataFrame.click('input[value="Buscar"], #BTNBUSCAR').catch(() => {});
+          await dataFrame.waitForTimeout(8000);
+        }
       }
-    } catch (e) {
-      console.log('Could not detect total pages', e.message);
     }
 
     onProgress({ message: `Iniciando extracción de ${totalPages} páginas...`, current: 0, total: totalPages, percentage: 15 });
