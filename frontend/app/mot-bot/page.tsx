@@ -16,7 +16,8 @@ import {
   ChevronRight,
   ShieldAlert,
   UserCheck,
-  Upload
+  Upload,
+  Trash2
 } from 'lucide-react'
 
 import { API_URL } from '@/lib/api'
@@ -247,6 +248,19 @@ export default function MotBotPage() {
                 {action === 'Deteniendo...' ? action : 'Detener Bot'}
               </button>
             )}
+            
+            <button
+              onClick={() => {
+                if (confirm('¿Seguro que querés reiniciar el bot a 0%? Esto borrará el historial de marcaciones de hoy en la pantalla.')) {
+                  callApi('/api/mot-bot/reset', 'Reiniciando...');
+                }
+              }}
+              disabled={loading}
+              title="Reiniciar a 0%"
+              className="flex items-center justify-center w-10 h-10 ml-auto rounded-xl bg-red-900/30 hover:bg-red-900/50 text-red-400 hover:text-red-300 transition-all disabled:opacity-50 border border-red-900/50"
+            >
+              <Trash2 size={16} />
+            </button>
           </div>
         </div>
       </div>

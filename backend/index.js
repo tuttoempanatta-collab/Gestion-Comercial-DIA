@@ -417,6 +417,16 @@ app.post('/api/mot-bot/stop', async (req, res) => {
   }
 });
 
+// POST reiniciar el bot a 0%
+app.post('/api/mot-bot/reset', async (req, res) => {
+  try {
+    await motScheduler.reset();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POST iniciar login manual (abre navegador visible)
 app.post('/api/mot-bot/login', async (req, res) => {
   try {

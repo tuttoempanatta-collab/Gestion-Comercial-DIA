@@ -110,10 +110,11 @@ async function stop() {
  * sin depender de una ventana gráfica (que Render no soporta).
  */
 async function doManualLogin() {
-  console.log('[MOT-Scheduler] Forzando login automático (headless: true)...');
+  const isCloud = process.env.RENDER || process.env.NODE_ENV === 'production';
+  console.log(`[MOT-Scheduler] Forzando login (headless: ${!!isCloud})...`);
   _status = 'logging_in';
   try {
-    await doLogin(true); // ventana oculta para servidores
+    await doLogin(!!isCloud); // true en Render (oculto), false local (visible)
     _needsLogin = false;
     _status     = 'running';
     _lastError  = null;
@@ -143,4 +144,28 @@ function getStatus() {
   };
 }
 
-module.exports = { start, stop, doManualLogin, getStatus };
+/**
+ * Reinicia completamente el bot a 0%.
+ * Útil para limpiar el estado de error o el historial sin reiniciar el servidor.
+ */
+async function reset() {
+  console.log('[MOT-Scheduler] Reiniciando bot a 0%...');
+  if (_interval) {
+    clearInterval(_interval);
+    _interval = null;
+  }
+  _status      = 'stopped';
+  _lastError   = null;
+  _startedAt   = null;
+  _nextRunAt   = null;
+  _needsLogin  = false;
+  _markedToday = new Set();
+  _marcaciones.length = 0;
+  
+  const motBot = require('./mot_bot');
+  if (motBot.clearLogs) motBot.clearLogs();
+  
+  return { ok: true };
+}
+
+module.exports = { start, stop, reset, doManualLogin, getStatus };
