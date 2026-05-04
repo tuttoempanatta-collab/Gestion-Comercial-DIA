@@ -12,7 +12,8 @@ import {
   Menu, 
   ChevronLeft, 
   ChevronRight,
-  X
+  X,
+  Bot
 } from 'lucide-react'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -31,11 +32,12 @@ export default function RootLayout({
   }, [])
 
   const navItems = [
-    { name: 'Dashboard', href: '/', icon: <LayoutDashboard size={20} /> },
-    { name: 'Extracción', href: '/extract', icon: <Download size={20} /> },
-    { name: 'Datos', href: '/data', icon: <Database size={20} /> },
-    { name: 'Cartelería', href: '/data', icon: <FileText size={20} />, highlight: true },
-    { name: 'Configuración', href: '/settings', icon: <Settings size={20} /> },
+    { name: 'Dashboard',      href: '/',        icon: <LayoutDashboard size={20} /> },
+    { name: 'Extracción',     href: '/extract', icon: <Download size={20} /> },
+    { name: 'Datos',          href: '/data',    icon: <Database size={20} /> },
+    { name: 'Cartelería',     href: '/data',    icon: <FileText size={20} />, highlight: true },
+    { name: 'MOT Bot',        href: '/mot-bot', icon: <Bot size={20} />,     bot: true },
+    { name: 'Configuración',  href: '/settings', icon: <Settings size={20} /> },
   ]
 
   return (
@@ -92,19 +94,25 @@ export default function RootLayout({
                     flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group
                     ${item.highlight 
                       ? 'text-red-400 hover:bg-red-600/10' 
-                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'}
+                      : item.bot
+                        ? 'text-rose-300 hover:bg-rose-600/10'
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-white'}
                   `}
                   title={isCollapsed ? item.name : ''}
                 >
-                  <span className={`shrink-0 ${item.highlight ? 'text-red-500' : 'group-hover:scale-110 transition-transform'}`}>
+                  <span className={`shrink-0 ${item.highlight ? 'text-red-500' : item.bot ? 'text-rose-400' : 'group-hover:scale-110 transition-transform'}`}>
                     {item.icon}
                   </span>
                   <span className={`font-medium whitespace-nowrap transition-opacity duration-300 ${isCollapsed ? 'lg:opacity-0 lg:w-0' : 'opacity-100'}`}>
                     {item.name}
                   </span>
+                  {item.bot && !isCollapsed && (
+                    <span className="ml-auto w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                  )}
                 </a>
               ))}
             </nav>
+
 
             {/* Footer / Info */}
             {!isCollapsed && (

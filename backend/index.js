@@ -1,8 +1,10 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const motScheduler = require('./mot_scheduler');
 const { 
   pool,
   createExtraction, 
@@ -383,6 +385,45 @@ app.get('/api/catalog-items', async (req, res) => {
     res.json({ items: data.rows, total: parseInt(countRes.rows[0].count) });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── MOT BOT ENDPOINTS ────────────────────────────────────────────────────────
+
+// GET estado actual del bot
+app.get('/api/mot-bot/status', (req, res) => {
+  res.json(motScheduler.getStatus());
+});
+
+// POST arrancar el scheduler
+app.post('/api/mot-bot/start', async (req, res) => {
+  try {
+    await motScheduler.start();
+    res.json({ ok: true, status: motScheduler.getStatus() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST detener el scheduler
+app.post('/api/mot-bot/stop', async (req, res) => {
+  try {
+    await motScheduler.stop();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST iniciar login manual (abre navegador visible)
+app.post('/api/mot-bot/login', async (req, res) => {
+  try {
+    const result = await motScheduler.doManualLogin();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 

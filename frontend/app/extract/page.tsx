@@ -71,12 +71,18 @@ export default function ExtractPage() {
         body: JSON.stringify({ startDate, endDate, pageSize })
       })
       const data = await res.json()
+
+      if (!res.ok || data.extractionId == null) {
+        throw new Error(data.error || `Error del servidor (${res.status}): respuesta inesperada`)
+      }
+
       setExtractionId(data.extractionId)
-      localStorage.setItem('activeExtractionId', data.extractionId.toString())
-    } catch (err) {
-      console.error(err)
+      localStorage.setItem('activeExtractionId', String(data.extractionId))
+    } catch (err: any) {
+      console.error('[Extraccion]', err)
       setIsExtracting(false)
       setStatus('failed')
+      setProgress({ percentage: 0, message: `❌ ${err.message}` })
       localStorage.removeItem('activeExtraction')
     }
   }

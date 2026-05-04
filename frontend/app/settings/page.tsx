@@ -42,7 +42,6 @@ async function loadFileHandle(): Promise<FileSystemFileHandle | null> {
   }
 }
 
-const hasFSA = typeof window !== 'undefined' && 'showOpenFilePicker' in window
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -69,6 +68,13 @@ export default function SettingsPage() {
   const [catalogSearch, setCatalogSearch] = useState('')
   const [catalogPage, setCatalogPage] = useState(1)
   const [isLoadingItems, setIsLoadingItems] = useState(false)
+
+  // Feature detection (client-only, avoids hydration mismatch)
+  const [hasFSA, setHasFSA] = useState(false)
+
+  useEffect(() => {
+    setHasFSA(typeof window !== 'undefined' && 'showOpenFilePicker' in window)
+  }, [])
 
   useEffect(() => {
     fetch(API_URL('/api/settings')).then(r => r.json()).then(setSettings)
@@ -97,8 +103,8 @@ export default function SettingsPage() {
       const params = new URLSearchParams({ search: catalogSearch, page: String(catalogPage), limit: '50' })
       const r = await fetch(API_URL(`/api/catalog-items?${params}`))
       const d = await r.json()
-      setCatalogItems(d.items)
-      setCatalogTotal(d.total)
+      setCatalogItems(Array.isArray(d.items) ? d.items : [])
+      setCatalogTotal(Number(d.total) || 0)
     } finally {
       setIsLoadingItems(false)
     }
@@ -221,7 +227,7 @@ export default function SettingsPage() {
               </h3>
               {catalogStatus && (
                 <span className="text-xs text-slate-500 bg-slate-800 px-3 py-1 rounded-full">
-                  {catalogStatus.total.toLocaleString()} productos
+                  {(Number(catalogStatus.total) || 0).toLocaleString()} productos
                   {catalogStatus.lastUpdate && ` · ${new Date(catalogStatus.lastUpdate).toLocaleDateString('es-AR')}`}
                 </span>
               )}
@@ -279,10 +285,10 @@ export default function SettingsPage() {
                 Leyendo archivo e importando a Supabase... esto puede tardar unos segundos.
               </div>
             )}
-            {uploadResult && (
+              {uploadResult && (
               <div className="flex items-center gap-3 text-sm text-emerald-300 bg-emerald-900/20 rounded-lg p-3">
                 <CheckCircle2 size={16} className="shrink-0" />
-                ✅ <strong>{uploadResult.imported.toLocaleString()}</strong> productos importados correctamente.
+                ✅ <strong>{(Number(uploadResult.imported) || 0).toLocaleString()}</strong> productos importados correctamente.
               </div>
             )}
             {uploadError && (
@@ -297,7 +303,7 @@ export default function SettingsPage() {
                 <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                   <Package className="text-violet-400" size={18} /> Items del Catálogo
                 </h3>
-                <span className="text-xs text-slate-500">{catalogTotal.toLocaleString()} resultados</span>
+                <span className="text-xs text-slate-500">{(Number(catalogTotal) || 0).toLocaleString()} resultados</span>
               </div>
 
               {/* Search */}
@@ -384,7 +390,7 @@ export default function SettingsPage() {
               </div>
               <div className="flex justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-500">Catálogo</span>
-                <span className="text-slate-300">{catalogStatus ? `${catalogStatus.total.toLocaleString()} items` : '—'}</span>
+                <span className="text-slate-300">{catalogStatus ? `${(Number(catalogStatus.total) || 0).toLocaleString()} items` : '—'}</span>
               </div>
             </div>
           </div>

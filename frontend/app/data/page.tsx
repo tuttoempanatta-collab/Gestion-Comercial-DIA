@@ -138,14 +138,16 @@ export default function DataPage() {
   const loadHistory = () => {
     fetch(API_URL('/api/history'))
       .then(res => res.json())
-      .then(setHistory)
+      .then(result => setHistory(Array.isArray(result) ? result : []))
+      .catch(() => setHistory([]))
   }
 
   useEffect(() => {
     if (selectedExtraction) {
       fetch(API_URL(`/api/data/${selectedExtraction}`))
         .then(res => res.json())
-        .then(setData)
+        .then(result => setData(Array.isArray(result) ? result : []))
+        .catch(() => setData([]))
       setSelectedIds(new Set())
     } else {
       setData([])

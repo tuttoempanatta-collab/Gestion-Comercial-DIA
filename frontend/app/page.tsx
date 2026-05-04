@@ -16,6 +16,7 @@ export default function Dashboard() {
     fetch(API_URL('/api/history'))
       .then(res => res.json())
       .then(history => {
+        if (!Array.isArray(history)) return   // DB not connected yet — show defaults
         if (history.length > 0) {
           const totalItems = history.reduce((acc: number, curr: any) => acc + (curr.items_count || 0), 0)
           setStats({
