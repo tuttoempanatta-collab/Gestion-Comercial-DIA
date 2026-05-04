@@ -151,7 +151,7 @@ export default function MotBotPage() {
   }
 
   const isRunning = data?.status === 'running'
-  const needsLogin = data?.status === 'needs_login' || data?.needsLogin
+  const needsLogin = data ? !data.loggedIn : false
 
   return (
     <div className="space-y-8">
