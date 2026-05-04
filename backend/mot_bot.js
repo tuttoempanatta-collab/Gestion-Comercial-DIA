@@ -134,9 +134,9 @@ async function doLogin(headless = true) {
   // ── Click en "Inicie con G+" ──────────────────────────────────────────────
   log('Página de login detectada. Buscando botón Google...');
   try {
-    // El botón suele ser una imagen o enlace con texto "g+"
-    const googleBtn = _page.locator('a:has-text("g"), a:has-text("G+"), img[alt*="google" i], .google-login, [class*="google"]').first();
-    await googleBtn.waitFor({ timeout: 10000 });
+    // Selector específico para MOT DIA (#vIMAGEAUTHTYPE_0001) + genéricos de respaldo
+    const googleBtn = _page.locator('#vIMAGEAUTHTYPE_0001, img[src*="Google" i], img[src*="google" i], a:has-text("G+")').first();
+    await googleBtn.waitFor({ state: 'visible', timeout: 10000 });
     await googleBtn.click();
     log('Botón Google clickeado.');
   } catch (e) {
