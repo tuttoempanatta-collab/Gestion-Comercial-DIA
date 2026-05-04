@@ -4,8 +4,18 @@ const { db, saveCommercialAction } = require('./db');
 
 async function runScraper(extractionId, startDate, endDate, settings, pageSize = 50, onProgress) {
   console.log(`[DEBUG] runScraper started for ID: ${extractionId} with pageSize: ${pageSize}`);
-  const browser = await chromium.launch({ headless: true });
-  // ... (context and page setup same as before)
+  const browser = await chromium.launch({ 
+    headless: true,
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-zygote',
+      '--single-process'
+    ]
+  });
+
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
