@@ -427,6 +427,20 @@ app.post('/api/mot-bot/login', async (req, res) => {
   }
 });
 
+// POST recibir archivo de sesión (storage_state.json)
+app.post('/api/mot-bot/session', async (req, res) => {
+  try {
+    const { saveSessionData } = require('./mot_bot');
+    if (!req.body || Object.keys(req.body).length === 0) {
+      throw new Error('No se recibió el JSON de sesión válido.');
+    }
+    saveSessionData(req.body);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {

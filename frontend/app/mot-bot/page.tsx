@@ -15,7 +15,8 @@ import {
   WifiOff,
   ChevronRight,
   ShieldAlert,
-  UserCheck
+  UserCheck,
+  Upload
 } from 'lucide-react'
 
 import { API_URL } from '@/lib/api'
@@ -87,6 +88,36 @@ export default function MotBotPage() {
   const [data,    setData]    = useState<MotStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [action,  setAction]  = useState<string | null>(null)
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setLoading(true)
+    setAction('Subiendo sesión...')
+    try {
+      const text = await file.text()
+      const json = JSON.parse(text)
+      
+      const r = await fetch(API_URL('/api/mot-bot/session'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(json)
+      })
+      
+      if (!r.ok) throw new Error('Error al subir la sesión')
+      
+      alert('¡Sesión importada correctamente! El bot ya puede funcionar en la nube.')
+      await fetchStatus()
+    } catch (err: any) {
+      alert(`Error al procesar el archivo: ${err.message}`)
+    } finally {
+      setLoading(false)
+      setAction(null)
+      // Limpiar input
+      e.target.value = ''
+    }
+  }
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -177,15 +208,22 @@ export default function MotBotPage() {
           {/* Actions */}
           <div className="flex flex-wrap gap-3">
             {needsLogin && (
-              <button
-                id="mot-btn-login"
-                onClick={() => callApi('/api/mot-bot/login', 'Abriendo navegador...')}
-                disabled={loading}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-semibold text-sm transition-all disabled:opacity-50"
-              >
-                <LogIn size={16} />
-                {action === 'Abriendo navegador...' ? action : 'Forzar Login'}
-              </button>
+              <>
+                <button
+                  id="mot-btn-login"
+                  onClick={() => callApi('/api/mot-bot/login', 'Abriendo navegador...')}
+                  disabled={loading}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-semibold text-sm transition-all disabled:opacity-50"
+                >
+                  <LogIn size={16} />
+                  {action === 'Abriendo navegador...' ? action : 'Forzar Login'}
+                </button>
+                <label className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-semibold text-sm transition-all disabled:opacity-50 cursor-pointer">
+                  <Upload size={16} />
+                  {action === 'Subiendo sesión...' ? action : 'Subir Sesión'}
+                  <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} disabled={loading} />
+                </label>
+              </>
             )}
 
             {!isRunning ? (
@@ -218,9 +256,10 @@ export default function MotBotPage() {
         <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-900/20 border border-amber-500/20">
           <ShieldAlert className="text-amber-500 shrink-0 mt-0.5" size={20} />
           <div className="flex flex-col gap-2">
-            <h4 className="text-amber-400 font-bold text-sm">Autenticación Requerida</h4>
+            <h4 className="text-amber-400 font-bold text-sm">Autenticación Requerida (Recomendado: Subir Sesión)</h4>
             <p className="text-amber-200/70 text-xs">
-              El bot no tiene una sesión activa de Google. Haz click en "Forzar Login" para que el bot intente loguearse automáticamente en el servidor usando las credenciales configuradas.
+              Google suele bloquear los inicios de sesión automáticos desde servidores en la nube. Te recomendamos 
+              iniciar tu backend localmente, usar "Forzar Login", y luego usar el botón <strong>Subir Sesión</strong> aquí en Vercel para cargar el archivo `storage_state.json` generado en tu PC.
             </p>
           </div>
         </div>

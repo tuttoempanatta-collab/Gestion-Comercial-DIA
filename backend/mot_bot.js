@@ -83,6 +83,12 @@ async function saveSession() {
   log('Sesión guardada en disco.');
 }
 
+function saveSessionData(jsonObj) {
+  ensureSessionDir();
+  fs.writeFileSync(SESSION_FILE, JSON.stringify(jsonObj, null, 2));
+  log('Archivo de sesión importado y guardado en disco.');
+}
+
 // ─── Login ────────────────────────────────────────────────────────────────────
 
 /**
@@ -418,5 +424,6 @@ module.exports = {
   getLogs,
   isLoggedIn,
   sessionExists,
+  saveSessionData,
   MARK_BEFORE_MINUTES,
 };
