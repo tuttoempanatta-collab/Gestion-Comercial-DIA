@@ -143,7 +143,7 @@ export default function ExtractPage() {
           </div>
 
           <button 
-            className="btn-primary w-full py-3 mt-4 bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/20" 
+            className="btn-primary w-full py-3 mt-4 bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/20 disabled:opacity-50 disabled:cursor-not-allowed" 
             onClick={handleStartExtraction}
             disabled={isExtracting}
           >
@@ -159,6 +159,32 @@ export default function ExtractPage() {
               </>
             )}
           </button>
+
+          {isExtracting && (
+            <button 
+              className="w-full py-3 mt-2 rounded-lg border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-all font-bold flex items-center justify-center gap-2" 
+              onClick={async () => {
+                try {
+                  await fetch(API_URL('/api/cancel-extract'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ extractionId })
+                  })
+                  setIsExtracting(false)
+                  setStatus('idle')
+                  setLogs([])
+                  setProgress({ percentage: 0, message: '' })
+                  localStorage.removeItem('activeExtraction')
+                  localStorage.removeItem('activeExtractionId')
+                } catch (err) {
+                  console.error(err)
+                }
+              }}
+            >
+              <AlertCircle size={20} />
+              Cancelar Extracción
+            </button>
+          )}
           
           <p className="text-xs text-slate-500 text-center">
             Nota: Este proceso obtendrá toda la información directamente del Portal de Franquicias.

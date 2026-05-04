@@ -128,6 +128,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     let totalItems = 0;
     for (let p = 1; p <= totalPages; p++) {
+      // Check for cancellation
+      if (global.cancelledExtractions?.has(extractionId)) {
+        console.log(`[Ext-${extractionId}] Cancellation requested. Stopping scraper.`);
+        onProgress({ message: 'Extracción cancelada por el usuario.', current: p, total: totalPages, percentage: 100 });
+        break;
+      }
+
       onProgress({ 
         message: `Extrayendo página ${p} de ${totalPages}...`, 
         current: p, 

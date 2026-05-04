@@ -86,6 +86,13 @@ app.post('/api/settings', async (req, res) => {
   }
 });
 
+app.post('/api/cancel-extract', (req, res) => {
+  const { extractionId } = req.body;
+  if (!global.cancelledExtractions) global.cancelledExtractions = new Set();
+  global.cancelledExtractions.add(extractionId);
+  res.json({ status: 'cancelled' });
+});
+
 app.post('/api/extract', async (req, res) => {
   const { startDate, endDate, pageSize } = req.body;
   
