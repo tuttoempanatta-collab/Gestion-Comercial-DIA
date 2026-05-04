@@ -1,7 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { 
-  db, // Note: This might be undefined now if db.js doesn't export it, using pool or methods instead
   pool,
   createExtraction, 
   updateExtractionStatus, 
@@ -16,6 +18,9 @@ const { fetchDescriptionsFromIET } = require('./iet_scraper');
 const { getMissingDescriptions } = require('./description_db');
 const xlsx = require('xlsx');
 const { createObjectCsvWriter } = require('csv-writer');
+
+// Multer: store upload in /tmp (ephemeral, just for processing)
+const upload = multer({ dest: '/tmp/' });
 
 const app = express();
 
@@ -286,6 +291,102 @@ app.delete('/api/extraction/:id', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── CATALOG ENDPOINTS ─────────────────────────────────────────────────────────
+
+app.get('/api/catalog-status', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*) as total, MAX(updated_at) as last_update FROM catalog_items`
+    );
+    res.json({
+      total: parseInt(result.rows[0].total),
+      lastUpdate: result.rows[0].last_update
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file received' });
+
+  const tmpPath = req.file.path;
+  try {
+    // Read uploaded SQLite file
+    const Database = require('better-sqlite3');
+    const db = new Database(tmpPath, { readonly: true });
+    const items = db.prepare(
+      'SELECT ItemID, LoyaltyDescription, PriceAmount, CurrentQuantityInUnits FROM Item'
+    ).all();
+    db.close();
+
+    if (!items || items.length === 0) {
+      return res.status(422).json({ error: 'El archivo no contiene items en la tabla Item.' });
+    }
+
+    // Upsert all items to Supabase
+    let imported = 0;
+    const BATCH = 100;
+    for (let i = 0; i < items.length; i += BATCH) {
+      const batch = items.slice(i, i + BATCH);
+      for (const item of batch) {
+        await pool.query(
+          `INSERT INTO catalog_items (item_id, loyalty_description, price_amount, current_quantity, updated_at)
+           VALUES ($1, $2, $3, $4, NOW())
+           ON CONFLICT (item_id) DO UPDATE SET
+             loyalty_description = EXCLUDED.loyalty_description,
+             price_amount = EXCLUDED.price_amount,
+             current_quantity = EXCLUDED.current_quantity,
+             updated_at = NOW()`,
+          [
+            String(item.ItemID),
+            item.LoyaltyDescription || '',
+            item.PriceAmount || 0,
+            item.CurrentQuantityInUnits || 0
+          ]
+        );
+        imported++;
+      }
+    }
+
+    // Clean up temp file
+    fs.unlinkSync(tmpPath);
+    res.json({ imported, total: items.length });
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    console.error('[Catalog Upload Error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Catalog items listing (paginated)
+app.get('/api/catalog-items', async (req, res) => {
+  const { search = '', page = 1, limit = 50 } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  try {
+    const where = search ? `WHERE item_id ILIKE $3 OR loyalty_description ILIKE $3` : '';
+    const params = search
+      ? [parseInt(limit), offset, `%${search}%`]
+      : [parseInt(limit), offset];
+    const data = await pool.query(
+      `SELECT item_id, loyalty_description, price_amount, current_quantity, updated_at
+       FROM catalog_items ${where}
+       ORDER BY item_id
+       LIMIT $1 OFFSET $2`,
+      params
+    );
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM catalog_items ${where}`,
+      search ? [`%${search}%`] : []
+    );
+    res.json({ items: data.rows, total: parseInt(countRes.rows[0].count) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
