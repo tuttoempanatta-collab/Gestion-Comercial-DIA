@@ -89,21 +89,22 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const searchBtn = dataFrame.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
 
       try {
-        await startInput.waitFor({ state: 'visible', timeout: 5000 });
-        if (startDate) await startInput.fill(formatDateForPortal(startDate));
-        await dataFrame.waitForTimeout(500);
-        if (endDate) await endInput.fill(formatDateForPortal(endDate));
-        await dataFrame.waitForTimeout(500);
+        console.log('[DEBUG] Injecting dates and clicking Buscar via JS...');
+        await dataFrame.evaluate(({ start, end }) => {
+          const startInp = document.querySelector('input[id*="DESDE"], input[name*="vDESDE"]');
+          const endInp = document.querySelector('input[id*="HASTA"], input[name*="vHASTA"]');
+          const btn = document.querySelector('input[value="Buscar"], #BTNBUSCAR, .Button_Standard');
+          
+          if (startInp) startInp.value = start;
+          if (endInp) endInp.value = end;
+          if (btn) btn.click();
+        }, { start: formatDateForPortal(startDate), end: formatDateForPortal(endDate) });
         
-        console.log('[DEBUG] Attempting to click Buscar...');
-        await searchBtn.click({ force: true, timeout: 5000 });
-        
-        // Wait for a significant change or just a solid pause for the portal to refresh
-        await dataFrame.waitForTimeout(6000);
+        await dataFrame.waitForTimeout(8000);
       } catch (e) {
-        console.log('Could not apply filters or click Buscar, trying Enter key...', e.message);
-        await page.keyboard.press('Enter');
-        await dataFrame.waitForTimeout(6000);
+        console.log('JS Injection failed, trying standard click...', e.message);
+        await searchBtn.click({ force: true }).catch(() => {});
+        await dataFrame.waitForTimeout(8000);
       }
       
       onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
@@ -112,9 +113,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     // 4. Detect total pages
     let totalPages = 1;
     try {
-      // Try multiple selectors for pagination
-      const pagSelector = 'button.btn.btn-primary.dropdown-toggle, .PagingButtons, span[id*="PAGES"]';
-      const paginationBtn = dataFrame.locator(pagSelector).first();
+      await dataFrame.waitForSelector('button.btn.btn-primary.dropdown-toggle, .PagingButtons', { timeout: 10000 });
+      const paginationBtn = dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons').first();
       const paginationText = await paginationBtn.innerText();
       const match = paginationText.match(/de\s+(\d+)/i);
       if (match) {
