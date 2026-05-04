@@ -164,6 +164,13 @@ async function reset() {
   
   const motBot = require('./mot_bot');
   if (motBot.clearLogs) motBot.clearLogs();
+  if (motBot.closeBrowser) {
+    try {
+      await motBot.closeBrowser();
+    } catch (e) {
+      console.log('Error cerrando browser al reiniciar:', e);
+    }
+  }
   
   return { ok: true };
 }
