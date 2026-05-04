@@ -18,7 +18,7 @@ import {
   UserCheck
 } from 'lucide-react'
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001'
+import { API_URL } from '@/lib/api'
 
 type MotStatus = {
   status: 'stopped' | 'running' | 'error' | 'needs_login' | 'logging_in'
@@ -90,7 +90,7 @@ export default function MotBotPage() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/api/mot-bot/status`)
+      const r = await fetch(API_URL('/api/mot-bot/status'))
       const j = await r.json()
       setData(j)
     } catch (_) {
@@ -108,7 +108,7 @@ export default function MotBotPage() {
     setLoading(true)
     setAction(label)
     try {
-      const r = await fetch(`${API}${endpoint}`, { method: 'POST' })
+      const r = await fetch(API_URL(endpoint), { method: 'POST' })
       await r.json()
       await fetchStatus()
     } catch (e) {
