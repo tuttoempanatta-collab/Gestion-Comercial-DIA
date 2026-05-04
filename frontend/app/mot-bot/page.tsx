@@ -129,7 +129,7 @@ export default function MotBotPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">MOT Bot</h1>
-          <p className="text-slate-400 text-sm">Automatización de marcación de tareas DIA</p>
+          <p className="text-slate-400 text-sm">Panel de control del módulo automatizado para marcación de tareas DIA.</p>
         </div>
         <button
           onClick={fetchStatus}
@@ -182,7 +182,7 @@ export default function MotBotPage() {
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-semibold text-sm transition-all disabled:opacity-50"
               >
                 <LogIn size={16} />
-                {action === 'Abriendo navegador...' ? action : 'Login Manual'}
+                {action === 'Abriendo navegador...' ? action : 'Forzar Login'}
               </button>
             )}
 
@@ -213,14 +213,12 @@ export default function MotBotPage() {
 
       {/* Alert: needs login */}
       {needsLogin && (
-        <div className="flex items-start gap-3 p-4 rounded-xl border border-amber-500/30 bg-amber-500/10">
-          <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-amber-300 font-semibold text-sm">Primera configuración requerida</p>
-            <p className="text-amber-400/80 text-xs mt-1">
-              No hay sesión de Google guardada. Hacé click en <strong>Login Manual</strong> para que se abra 
-              el navegador y puedas completar el inicio de sesión. La sesión se guardará automáticamente 
-              para los próximos ciclos.
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-900/20 border border-amber-500/20">
+          <ShieldAlert className="text-amber-500 shrink-0 mt-0.5" size={20} />
+          <div className="flex flex-col gap-2">
+            <h4 className="text-amber-400 font-bold text-sm">Autenticación Requerida</h4>
+            <p className="text-amber-200/70 text-xs">
+              El bot no tiene una sesión activa de Google. Haz click en "Forzar Login" para que el bot intente loguearse automáticamente en el servidor usando las credenciales configuradas.
             </p>
           </div>
         </div>
@@ -253,7 +251,15 @@ export default function MotBotPage() {
                     {m.estado === 'marcado' ? (
                       <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
                     ) : m.estado === 'error' ? (
-                      <XCircle size={16} className="text-red-400 shrink-0" />
+                      <>
+                        <button
+                          onClick={() => callApi('/api/mot-bot/login', 'Forzando...')}
+                          disabled={loading}
+                          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs whitespace-nowrap"
+                        >
+                          <UserCheck size={14} /> Forzar Login
+                        </button>
+                      </>
                     ) : (
                       <Clock size={16} className="text-slate-500 shrink-0" />
                     )}

@@ -44,14 +44,12 @@ async function runCycle() {
     // Si no está logueado, intentar restore de sesión
     if (!isLoggedIn()) {
       if (!sessionExists()) {
-        // Primera vez — necesita login manual
-        _needsLogin = true;
-        _status     = 'needs_login';
-        console.log('[MOT-Scheduler] No hay sesión guardada. Se requiere login manual.');
-        return;
+        console.log('[MOT-Scheduler] No hay sesión guardada. Intentando login automático headless...');
+        await doLogin(true); // Intento de login automático sin GUI
+      } else {
+        console.log('[MOT-Scheduler] Re-logueando con sesión guardada...');
+        await doLogin(true); // headless, usa storageState
       }
-      console.log('[MOT-Scheduler] Re-logueando con sesión guardada...');
-      await doLogin(true); // headless, usa storageState
     }
 
     _needsLogin = false;
@@ -107,19 +105,19 @@ async function stop() {
 }
 
 /**
- * Ejecutar el primer login manualmente (headless: false).
- * Abre el navegador visible para que el usuario complete Google OAuth.
- * Una vez completado, guarda la sesión y arranca el scheduler automático.
+ * Forzar un intento de login automático (headless: true).
+ * Esto permite al usuario disparar el login desde la web de Vercel
+ * sin depender de una ventana gráfica (que Render no soporta).
  */
 async function doManualLogin() {
-  console.log('[MOT-Scheduler] Iniciando login manual (headless: false)...');
+  console.log('[MOT-Scheduler] Forzando login automático (headless: true)...');
   _status = 'logging_in';
   try {
-    await doLogin(false); // ventana visible
+    await doLogin(true); // ventana oculta para servidores
     _needsLogin = false;
     _status     = 'running';
     _lastError  = null;
-    console.log('[MOT-Scheduler] Login manual completado. Sesión guardada.');
+    console.log('[MOT-Scheduler] Login automático completado. Sesión guardada.');
     // Arrancar ciclo automático si no está corriendo
     if (!_interval) await start();
     return { ok: true };
