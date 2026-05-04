@@ -13,7 +13,9 @@ import {
   RefreshCw,
   Wifi,
   WifiOff,
-  ChevronRight
+  ChevronRight,
+  ShieldAlert,
+  UserCheck
 } from 'lucide-react'
 
 const API = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001'
