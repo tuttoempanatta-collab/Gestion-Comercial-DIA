@@ -152,51 +152,36 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       return p;
     };
 
+    // Expose the save function to the browser to save RAM
+    await page.exposeFunction('saveRowToDb', async (row) => {
+      await saveCommercialAction(extractionId, row);
+    });
+
     let totalItems = 0;
     for (let p = 1; p <= totalPages; p++) {
-      // Re-find the frame at each page to be 100% sure after reloads
       dataFrame = await findDataFrame(page);
       
-      // Check for cancellation
       if (global.cancelledExtractions?.has(extractionId)) {
-        console.log(`[Ext-${extractionId}] Cancellation requested. Stopping scraper.`);
-        onProgress({ message: 'Extracción cancelada por el usuario.', current: p, total: totalPages, percentage: 100 });
+        onProgress({ message: 'Cancelado.', current: p, total: totalPages, percentage: 100 });
         break;
       }
 
       onProgress({ 
         message: `Extrayendo página ${p} de ${totalPages}...`, 
-        current: p, 
-        total: totalPages,
+        current: p, total: totalPages,
         percentage: 15 + Math.floor((p / totalPages) * 75)
       });
 
-      // Wait for table to be ready
-      const tableSelector = '#GridContainerTbl, .Grid_WorkWith';
-      try {
-        await dataFrame.waitForSelector(tableSelector, { timeout: 15000, state: 'visible' });
-      } catch (e) {
-        console.log('[DEBUG] Table not found in current frame, re-searching all frames...');
-        dataFrame = await findDataFrame(page);
-        await dataFrame.waitForSelector(tableSelector, { timeout: 15000 });
-      }
+      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 15000 }).catch(() => {});
       
-      await dataFrame.waitForTimeout(2000); // Wait for animations
-
-      const rowsLocator = dataFrame.locator('#GridContainerTbl tr');
-      const rowsCount = await rowsLocator.count();
-      console.log(`[DEBUG] Page ${p}: Found ${rowsCount} potential rows`);
-
-      for (let i = 0; i < rowsCount; i++) {
-        const row = rowsLocator.nth(i);
-        const cells = row.locator('td');
-        const cellsCount = await cells.count();
-        
-        if (cellsCount >= 7) {
-          const rowData = await row.evaluate(node => {
-            const tds = node.querySelectorAll('td');
-            if (node.querySelector('th') || node.classList.contains('Grid_WorkWithHeader')) return null;
-            return {
+      // Process rows INSIDE the browser to avoid moving large objects to Node.js
+      const pageResults = await dataFrame.evaluate(async () => {
+        const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
+        let count = 0;
+        for (const row of trs) {
+          const tds = row.querySelectorAll('td');
+          if (tds.length >= 7 && !row.querySelector('th') && !row.classList.contains('Grid_WorkWithHeader')) {
+            const data = {
               codigo: tds[0]?.innerText.trim() || '',
               articulo: tds[1]?.innerText.trim() || '',
               combo: tds[2]?.innerText.trim() || '',
@@ -205,14 +190,17 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               fecha_hasta: tds[5]?.innerText.trim() || '',
               cantidades: tds[6]?.innerText.trim() || ''
             };
-          });
-
-          if (rowData && rowData.codigo && !isNaN(parseInt(rowData.codigo))) {
-            await saveCommercialAction(extractionId, rowData);
-            totalItems++;
+            if (data.codigo && !isNaN(parseInt(data.codigo))) {
+              await window.saveRowToDb(data);
+              count++;
+            }
           }
         }
-      }
+        return count;
+      });
+
+      totalItems += pageResults;
+      console.log(`[DEBUG] Page ${p}: Saved ${pageResults} rows`);
 
       // 5. Click Next Page if needed
       if (p < totalPages) {
