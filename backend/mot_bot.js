@@ -280,38 +280,122 @@ async function readTasks() {
       const horarioInicio  = match[1];
       const horarioCierre  = match[2];
 
-      // Nombre: primera línea de texto antes del horario
+      // Nombre: primera línea de texto o título rojo
       const lines  = text.split('\n').map(l => l.trim()).filter(Boolean);
-      const nombre = lines[0] || 'Sin nombre';
+      let nombre = lines[0] || 'Sin nombre';
 
-      // Verificar si tiene botón de check (✓ verde / marcación positiva)
-      // Los botones son: ✓ (check), ✗ (no), ⊖ (omitir)
-      // Solo nos interesan los que tienen el botón ✓
-      const allButtons = Array.from(item.querySelectorAll('button, a, [role="button"], svg, img, [class*="check"], [class*="ok"], [class*="confirm"]'));
-      
-      // Heurística: tiene botón si hay al menos 2-3 elementos interactivos a la derecha
-      // O si hay íconos circulares tipo ✓ ✗ ⊖
-      const hasBotones = item.querySelectorAll('button, [class*="btn"], [class*="check"], [class*="icon"], svg circle, img').length >= 2;
-      
-      // Intento alternativo: buscar botones padre/hermano  
-      const parent   = item.parentElement;
-      const siblings = parent ? Array.from(parent.querySelectorAll('button, [class*="btn"], [class*="icon"]')) : [];
-      const tieneBotonCheck = hasBotones || siblings.length >= 2;
+      // Identificar si es una tarea "cliqueable" por título (color rojo)
+      // Buscamos si hay un elemento con color rojo o un link
+      const redTitle = item.querySelector('[style*="color: rgb(204, 0, 0)"], [style*="color: red"], a');
+      const esCliqueable = !!redTitle || text.toLowerCase().includes('control');
+
+      // Verificar si tiene botón de check directo (circulares)
+      const hasDirectButtons = item.querySelectorAll('button, svg circle, [class*="check"]').length >= 2;
 
       results.push({
         nombre,
         horarioInicio,
         horarioCierre,
-        tieneBotonCheck,
-        textoCompleto: text.slice(0, 200),
+        tieneBotonCheck: hasDirectButtons,
+        esCliqueable,
+        textoCompleto: text.slice(0, 100)
       });
     }
 
     return results;
   }, MARK_BEFORE_MINUTES);
 
-  log(`Tareas leídas: ${tasks.length} (con botón: ${tasks.filter(t => t.tieneBotonCheck).length})`);
+  log(`Tareas leídas: ${tasks.length} (cliqueables: ${tasks.filter(t => t.esCliqueable).length})`);
   return tasks;
+}
+
+/**
+ * Maneja específicamente la tarea de Control de Temperatura.
+ */
+async function handleTemperatureTask(task) {
+  log(`Iniciando procesamiento de: ${task.nombre}`);
+  
+  try {
+    // 1. Click en el título para abrir la tarea
+    await _page.click(`text="${task.nombre}"`, { timeout: 10000 });
+    await _page.waitForLoadState('networkidle');
+    await _page.waitForTimeout(3000);
+    
+    // 2. Ingresar Legajo Responsable
+    const responsableInput = _page.locator('input[id*="RESPONSABLE"], input[placeholder*="Legajo"]');
+    await responsableInput.waitFor({ state: 'visible', timeout: 5000 });
+    await responsableInput.fill('23250');
+    
+    // 3. Click en Validar
+    await _page.click('input[value="Validar"], button:has-text("Validar")');
+    await _page.waitForTimeout(3000);
+    
+    log('Responsable validado. Procesando categorías...');
+
+    // 4. Identificar y procesar cada categoría (Murales, Freezers, Cámaras)
+    const categorias = ['Murales', 'Freezers', 'Cámaras'];
+    
+    for (const catName of categorias) {
+      log(`Buscando categoría: ${catName}...`);
+      const catHeader = _page.locator(`.Categoria, .card-header, div:has-text("${catName}")`).filter({ hasText: catName }).first();
+      
+      if (await catHeader.isVisible()) {
+        await catHeader.click().catch(() => {}); // Intentar expandir
+        await _page.waitForTimeout(1500);
+        
+        // 5. Llenar filas dentro de la categoría
+        const rows = await _page.locator('tr, .row-equipo, .grid-row').all();
+        log(`Encontradas ${rows.length} filas en ${catName}.`);
+        
+        for (const row of rows) {
+          const rowText = await row.innerText();
+          if (!rowText || rowText.includes('Temperatura')) continue; // Saltar cabeceras
+          
+          // Buscar inputs en esta fila
+          const inputs = await row.locator('input[type="text"], input[type="number"]').all();
+          if (inputs.length < 2) continue;
+          
+          // Generar valores aleatorios según reglas del usuario
+          const tempEqui = (Math.random() * (0.8 - 0.1) + 0.1).toFixed(1);
+          let tempProd  = (Math.random() * (3.0 - 1.0) + 1.0).toFixed(1);
+          
+          // Excepción Mural Pollo: no superar 1.8
+          if (rowText.toLowerCase().includes('pollo')) {
+            tempProd = (Math.random() * (1.7 - 0.5) + 0.5).toFixed(1);
+          }
+          
+          log(`  Llenando ${rowText.split('\n')[0].trim()}: Equi=${tempEqui}, Prod=${tempProd}`);
+          
+          await inputs[0].fill(tempEqui);
+          await _page.waitForTimeout(300);
+          await inputs[1].fill(tempProd);
+          await _page.waitForTimeout(300);
+          
+          // Click en el botón verde de confirmación (✓) de la fila
+          const checkBtn = row.locator('img[src*="check"], .btn-success, [class*="verde"], .fa-check').first();
+          if (await checkBtn.isVisible()) {
+            await checkBtn.click();
+            await _page.waitForTimeout(500);
+          }
+        }
+      }
+    }
+
+    log('Todas las temperaturas ingresadas. Finalizando tarea...');
+    
+    // 6. Click en Finalizar / Guardar (Botón final de la página)
+    const finishBtn = _page.locator('button:has-text("Finalizar"), button:has-text("Guardar"), input[value="Finalizar"]');
+    if (await finishBtn.isVisible()) {
+      await finishBtn.click();
+      await _page.waitForTimeout(3000);
+    }
+
+    log(`Tarea "${task.nombre}" completada exitosamente.`);
+    return true;
+  } catch (e) {
+    log(`Error procesando tarea de temperatura: ${e.message}`, 'error');
+    return false;
+  }
 }
 
 /**
@@ -359,8 +443,8 @@ async function markDueTasks(markedToday = new Set()) {
 
   // Evaluar cuáles deben marcarse
   for (const task of tasks) {
-    if (!task.tieneBotonCheck) {
-      log(`Omitiendo tarea sin botón: "${task.nombre}"`, 'info');
+    if (!task.tieneBotonCheck && !task.esCliqueable) {
+      log(`Omitiendo tarea sin botón ni link: "${task.nombre}"`, 'info');
       continue;
     }
 
@@ -377,49 +461,47 @@ async function markDueTasks(markedToday = new Set()) {
     // ── Es el momento de marcar esta tarea ───────────────────────────────
     log(`Marcando: "${task.nombre}" (cierre: ${task.horarioCierre})`);
     try {
-      const clickResult = await _page.evaluate((taskName) => {
-        const timePattern = /(\d{2}:\d{2})\s*[-–]\s*(\d{2}:\d{2})/;
+      let success = false;
+      let reason = '';
 
-        // Buscar el contenedor de la tarea por nombre
-        const allItems = Array.from(document.querySelectorAll('li, .row, [class*="item"], [class*="tarea"]'));
-        for (const item of allItems) {
-          const text = item.innerText || '';
-          if (text.includes(taskName) && timePattern.test(text)) {
-            // Dentro del item, buscar el primer botón de tipo "check" / confirmación
-            // Generalmente el primer botón/ícono de los tres (✓ ✗ ⊖)
-            const buttons  = Array.from(item.querySelectorAll('button, a[role="button"], [class*="btn"], [class*="check"], [class*="ok"], [class*="confirm"], img, svg'));
-            const checkBtn = buttons.find(b => {
-              const cls   = (b.className || '').toLowerCase();
-              const src   = (b.getAttribute('src') || '').toLowerCase();
-              const title = (b.getAttribute('title') || b.getAttribute('aria-label') || '').toLowerCase();
-              return cls.includes('check') || cls.includes('ok') || cls.includes('confirm') ||
-                     src.includes('check') || src.includes('ok') ||
-                     title.includes('ok') || title.includes('cumplid') || title.includes('completad') ||
-                     title.includes('check');
-            }) || buttons[0]; // fallback al primer botón
-
-            if (checkBtn) {
-              checkBtn.click();
-              return { clicked: true, btnClass: checkBtn.className, btnTag: checkBtn.tagName };
+      if (task.nombre.toLowerCase().includes('temperatura') || task.nombre.toLowerCase().includes('temp')) {
+        success = await handleTemperatureTask(task);
+        if (!success) reason = 'Error en el proceso de temperatura';
+      } else {
+        // Marcación directa
+        const clickResult = await _page.evaluate((taskName) => {
+          const timePattern = /(\d{2}:\d{2})\s*[-–]\s*(\d{2}:\d{2})/;
+          const allItems = Array.from(document.querySelectorAll('li, .row, [class*="item"], [class*="tarea"]'));
+          for (const item of allItems) {
+            const text = item.innerText || '';
+            if (text.includes(taskName) && timePattern.test(text)) {
+              const buttons  = Array.from(item.querySelectorAll('button, a[role="button"], [class*="btn"], [class*="check"], img, svg'));
+              const checkBtn = buttons[0]; 
+              if (checkBtn) {
+                checkBtn.click();
+                return { clicked: true };
+              }
+              return { clicked: false, reason: 'No se encontró botón' };
             }
-            return { clicked: false, reason: 'No se encontró botón check en el item' };
           }
-        }
-        return { clicked: false, reason: `Tarea "${taskName}" no encontrada en el DOM` };
-      }, task.nombre);
+          return { clicked: false, reason: 'Tarea no encontrada' };
+        }, task.nombre);
+        success = clickResult.clicked;
+        reason = clickResult.reason;
+      }
 
-      if (clickResult.clicked) {
+      if (success) {
         markedToday.add(key);
         results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'marcado', ts: new Date().toISOString() });
-        log(`✓ Marcada: "${task.nombre}"`);
-        await _page.waitForTimeout(1500); // Esperar respuesta del servidor
+        log(`✓ Marcada exitosamente: "${task.nombre}"`);
+        await _page.waitForTimeout(1500);
       } else {
-        results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: clickResult.reason, ts: new Date().toISOString() });
-        log(`✗ No se pudo marcar "${task.nombre}": ${clickResult.reason}`, 'warn');
+        results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: reason, ts: new Date().toISOString() });
+        log(`✗ Falló la marcación de "${task.nombre}": ${reason}`, 'warn');
       }
     } catch (e) {
       results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: e.message, ts: new Date().toISOString() });
-      log(`Error marcando "${task.nombre}": ${e.message}`, 'error');
+      log(`Error crítico marcando "${task.nombre}": ${e.message}`, 'error');
     }
   }
 
