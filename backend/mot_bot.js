@@ -10,7 +10,7 @@ const fs = require('fs');
 
 const MOT_URL     = 'https://mot.supermercadosdia.com.ar/com.mot.login';
 const MOT_HOME    = 'https://mot.supermercadosdia.com.ar/com.mot.home';
-const MOT_TAREAS  = 'https://mot.supermercadosdia.com.ar/com.mot.tareastienda';
+const MOT_TAREAS  = 'https://mot.supermercadosdia.com.ar/com.mot.mot.tareastienda';
 
 const SESSION_DIR  = path.join(__dirname, 'playwright_data', 'mot_session');
 const SESSION_FILE = path.join(SESSION_DIR, 'storage_state.json');
@@ -37,6 +37,7 @@ function log(msg, level = 'info') {
 }
 
 function getLogs()    { return botLog; }
+function clearLogs()  { botLog.length = 0; }
 function isLoggedIn() { return _loggedIn; }
 
 // ─── Helpers de tiempo ────────────────────────────────────────────────────────
@@ -116,14 +117,17 @@ async function doLogin(headless = true) {
     log('Restaurando sesión previa desde disco...');
   }
 
-  _browser = await chromium.launch({
-    headless,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--lang=es-AR'],
-    slowMo: headless ? 0 : 150,
-  });
-
-  _context = await _browser.newContext(contextOptions);
-  _page    = await _context.newPage();
+  // Si ya hay un browser abierto, reutilizarlo; de lo contrario lanzar uno nuevo.
+  if (!_browser) {
+    _browser = await chromium.launch({
+      headless,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--lang=es-AR'],
+      slowMo: headless ? 0 : 150,
+    });
+    _context = await _browser.newContext(contextOptions);
+  }
+  // Crear una nueva página (pestaña) para el login
+  _page = await _context.newPage();
 
   // Navegar al sitio MOT de forma segura
   try {
@@ -168,11 +172,38 @@ async function doLogin(headless = true) {
     if (!clicked) throw new Error('No se encontró el botón de login con Google.');
   }
 
-  // ── Esperar redirección a Google OAuth ────────────────────────────────────
-  log('Esperando página de Google...');
-  await _page.waitForURL('**/accounts.google.com/**', { timeout: 15000 });
+  if (!headless) {
+    log('Modo visible: Por favor completa el login manualmente en la ventana de Chrome.');
+    log('Tienes hasta 3 minutos. Resolvé cualquier captcha o paso de seguridad...');
+    try {
+      await _page.waitForURL(/com\.mot\.(home|tareas)/, { timeout: 180000 });
+      _loggedIn = true;
+      log('Login manual completado con éxito.');
+      await saveSession();
+      return true;
+    } catch (e) {
+      throw new Error('Se agotó el tiempo de 3 minutos para el login manual.');
+    }
+  }
+
+  // ── Esperar redirección a Google OAuth o a Home directamente ──────────────
+  log('Esperando página de Google (o redirección automática)...');
+  try {
+    await _page.waitForURL(/accounts\.google\.com|com\.mot\.(home|tareas)/, { timeout: 15000 });
+  } catch(e) {
+    throw new Error(`Timeout esperando redirección. URL actual: ${_page.url()}`);
+  }
   await _page.waitForTimeout(1500);
 
+  // Si nos redirigió directamente a la app de DIA, la sesión ya estaba activa en Google
+  if (_page.url().includes('com.mot.home') || _page.url().includes('com.mot.tareas')) {
+    _loggedIn = true;
+    log('Sesión auto-aprobada por Google. Ya logueado.');
+    await saveSession();
+    return true;
+  }
+
+  // Si llegamos acá, estamos en accounts.google.com
   // ── Email ─────────────────────────────────────────────────────────────────
   log('Ingresando email...');
   const emailInput = _page.locator('input[type="email"]');
@@ -426,6 +457,7 @@ module.exports = {
   closeBrowser,
   captureDebugScreenshot,
   getLogs,
+  clearLogs,
   isLoggedIn,
   sessionExists,
   saveSessionData,

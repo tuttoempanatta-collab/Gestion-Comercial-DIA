@@ -53,14 +53,6 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     // 0. Disable images to save RAM
     await context.route('**/*.{png,jpg,jpeg,gif,svg}', route => route.abort());
 
-    // 1. Set page size FIRST (Main page usually handles this)
-    try {
-      onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
-      await page.click('button.btn.btn-primary.dropdown-toggle', { timeout: 5000 }).catch(() => {});
-      await page.click(`a:has-text("${pageSize} rows")`, { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(3000);
-    } catch (e) {}
-
     // 2. Find the Data Frame (Robust search)
     onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
     let dataFrame = page;
@@ -83,6 +75,16 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       } catch (e) {}
     }
 
+    // 1. Set page size (Main page or Frame might handle this)
+    try {
+      onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
+      // Try both page and frame
+      const target = dataFrame;
+      await target.click('button.btn.btn-primary.dropdown-toggle', { timeout: 4000 }).catch(() => {});
+      await target.click(`a:has-text("${pageSize} rows")`, { timeout: 4000 }).catch(() => {});
+      await target.waitForTimeout(3000);
+    } catch (e) {}
+
     // 3. Apply Date Filters
     if (startDate || endDate) {
       onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 10 });
@@ -92,24 +94,33 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const searchBtn = dataFrame.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
 
       try {
-        console.log('[DEBUG] High-velocity search trigger...');
+        console.log('[DEBUG] Applying date filters with full event cycle...');
         await dataFrame.evaluate(({ start, end }) => {
-          const startInp = document.querySelector('input[id*="DESDE"], input[name*="vDESDE"]');
-          const endInp = document.querySelector('input[id*="HASTA"], input[name*="vHASTA"]');
-          const btn = document.querySelector('input[value="Buscar"], #BTNBUSCAR, .Button_Standard');
+          const fillField = (selector, value) => {
+            const inp = document.querySelector(selector);
+            if (!inp) return false;
+            inp.value = value;
+            ['input', 'change', 'blur'].forEach(ev => inp.dispatchEvent(new Event(ev, { bubbles: true })));
+            return true;
+          };
+
+          const startFilled = fillField('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]', start);
+          const endFilled = fillField('input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]', end);
           
-          if (startInp) { startInp.value = start; startInp.dispatchEvent(new Event('change', { bubbles: true })); }
-          if (endInp) { endInp.value = end; endInp.dispatchEvent(new Event('change', { bubbles: true })); }
+          const btn = document.querySelector('input[value="Buscar"], #BTNBUSCAR, .Button_Standard, button:has-text("Buscar")');
+          
           if (btn) {
             btn.click();
-            btn.dispatchEvent(new Event('mousedown', { bubbles: true }));
-            btn.dispatchEvent(new Event('mouseup', { bubbles: true }));
-            btn.dispatchEvent(new Event('click', { bubbles: true }));
+            ['mousedown', 'mouseup', 'click'].forEach(ev => btn.dispatchEvent(new Event(ev, { bubbles: true })));
+          } else {
+            // Fallback: Press enter on the input if button not found
+            const inp = document.querySelector('input[id*="HASTA"], input[name*="vHASTA"]');
+            if (inp) inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
           }
         }, { start: formatDateForPortal(startDate), end: formatDateForPortal(endDate) });
         
-        // Wait for the results to start loading
-        await dataFrame.waitForTimeout(10000);
+        // Wait longer for the grid to refresh (GeneXus can be slow)
+        await dataFrame.waitForTimeout(12000);
       } catch (e) {
         console.log('Search trigger failed:', e.message);
       }
@@ -117,23 +128,39 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
     }
 
+    // Capture debug screenshot to see what happened
+    try {
+      const screenshotDir = path.join(__dirname, 'playwright_data', 'debug');
+      if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
+      const screenshotPath = path.join(screenshotDir, `extract_${extractionId}_post_filter.png`);
+      await page.screenshot({ path: screenshotPath });
+      console.log(`[DEBUG] Screenshot saved to ${screenshotPath}`);
+    } catch (e) {}
+
     // 4. Detect total pages with retry
     let totalPages = 1;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await dataFrame.waitForSelector('button.btn.btn-primary.dropdown-toggle, .PagingButtons', { timeout: 15000 });
-        const paginationBtn = dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons').first();
-        const paginationText = await paginationBtn.innerText();
-        const match = paginationText.match(/de\s+(\d+)/i);
-        if (match) {
-          totalPages = parseInt(match[1]);
-          break;
+        await dataFrame.waitForSelector('button.btn.btn-primary.dropdown-toggle, .PagingButtons, .gx-pagination', { timeout: 10000 });
+        const paginationElements = await dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons, .gx-pagination, span:has-text("de")').all();
+        
+        for (const el of paginationElements) {
+          const text = await el.innerText();
+          const match = text.match(/(?:de|of)\s+(\d+)/i);
+          if (match) {
+            totalPages = parseInt(match[1]);
+            break;
+          }
         }
+        if (totalPages > 1) break;
+        
+        // If still 1, maybe it's just one page, or maybe it hasn't loaded.
+        await dataFrame.waitForTimeout(3000);
       } catch (e) {
-        if (attempt === 1) {
-          console.log('[DEBUG] Pagination not found, clicking Buscar again...');
+        if (attempt < 3) {
+          console.log(`[DEBUG] Pagination detection attempt ${attempt} failed, retrying...`);
           await dataFrame.click('input[value="Buscar"], #BTNBUSCAR').catch(() => {});
-          await dataFrame.waitForTimeout(8000);
+          await dataFrame.waitForTimeout(5000);
         }
       }
     }
