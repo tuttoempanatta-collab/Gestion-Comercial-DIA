@@ -38,6 +38,8 @@ export default function DataPage() {
   const [editCode, setEditCode] = useState('')
   const [editUnits, setEditUnits] = useState('')
   const [selectedCombo, setSelectedCombo] = useState('')
+  const [dateFilterStart, setDateFilterStart] = useState('')
+  const [dateFilterEnd, setDateFilterEnd] = useState('')
 
   const handleUpdateRecord = (id: number) => {
     // Optimistic update
@@ -179,13 +181,36 @@ export default function DataPage() {
     }
   }
 
+  const parseDate = (str: string) => {
+    if (!str) return null;
+    const parts = str.split('/');
+    if (parts.length !== 3) return null;
+    const [d, m, y] = parts.map(Number);
+    return new Date(y, m - 1, d);
+  };
+
   const filteredData = data.filter(item => {
     const matchesSearch = item.articulo.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           item.codigo.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCombo = selectedCombo === '' || (item.combo && item.combo.includes(selectedCombo));
-    const hasStock = item.stock > 0;
     
-    const baseFilter = matchesSearch && matchesCombo;
+    let matchesDate = true;
+    if (dateFilterStart || dateFilterEnd) {
+      const itemStart = parseDate(item.fecha_desde);
+      const itemEnd = parseDate(item.fecha_hasta);
+      
+      if (dateFilterStart) {
+        const filterStart = new Date(dateFilterStart + 'T00:00:00');
+        if (itemEnd && itemEnd < filterStart) matchesDate = false;
+      }
+      if (dateFilterEnd) {
+        const filterEnd = new Date(dateFilterEnd + 'T23:59:59');
+        if (itemStart && itemStart > filterEnd) matchesDate = false;
+      }
+    }
+
+    const hasStock = item.stock > 0;
+    const baseFilter = matchesSearch && matchesCombo && matchesDate;
     if (showOutOfStock) return baseFilter;
     return baseFilter && hasStock;
   })
@@ -573,6 +598,36 @@ export default function DataPage() {
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
+
+              <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1">
+                <div className="flex flex-col">
+                  <label className="text-[8px] text-slate-500 uppercase font-bold px-1">Desde</label>
+                  <input 
+                    type="date" 
+                    className="bg-transparent text-[10px] text-white focus:outline-none cursor-pointer"
+                    value={dateFilterStart}
+                    onChange={(e) => setDateFilterStart(e.target.value)}
+                  />
+                </div>
+                <div className="w-[1px] h-6 bg-slate-800"></div>
+                <div className="flex flex-col">
+                  <label className="text-[8px] text-slate-500 uppercase font-bold px-1">Hasta</label>
+                  <input 
+                    type="date" 
+                    className="bg-transparent text-[10px] text-white focus:outline-none cursor-pointer"
+                    value={dateFilterEnd}
+                    onChange={(e) => setDateFilterEnd(e.target.value)}
+                  />
+                </div>
+                {(dateFilterStart || dateFilterEnd) && (
+                  <button 
+                    onClick={() => { setDateFilterStart(''); setDateFilterEnd(''); }}
+                    className="p-1 hover:bg-slate-800 rounded text-red-400"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
               
               <div className="flex items-center gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 scrollbar-hide">
                 {uniqueCombos.length > 0 && (
@@ -655,6 +710,8 @@ export default function DataPage() {
                         />
                       </th>
                       <th className="px-6 py-4 border-b border-slate-800">Producto</th>
+                      <th className="px-6 py-4 border-b border-slate-800">Desde</th>
+                      <th className="px-6 py-4 border-b border-slate-800">Hasta</th>
                       <th className="px-6 py-4 border-b border-slate-800">Stock</th>
                       <th className="px-6 py-4 border-b border-slate-800">Combo</th>
                       <th className="px-6 py-4 border-b border-slate-800">Precio</th>
@@ -714,13 +771,19 @@ export default function DataPage() {
                               <div className="flex flex-col gap-1">
                                 <span className="text-white font-semibold group-hover:text-red-400 transition-colors uppercase">{row.articulo || '(Sin descripción)'}</span>
                                 <div className="flex items-center gap-2">
-                                  <span className="text-[10px] text-slate-500 font-mono tracking-tighter">ID: {row.codigo} • Vigencia: {row.fecha_desde}</span>
+                                  <span className="text-[10px] text-slate-500 font-mono tracking-tighter">ID: {row.codigo}</span>
                                   {(row.combo || '').toLowerCase().includes('llevando') && row.cantidades && (
                                     <span className="text-[10px] bg-red-600/20 text-red-400 px-1 rounded font-bold">REQ: {row.cantidades}</span>
                                   )}
                                 </div>
                               </div>
                             )}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="text-slate-400 font-mono text-[10px]">{row.fecha_desde}</span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="text-slate-400 font-mono text-[10px]">{row.fecha_hasta}</span>
                           </td>
                           <td className="px-6 py-4">
                             <span className={`px-2 py-1 rounded text-[10px] font-bold ${outOfStock ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
