@@ -89,40 +89,78 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     if (startDate || endDate) {
       onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 10 });
       
-      const startInput = dataFrame.locator('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]').first();
-      const endInput = dataFrame.locator('input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]').first();
-      const searchBtn = dataFrame.locator('input[value="Buscar"], #BTNBUSCAR, button:has-text("Buscar"), .Button_Standard').first();
+      const startFormatted = formatDateForPortal(startDate);
+      const endFormatted = formatDateForPortal(endDate);
+      
+      console.log(`[Ext-${extractionId}] Aplicando filtros: Desde=${startFormatted || 'Inicio'}, Hasta=${endFormatted || 'Hoy'}`);
 
       try {
-        console.log('[DEBUG] Applying date filters with full event cycle...');
-        await dataFrame.evaluate(({ start, end }) => {
-          const fillField = (selector, value) => {
-            const inp = document.querySelector(selector);
-            if (!inp) return false;
-            inp.value = value;
-            ['input', 'change', 'blur'].forEach(ev => inp.dispatchEvent(new Event(ev, { bubbles: true })));
-            return true;
-          };
-
-          const startFilled = fillField('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]', start);
-          const endFilled = fillField('input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]', end);
-          
-          const btn = document.querySelector('input[value="Buscar"], #BTNBUSCAR, .Button_Standard, button:has-text("Buscar")');
-          
-          if (btn) {
-            btn.click();
-            ['mousedown', 'mouseup', 'click'].forEach(ev => btn.dispatchEvent(new Event(ev, { bubbles: true })));
-          } else {
-            // Fallback: Press enter on the input if button not found
-            const inp = document.querySelector('input[id*="HASTA"], input[name*="vHASTA"]');
-            if (inp) inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        let filterFrame = dataFrame;
+        
+        // Helper to find and fill in any frame
+        const fillInAnyFrame = async (selector, value) => {
+          for (const f of page.frames()) {
+            try {
+              const el = f.locator(selector).first();
+              if (await el.count() > 0) {
+                await el.fill(value);
+                await el.dispatchEvent('change');
+                return f;
+              }
+            } catch (e) {}
           }
-        }, { start: formatDateForPortal(startDate), end: formatDateForPortal(endDate) });
+          return null;
+        };
+
+        if (startFormatted) {
+          const f = await fillInAnyFrame('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]', startFormatted);
+          if (f) {
+            filterFrame = f;
+          } else {
+            onProgress({ message: 'Aviso: No se encontró campo "Desde"', current: 5, total: 100, percentage: 10 });
+          }
+        }
+        
+        if (endFormatted) {
+          const f = await fillInAnyFrame('input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]', endFormatted);
+          if (f) {
+            filterFrame = f;
+          } else {
+            onProgress({ message: 'Aviso: No se encontró campo "Hasta"', current: 5, total: 100, percentage: 10 });
+          }
+        }
+
+        await page.waitForTimeout(1000);
+
+        // Trigger search using robust multi-selector
+        const searchSelector = 'input[value="Buscar"], #BTNBUSCAR, .Button_Standard, button:has-text("Buscar"), input[id*="BUSCAR"]';
+        let searchBtn = filterFrame.locator(searchSelector).first();
+        
+        if (await searchBtn.count() === 0) {
+          // Try finding it in ANY frame if not in filterFrame
+          for (const f of page.frames()) {
+            const btn = f.locator(searchSelector).first();
+            if (await btn.count() > 0) {
+              searchBtn = btn;
+              filterFrame = f;
+              break;
+            }
+          }
+        }
+
+        if (await searchBtn.count() > 0 && await searchBtn.isVisible()) {
+          console.log(`[Ext-${extractionId}] Clickeando botón buscar...`);
+          await searchBtn.click();
+        } else {
+          console.log(`[Ext-${extractionId}] Botón buscar no visible, enviando Enter...`);
+          await filterFrame.keyboard.press('Enter');
+        }
         
         // Wait longer for the grid to refresh (GeneXus can be slow)
-        await dataFrame.waitForTimeout(12000);
+        await page.waitForTimeout(10000);
       } catch (e) {
-        console.log('Search trigger failed:', e.message);
+        console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
+        onProgress({ message: `Aviso: Error en filtros (${e.message.slice(0, 40)})`, current: 5, total: 100, percentage: 10 });
       }
       
       onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
@@ -139,29 +177,36 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     // 4. Detect total pages with retry
     let totalPages = 1;
+    onProgress({ message: 'Calculando total de páginas...', current: 12, total: 100, percentage: 14 });
+    
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await dataFrame.waitForSelector('button.btn.btn-primary.dropdown-toggle, .PagingButtons, .gx-pagination', { timeout: 10000 });
-        const paginationElements = await dataFrame.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons, .gx-pagination, span:has-text("de")').all();
-        
-        for (const el of paginationElements) {
-          const text = await el.innerText();
-          const match = text.match(/(?:de|of)\s+(\d+)/i);
-          if (match) {
-            totalPages = parseInt(match[1]);
-            break;
+        // Search for pagination in all frames
+        let foundPagination = false;
+        for (const f of page.frames()) {
+          const paginationElements = await f.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons, .gx-pagination, span:has-text("de"), span:has-text("of")').all();
+          
+          for (const el of paginationElements) {
+            const text = await el.innerText();
+            const match = text.match(/(?:de|of)\s+(\d+)/i);
+            if (match) {
+              totalPages = parseInt(match[1]);
+              dataFrame = f; // Update dataFrame to the one that has pagination/table
+              foundPagination = true;
+              break;
+            }
           }
+          if (foundPagination) break;
         }
-        if (totalPages > 1) break;
         
-        // If still 1, maybe it's just one page, or maybe it hasn't loaded.
-        await dataFrame.waitForTimeout(3000);
-      } catch (e) {
-        if (attempt < 3) {
-          console.log(`[DEBUG] Pagination detection attempt ${attempt} failed, retrying...`);
-          await dataFrame.click('input[value="Buscar"], #BTNBUSCAR').catch(() => {});
-          await dataFrame.waitForTimeout(5000);
+        if (foundPagination) {
+          console.log(`[Ext-${extractionId}] Total páginas detectadas: ${totalPages} (intento ${attempt})`);
+          if (totalPages < 400) break; // If it's less than a huge number, it's likely filtered
         }
+        
+        await page.waitForTimeout(3000);
+      } catch (e) {
+        console.log(`[Ext-${extractionId}] Error detectando paginación:`, e.message);
       }
     }
 
@@ -278,8 +323,11 @@ function parseDate(dateStr) {
 }
 
 function formatDateForPortal(dateStr) {
+  if (!dateStr) return "";
   // input is YYYY-MM-DD
-  const [year, month, day] = dateStr.split('-');
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return "";
+  const [year, month, day] = parts;
   return `${day}/${month}/${year}`;
 }
 
