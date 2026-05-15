@@ -105,6 +105,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               if (await el.count() > 0) {
                 await el.fill(value);
                 await el.dispatchEvent('change');
+                await el.press('Tab'); // Force blur/update
                 return f;
               }
             } catch (e) {}
@@ -157,7 +158,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         }
         
         // Wait longer for the grid to refresh (GeneXus can be slow)
-        await page.waitForTimeout(10000);
+        console.log(`[Ext-${extractionId}] Esperando actualización de la tabla (15s)...`);
+        await page.waitForTimeout(15000);
+        
+        // Wait for any loading mask to disappear if it exists
+        try {
+          await page.waitForSelector('.gx-mask, .Loading, #Loading, #gx_ajax_notification', { state: 'hidden', timeout: 5000 }).catch(() => {});
+        } catch (e) {}
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
         onProgress({ message: `Aviso: Error en filtros (${e.message.slice(0, 40)})`, current: 5, total: 100, percentage: 10 });
@@ -179,7 +186,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     let totalPages = 1;
     onProgress({ message: 'Calculando total de páginas...', current: 12, total: 100, percentage: 14 });
     
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 5; attempt++) {
       try {
         // Search for pagination in all frames
         let foundPagination = false;
@@ -201,10 +208,15 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         
         if (foundPagination) {
           console.log(`[Ext-${extractionId}] Total páginas detectadas: ${totalPages} (intento ${attempt})`);
-          if (totalPages < 400) break; // If it's less than a huge number, it's likely filtered
+          // Si hay filtros y el total es muy alto (> 300), probablemente aún no se aplicó el filtro
+          if ((startDate || endDate) && totalPages > 300 && attempt < 5) {
+            console.log(`[Ext-${extractionId}] El total parece no estar filtrado (${totalPages} > 300). Reintentando...`);
+          } else {
+            break; 
+          }
         }
         
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error detectando paginación:`, e.message);
       }
