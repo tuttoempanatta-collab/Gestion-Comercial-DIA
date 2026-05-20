@@ -30,10 +30,13 @@ async function fetchDescriptionsFromIET(codigos, onProgress) {
       await page.goto('https://iet.supermercadosdia.com.ar/servlet/com.tiendas.iet.solicitudww', { waitUntil: 'networkidle', timeout: 30000 });
       
       // Si redirige a login, loguear
-      if (await page.$('#vUSERSEGLGN')) {
+      const loginSelector = '#vSECUSERNAME, #vUSERSEGLGN';
+      const passSelector = '#vSECUSERPASSWORD, #vUSERSEGPWR';
+      const loginField = await page.$(loginSelector);
+      if (loginField && await loginField.isVisible()) {
         if (onProgress) onProgress('Sesión expirada. Re-logueando...');
-        await page.fill('#vUSERSEGLGN', 'T00624');
-        await page.fill('#vUSERSEGPWR', 'CAMPO567');
+        await page.fill(loginSelector, 'T00624');
+        await page.fill(passSelector, 'CAMPO567');
         await page.click('#BTNENTER');
         await page.waitForNavigation({ waitUntil: 'networkidle' });
         await page.goto('https://iet.supermercadosdia.com.ar/servlet/com.tiendas.iet.solicitudww', { waitUntil: 'networkidle' });

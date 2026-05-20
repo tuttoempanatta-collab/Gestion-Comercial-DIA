@@ -6,14 +6,16 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
   console.log(`[DEBUG] runScraper started for ID: ${extractionId} with pageSize: ${pageSize}`);
   const browser = await chromium.launch({ 
     headless: true,
-    args: [
-      '--no-sandbox', 
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process'
-    ]
+    args: process.platform === 'win32' 
+      ? ['--no-sandbox', '--disable-setuid-sandbox'] 
+      : [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-zygote',
+          '--single-process'
+        ]
   });
 
   const context = await browser.newContext({
@@ -30,9 +32,11 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     await page.goto(settings.portal_url, { waitUntil: 'networkidle', timeout: 60000 });
     onProgress({ message: 'Portal cargado. Identificándose...', current: 0, total: 100, percentage: 5 });
 
-    if (await page.isVisible('#vUSERSEGLGN')) {
-      await page.fill('#vUSERSEGLGN', settings.username);
-      await page.fill('#vUSERSEGPWR', settings.password);
+    const loginSelector = '#vSECUSERNAME, #vUSERSEGLGN';
+    const passSelector = '#vSECUSERPASSWORD, #vUSERSEGPWR';
+    if (await page.isVisible(loginSelector)) {
+      await page.fill(loginSelector, settings.username);
+      await page.fill(passSelector, settings.password);
       await page.click('#BTNENTER');
       await page.waitForTimeout(5000);
     }
@@ -75,14 +79,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       } catch (e) {}
     }
 
-    // 1. Set page size (Main page or Frame might handle this)
+    // 1. Wait for grid table to load
     try {
-      onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
-      // Try both page and frame
-      const target = dataFrame;
-      await target.click('button.btn.btn-primary.dropdown-toggle', { timeout: 4000 }).catch(() => {});
-      await target.click(`a:has-text("${pageSize} rows")`, { timeout: 4000 }).catch(() => {});
-      await target.waitForTimeout(3000);
+      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 15000 }).catch(() => {});
     } catch (e) {}
 
     // 3. Apply Date Filters
@@ -165,6 +164,24 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         try {
           await page.waitForSelector('.gx-mask, .Loading, #Loading, #gx_ajax_notification', { state: 'hidden', timeout: 5000 }).catch(() => {});
         } catch (e) {}
+
+        // Set page size after results are loaded
+        try {
+          onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
+          const target = dataFrame;
+          const dropdownToggle = target.locator('button.btn.btn-primary.dropdown-toggle, .GridWithPaginationBar button.dropdown-toggle').first();
+          await dropdownToggle.waitFor({ state: 'visible', timeout: 5000 });
+          await dropdownToggle.click({ timeout: 4000 });
+          
+          const option = target.locator(`a:has-text("${pageSize} rows"), a:has-text("${pageSize} filas")`).first();
+          await option.waitFor({ state: 'visible', timeout: 5000 });
+          await option.click({ timeout: 4000 });
+          
+          console.log(`[DEBUG] Page size set to ${pageSize}`);
+          await target.waitForTimeout(5000); // wait for pagination update
+        } catch (e) {
+          console.log('[DEBUG] Error al configurar tamaño de página:', e.message);
+        }
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
         onProgress({ message: `Aviso: Error en filtros (${e.message.slice(0, 40)})`, current: 5, total: 100, percentage: 10 });
@@ -296,7 +313,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       // 5. Click Next Page if needed
       if (p < totalPages) {
-        const nextSelector = 'li.next a, a:has-text("Sig"), a[id*="NEXT"]';
+        const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
         const nextButton = dataFrame.locator(nextSelector).first();
         
         if (await nextButton.isVisible()) {
