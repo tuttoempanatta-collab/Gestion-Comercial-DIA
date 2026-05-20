@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check } from 'lucide-react'
+import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check, Pencil } from 'lucide-react'
 import { generatePosters } from '@/lib/posterGenerator'
 import { Smartphone, CreditCard, Wallet, Info } from 'lucide-react'
 import { API_URL } from '@/lib/api'
@@ -831,24 +831,34 @@ export default function DataPage() {
                             <div className="flex items-center justify-end gap-2">
                               {isEditing ? (
                                 <>
-                                  <button onClick={() => handleUpdateRecord(row.id)} className="p-1.5 bg-emerald-600/20 text-emerald-400 rounded-md hover:bg-emerald-600/40">
-                                    <Check size={14} />
+                                  <button
+                                    onClick={() => handleUpdateRecord(row.id)}
+                                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600/20 text-emerald-400 rounded-md hover:bg-emerald-600/40 text-xs font-bold transition-colors"
+                                    title="Guardar cambios"
+                                  >
+                                    <Check size={13} /> Guardar
                                   </button>
-                                  <button onClick={() => setEditingId(null)} className="p-1.5 bg-slate-800 text-slate-400 rounded-md hover:bg-slate-700">
+                                  <button
+                                    onClick={() => setEditingId(null)}
+                                    className="p-1.5 bg-slate-800 text-slate-400 rounded-md hover:bg-slate-700 transition-colors"
+                                    title="Cancelar"
+                                  >
                                     <X size={14} />
                                   </button>
                                 </>
                               ) : (
                                 <>
-                                  <button 
-                                    onClick={() => handleEditStart(row)} 
-                                    className="p-1.5 bg-blue-600/10 text-blue-400 rounded-md hover:bg-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  <button
+                                    onClick={() => handleEditStart(row)}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600/10 text-blue-400 rounded-md hover:bg-blue-600/25 text-[10px] font-bold transition-colors"
+                                    title="Editar nombre, código, precio y unidades"
                                   >
-                                    <Search size={14} />
+                                    <Pencil size={11} /> Editar
                                   </button>
-                                  <button 
-                                    onClick={() => handleDeleteRecord(row.id)} 
+                                  <button
+                                    onClick={() => handleDeleteRecord(row.id)}
                                     className="p-1.5 bg-red-600/10 text-red-400 rounded-md hover:bg-red-600/20 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    title="Eliminar"
                                   >
                                     <Trash2 size={14} />
                                   </button>
