@@ -57,139 +57,107 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     // 0. Disable images to save RAM
     await context.route('**/*.{png,jpg,jpeg,gif,svg}', route => route.abort());
 
-    // 2. Find the Data Frame (Robust search)
+    // 2. Esperar que la página de filtros cargue completamente
+    // Diagnóstico confirmó: no hay iframes, todo está en el frame principal
+    // Selectores exactos: #vDESDE, #vHASTA, #BTNBUSCAR
     onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
     let dataFrame = page;
-    
-    // Give it more time to load frames on slow connections
-    await page.waitForTimeout(8000);
-    
-    const frames = page.frames();
-    console.log(`[DEBUG] Total frames found: ${frames.length}`);
-    
-    for (const frame of frames) {
-      try {
-        const hasInputs = await frame.locator('input[id*="DESDE"], #vDESDE').count() > 0;
-        const hasTable = await frame.locator('#GridContainerTbl, .Grid_WorkWith').count() > 0;
-        if (hasInputs || hasTable) {
-          dataFrame = frame;
-          console.log('[DEBUG] Real data frame identified!');
-          break;
-        }
-      } catch (e) {}
+
+    // Esperar que el campo DESDE aparezca en la página (indica que el panel de filtros cargó)
+    try {
+      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 40000 });
+      console.log('[DEBUG] Panel de filtros detectado (#vDESDE visible)');
+    } catch (e) {
+      console.log('[DEBUG] Timeout esperando #vDESDE, continuando...', e.message);
     }
 
-    // 1. Wait for grid table to load
-    try {
-      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 30000 }).catch(() => {});
-    } catch (e) {}
-
-    // 3. Apply Date Filters
+    // 3. Aplicar Filtros de Fecha
+    // Selectores exactos confirmados por diagnóstico del portal:
+    //   Desde: #vDESDE | Hasta: #vHASTA | Buscar: #BTNBUSCAR
     if (startDate || endDate) {
       onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 10 });
-      
+
       const startFormatted = formatDateForPortal(startDate);
       const endFormatted = formatDateForPortal(endDate);
-      
+
       console.log(`[Ext-${extractionId}] Aplicando filtros: Desde=${startFormatted || 'Inicio'}, Hasta=${endFormatted || 'Hoy'}`);
 
       try {
-        let filterFrame = dataFrame;
-
-        // Wait up to 30s for the date input to load in the identified dataFrame
-        try {
-          await dataFrame.waitForSelector('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]', { state: 'visible', timeout: 30000 });
-        } catch (e) {
-          console.log('[DEBUG] Timeout waiting for date inputs, proceeding to find in frames...');
-        }
-        
-        // Helper to find and fill in any frame
-        const fillInAnyFrame = async (selector, value) => {
-          for (const f of page.frames()) {
-            try {
-              const el = f.locator(selector).first();
-              await el.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-              if (await el.count() > 0) {
-                await el.fill(value);
-                await el.dispatchEvent('change');
-                await el.press('Tab'); // Force blur/update
-                return f;
-              }
-            } catch (e) {}
-          }
-          return null;
-        };
-
+        // --- Llenar campo DESDE (#vDESDE) ---
         if (startFormatted) {
-          const f = await fillInAnyFrame('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]', startFormatted);
-          if (f) {
-            filterFrame = f;
-          } else {
+          try {
+            const desdeEl = page.locator('#vDESDE').first();
+            await desdeEl.waitFor({ state: 'visible', timeout: 15000 });
+            await desdeEl.click({ clickCount: 3 }); // seleccionar todo el texto
+            await desdeEl.fill(startFormatted);
+            await desdeEl.dispatchEvent('change');
+            await desdeEl.press('Tab');
+            console.log(`[Ext-${extractionId}] Desde llenado: ${startFormatted}`);
+          } catch (e) {
+            console.log('[DEBUG] Error llenando #vDESDE:', e.message);
             onProgress({ message: 'Aviso: No se encontró campo "Desde"', current: 5, total: 100, percentage: 10 });
           }
         }
-        
+
+        // --- Llenar campo HASTA (#vHASTA) ---
         if (endFormatted) {
-          const f = await fillInAnyFrame('input[id*="HASTA"], input[name*="vHASTA"], input[id*="FECHAHASTA"]', endFormatted);
-          if (f) {
-            filterFrame = f;
-          } else {
+          try {
+            const hastaEl = page.locator('#vHASTA').first();
+            await hastaEl.waitFor({ state: 'visible', timeout: 15000 });
+            await hastaEl.click();
+            await hastaEl.fill(endFormatted);
+            await hastaEl.dispatchEvent('change');
+            await hastaEl.press('Tab');
+            console.log(`[Ext-${extractionId}] Hasta llenado: ${endFormatted}`);
+          } catch (e) {
+            console.log('[DEBUG] Error llenando #vHASTA:', e.message);
             onProgress({ message: 'Aviso: No se encontró campo "Hasta"', current: 5, total: 100, percentage: 10 });
           }
         }
 
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(1500);
 
-        // Trigger search using robust multi-selector
-        const searchSelector = 'input[value="Buscar"], #BTNBUSCAR, .Button_Standard, button:has-text("Buscar"), input[id*="BUSCAR"]';
-        let searchBtn = filterFrame.locator(searchSelector).first();
-        
-        if (await searchBtn.count() === 0) {
-          // Try finding it in ANY frame if not in filterFrame
-          for (const f of page.frames()) {
-            const btn = f.locator(searchSelector).first();
-            if (await btn.count() > 0) {
-              searchBtn = btn;
-              filterFrame = f;
-              break;
-            }
+        // --- Clickear botón BUSCAR (#BTNBUSCAR) ---
+        try {
+          const buscarEl = page.locator('#BTNBUSCAR').first();
+          await buscarEl.waitFor({ state: 'visible', timeout: 10000 });
+          console.log(`[Ext-${extractionId}] Clickeando botón #BTNBUSCAR...`);
+          await buscarEl.click();
+        } catch (e) {
+          console.log('[DEBUG] #BTNBUSCAR no encontrado, intentando alternativas...', e.message);
+          // Fallback: intentar otros selectores
+          const fallbackBtn = page.locator('input[value="Buscar"], button:has-text("Buscar")').first();
+          if (await fallbackBtn.count() > 0) {
+            await fallbackBtn.click();
+          } else {
+            await page.keyboard.press('Enter');
           }
         }
 
-        if (await searchBtn.count() > 0 && await searchBtn.isVisible()) {
-          console.log(`[Ext-${extractionId}] Clickeando botón buscar...`);
-          await searchBtn.click();
-        } else {
-          console.log(`[Ext-${extractionId}] Botón buscar no visible, enviando Enter...`);
-          await filterFrame.keyboard.press('Enter');
-        }
-        
-        // Wait longer for the grid to refresh (GeneXus can be slow)
-        console.log(`[Ext-${extractionId}] Esperando actualización de la tabla (25s)...`);
-        await page.waitForTimeout(25000);
-        
-        // Wait for any loading mask to disappear if it exists
-        try {
-          await page.waitForSelector('.gx-mask, .Loading, #Loading, #gx_ajax_notification', { state: 'hidden', timeout: 10000 }).catch(() => {});
-        } catch (e) {}
+        // Esperar que la grilla se actualice con los resultados
+        console.log(`[Ext-${extractionId}] Esperando actualización de la tabla...`);
+        await page.waitForTimeout(20000);
 
-        // Set page size after results are loaded
+        // Esperar que desaparezca cualquier máscara de carga
+        await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 15000 }).catch(() => {});
+
+        // Configurar tamaño de página (50 filas) DESPUÉS de que carguen los resultados
         try {
           onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
-          const target = dataFrame;
-          const dropdownToggle = target.locator('button.btn.btn-primary.dropdown-toggle, .GridWithPaginationBar button.dropdown-toggle').first();
-          await dropdownToggle.waitFor({ state: 'visible', timeout: 5000 });
-          await dropdownToggle.click({ timeout: 4000 });
-          
-          const option = target.locator(`a:has-text("${pageSize} rows"), a:has-text("${pageSize} filas")`).first();
+          const dropdownToggle = page.locator('button.btn.btn-primary.dropdown-toggle, .GridWithPaginationBar button.dropdown-toggle').first();
+          await dropdownToggle.waitFor({ state: 'visible', timeout: 8000 });
+          await dropdownToggle.click();
+
+          const option = page.locator(`a:has-text("${pageSize} rows"), a:has-text("${pageSize} filas")`).first();
           await option.waitFor({ state: 'visible', timeout: 5000 });
-          await option.click({ timeout: 4000 });
-          
+          await option.click();
+
           console.log(`[DEBUG] Page size set to ${pageSize}`);
-          await target.waitForTimeout(5000); // wait for pagination update
+          await page.waitForTimeout(8000); // esperar que recargue la grilla con 50 filas
         } catch (e) {
-          console.log('[DEBUG] Error al configurar tamaño de página:', e.message);
+          console.log('[DEBUG] Error configurando tamaño de página (puede continuar con valor default):', e.message);
         }
+
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
         onProgress({ message: `Aviso: Error en filtros (${e.message.slice(0, 40)})`, current: 5, total: 100, percentage: 10 });
