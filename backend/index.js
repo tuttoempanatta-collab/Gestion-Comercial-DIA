@@ -245,7 +245,7 @@ app.put('/api/data/:id', async (req, res) => {
     return res.status(400).json({ error: 'Cuerpo de solicitud faltante' });
   }
 
-  const { articulo, codigo, cantidades } = req.body;
+  const { articulo, codigo, cantidades, precio_fidelizado } = req.body;
   console.log(`[Backend] PUT /api/data/${id}`, req.body);
   
   try {
@@ -254,13 +254,30 @@ app.put('/api/data/:id', async (req, res) => {
       return res.status(400).json({ error: 'ID inválido' });
     }
 
-    const query = 'UPDATE commercial_actions SET articulo = $1, codigo = $2, cantidades = $3 WHERE id = $4';
-    const result = await pool.query(query, [
-      articulo || '', 
-      codigo || '', 
-      String(cantidades === undefined || cantidades === null ? '' : cantidades), 
-      targetId
-    ]);
+    // Build update dynamically: always update articulo/codigo/cantidades,
+    // update precio_fidelizado only if provided
+    let query, params;
+    if (precio_fidelizado !== undefined && precio_fidelizado !== null && precio_fidelizado !== '') {
+      const precioNum = parseFloat(String(precio_fidelizado).replace(',', '.'));
+      query = 'UPDATE commercial_actions SET articulo = $1, codigo = $2, cantidades = $3, precio_fidelizado = $4 WHERE id = $5';
+      params = [
+        articulo || '',
+        codigo || '',
+        String(cantidades === undefined || cantidades === null ? '' : cantidades),
+        isNaN(precioNum) ? null : precioNum,
+        targetId
+      ];
+    } else {
+      query = 'UPDATE commercial_actions SET articulo = $1, codigo = $2, cantidades = $3 WHERE id = $4';
+      params = [
+        articulo || '',
+        codigo || '',
+        String(cantidades === undefined || cantidades === null ? '' : cantidades),
+        targetId
+      ];
+    }
+
+    const result = await pool.query(query, params);
     
     if (result.rowCount > 0) {
       res.json({ message: 'Registro actualizado', id: targetId });

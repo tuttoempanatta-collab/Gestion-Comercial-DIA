@@ -37,23 +37,24 @@ export default function DataPage() {
   const [editValue, setEditValue] = useState('')
   const [editCode, setEditCode] = useState('')
   const [editUnits, setEditUnits] = useState('')
+  const [editPrice, setEditPrice] = useState('')
   const [selectedCombo, setSelectedCombo] = useState('')
   const [dateFilterStart, setDateFilterStart] = useState('')
   const [dateFilterEnd, setDateFilterEnd] = useState('')
 
   const handleUpdateRecord = (id: number) => {
-    // Optimistic update
+    // Optimistic update — also update precio_fidelizado so calculateFinalPrice recalculates
     const oldData = [...data];
     setData(prev => prev.map(item => 
       item.id === id 
-        ? { ...item, articulo: editValue, codigo: editCode, cantidades: editUnits } 
+        ? { ...item, articulo: editValue, codigo: editCode, cantidades: editUnits, precio_fidelizado: editPrice } 
         : item
     ));
 
     fetch(API_URL(`/api/data/${id}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ articulo: editValue, codigo: editCode, cantidades: editUnits })
+      body: JSON.stringify({ articulo: editValue, codigo: editCode, cantidades: editUnits, precio_fidelizado: editPrice })
     })
     .then(async res => {
       const text = await res.text();
@@ -85,6 +86,9 @@ export default function DataPage() {
     setEditValue(item.articulo)
     setEditCode(item.codigo)
     setEditUnits(item.cantidades || '')
+    // Normalize price: store as plain number string for editing
+    const raw = String(item.precio_fidelizado || '0').replace(',', '.')
+    setEditPrice(isNaN(parseFloat(raw)) ? '0' : String(parseFloat(raw)))
   }
 
   const handleDeleteRecord = (id: number) => {
@@ -256,7 +260,7 @@ export default function DataPage() {
         cashbackCondition: selectedPromo?.condition,
         cashbackPercentage: selectedPromo ? `${selectedPromo.discount * 100}%` : undefined,
         cashbackDay: selectedPromo?.day,
-
+        requiredUnits: item.cantidades ? parseInt(item.cantidades) : undefined,
       };
     });
     const url = generatePosters(selectedItems, true) as string
@@ -281,7 +285,7 @@ export default function DataPage() {
         cashbackCondition: selectedPromo?.condition,
         cashbackPercentage: selectedPromo ? `${selectedPromo.discount * 100}%` : undefined,
         cashbackDay: selectedPromo?.day,
-
+        requiredUnits: item.cantidades ? parseInt(item.cantidades) : undefined,
       };
     });
     generatePosters(selectedItems, false)
@@ -758,11 +762,13 @@ export default function DataPage() {
                                   />
                                   {(row.combo || '').toLowerCase().includes('llevando') && (
                                     <input 
-                                      className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-[10px] w-24"
+                                      className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-[10px] w-20"
                                       value={editUnits}
                                       onChange={(e) => setEditUnits(e.target.value)}
-                                      placeholder="Unidades"
+                                      placeholder="Unid."
                                       type="number"
+                                      min="1"
+                                      title="Cantidad de unidades que debe llevar el cliente"
                                     />
                                   )}
                                 </div>
@@ -795,12 +801,30 @@ export default function DataPage() {
                               {row.combo || 'N/A'}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-slate-500 line-through decoration-red-500/30">
-                            {formatCurrency(row.precio_fidelizado)}
+                          <td className="px-6 py-4 text-slate-500" onClick={(e) => e.stopPropagation()}>
+                            {isEditing ? (
+                              <input
+                                className="bg-slate-800 border border-amber-500/60 rounded px-2 py-1 text-amber-300 font-mono w-28 text-xs focus:outline-none focus:border-amber-400"
+                                value={editPrice}
+                                onChange={(e) => setEditPrice(e.target.value)}
+                                placeholder="Precio"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                title="Precio fidelizado (antes del descuento)"
+                              />
+                            ) : (
+                              <span className="line-through decoration-red-500/30">{formatCurrency(row.precio_fidelizado)}</span>
+                            )}
                           </td>
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-2">
-                              <span className="text-emerald-400 font-bold text-sm">{formatCurrency(finalPrice)}</span>
+                              <span className="text-emerald-400 font-bold text-sm">
+                                {formatCurrency(isEditing ? calculateFinalPrice(editPrice, row.combo) : finalPrice)}
+                              </span>
+                              {isEditing && (
+                                <span className="text-[9px] text-amber-400/70 italic">live</span>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
