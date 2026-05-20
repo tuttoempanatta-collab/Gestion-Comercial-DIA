@@ -61,8 +61,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
     let dataFrame = page;
     
-    // Give it a moment to load frames
-    await page.waitForTimeout(3000);
+    // Give it more time to load frames on slow connections
+    await page.waitForTimeout(8000);
     
     const frames = page.frames();
     console.log(`[DEBUG] Total frames found: ${frames.length}`);
@@ -81,7 +81,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     // 1. Wait for grid table to load
     try {
-      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 15000 }).catch(() => {});
+      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 30000 }).catch(() => {});
     } catch (e) {}
 
     // 3. Apply Date Filters
@@ -95,12 +95,20 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       try {
         let filterFrame = dataFrame;
+
+        // Wait up to 30s for the date input to load in the identified dataFrame
+        try {
+          await dataFrame.waitForSelector('input[id*="DESDE"], input[name*="vDESDE"], input[id*="FECHADESDE"]', { state: 'visible', timeout: 30000 });
+        } catch (e) {
+          console.log('[DEBUG] Timeout waiting for date inputs, proceeding to find in frames...');
+        }
         
         // Helper to find and fill in any frame
         const fillInAnyFrame = async (selector, value) => {
           for (const f of page.frames()) {
             try {
               const el = f.locator(selector).first();
+              await el.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
               if (await el.count() > 0) {
                 await el.fill(value);
                 await el.dispatchEvent('change');
@@ -130,7 +138,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           }
         }
 
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(2000);
 
         // Trigger search using robust multi-selector
         const searchSelector = 'input[value="Buscar"], #BTNBUSCAR, .Button_Standard, button:has-text("Buscar"), input[id*="BUSCAR"]';
@@ -157,12 +165,12 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         }
         
         // Wait longer for the grid to refresh (GeneXus can be slow)
-        console.log(`[Ext-${extractionId}] Esperando actualización de la tabla (15s)...`);
-        await page.waitForTimeout(15000);
+        console.log(`[Ext-${extractionId}] Esperando actualización de la tabla (25s)...`);
+        await page.waitForTimeout(25000);
         
         // Wait for any loading mask to disappear if it exists
         try {
-          await page.waitForSelector('.gx-mask, .Loading, #Loading, #gx_ajax_notification', { state: 'hidden', timeout: 5000 }).catch(() => {});
+          await page.waitForSelector('.gx-mask, .Loading, #Loading, #gx_ajax_notification', { state: 'hidden', timeout: 10000 }).catch(() => {});
         } catch (e) {}
 
         // Set page size after results are loaded
