@@ -7,7 +7,7 @@ module.exports = {
   },
 
   saveDescription: async (codigo, description) => {
-    const query = 'INSERT INTO product_descriptions (codigo, description, last_updated) VALUES ($1, $2, CURRENT_TIMESTAMP) ON CONFLICT (codigo) DO UPDATE SET description = $2, last_updated = CURRENT_TIMESTAMP';
+    const query = 'INSERT INTO product_descriptions (codigo, description, last_updated) VALUES ($1, $2, CURRENT_TIMESTAMP) ON CONFLICT (codigo) DO UPDATE SET description = EXCLUDED.description, last_updated = CURRENT_TIMESTAMP';
     await pool.query(query, [codigo, description]);
   },
 

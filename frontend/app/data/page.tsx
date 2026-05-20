@@ -38,23 +38,29 @@ export default function DataPage() {
   const [editCode, setEditCode] = useState('')
   const [editUnits, setEditUnits] = useState('')
   const [editPrice, setEditPrice] = useState('')
+  const [editFinalPrice, setEditFinalPrice] = useState('')
   const [selectedCombo, setSelectedCombo] = useState('')
   const [dateFilterStart, setDateFilterStart] = useState('')
   const [dateFilterEnd, setDateFilterEnd] = useState('')
 
   const handleUpdateRecord = (id: number) => {
-    // Optimistic update — also update precio_fidelizado so calculateFinalPrice recalculates
     const oldData = [...data];
     setData(prev => prev.map(item => 
       item.id === id 
-        ? { ...item, articulo: editValue, codigo: editCode, cantidades: editUnits, precio_fidelizado: editPrice } 
+        ? { ...item, articulo: editValue, codigo: editCode, cantidades: editUnits, precio_fidelizado: editPrice, precio_final: editFinalPrice } 
         : item
     ));
 
     fetch(API_URL(`/api/data/${id}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ articulo: editValue, codigo: editCode, cantidades: editUnits, precio_fidelizado: editPrice })
+      body: JSON.stringify({ 
+        articulo: editValue, 
+        codigo: editCode, 
+        cantidades: editUnits, 
+        precio_fidelizado: editPrice,
+        precio_final: editFinalPrice 
+      })
     })
     .then(async res => {
       const text = await res.text();
@@ -76,7 +82,6 @@ export default function DataPage() {
     .catch(err => {
       console.error('[Update Error Details]:', err);
       setData(oldData); // Rollback
-      // Try to alert again but with more info
       alert(`No se pudo guardar. Detalle: ${err.message}`);
     });
   }
@@ -86,9 +91,13 @@ export default function DataPage() {
     setEditValue(item.articulo)
     setEditCode(item.codigo)
     setEditUnits(item.cantidades || '')
-    // Normalize price: store as plain number string for editing
     const raw = String(item.precio_fidelizado || '0').replace(',', '.')
     setEditPrice(isNaN(parseFloat(raw)) ? '0' : String(parseFloat(raw)))
+    const finalPriceVal = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
+      ? item.precio_final
+      : calculateFinalPrice(item.precio_fidelizado || '0', item.combo || '');
+    const rawFinal = String(finalPriceVal).replace(',', '.')
+    setEditFinalPrice(isNaN(parseFloat(rawFinal)) ? '0' : String(parseFloat(rawFinal)))
   }
 
   const handleDeleteRecord = (id: number) => {
@@ -246,7 +255,9 @@ export default function DataPage() {
     const selectedPromo = PROMOS.find(p => p.id === selectedPromoId);
     
     const selectedItems = data.filter(item => selectedIds.has(item.id)).map(item => {
-      const finalPrice = calculateFinalPrice(item.precio_fidelizado, item.combo);
+      const finalPrice = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
+        ? parseFloat(String(item.precio_final).replace(',', '.'))
+        : calculateFinalPrice(item.precio_fidelizado, item.combo);
       return {
         codigo: item.codigo,
         articulo: item.articulo,
@@ -271,7 +282,9 @@ export default function DataPage() {
     const selectedPromo = PROMOS.find(p => p.id === selectedPromoId);
     
     const selectedItems = data.filter(item => selectedIds.has(item.id)).map(item => {
-      const finalPrice = calculateFinalPrice(item.precio_fidelizado, item.combo);
+      const finalPrice = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
+        ? parseFloat(String(item.precio_final).replace(',', '.'))
+        : calculateFinalPrice(item.precio_fidelizado, item.combo);
       return {
         codigo: item.codigo,
         articulo: item.articulo,
@@ -725,7 +738,9 @@ export default function DataPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-800/50 text-xs">
                     {filteredData.length > 0 ? filteredData.map((row) => {
-                      const finalPrice = calculateFinalPrice(row.precio_fidelizado, row.combo);
+                      const finalPrice = row.precio_final !== null && row.precio_final !== undefined && row.precio_final !== ''
+                        ? parseFloat(String(row.precio_final).replace(',', '.'))
+                        : calculateFinalPrice(row.precio_fidelizado, row.combo);
                       const isSelected = selectedIds.has(row.id);
                       const outOfStock = row.stock <= 0;
                       const isEditing = editingId === row.id;
@@ -817,13 +832,38 @@ export default function DataPage() {
                               <span className="line-through decoration-red-500/30">{formatCurrency(row.precio_fidelizado)}</span>
                             )}
                           </td>
-                          <td className="px-6 py-4">
+                          <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center gap-2">
-                              <span className="text-emerald-400 font-bold text-sm">
-                                {formatCurrency(isEditing ? calculateFinalPrice(editPrice, row.combo) : finalPrice)}
-                              </span>
-                              {isEditing && (
-                                <span className="text-[9px] text-amber-400/70 italic">live</span>
+                              {isEditing ? (
+                                <div className="flex flex-col gap-1">
+                                  <input
+                                    className="bg-slate-800 border border-emerald-500/60 rounded px-2 py-1 text-emerald-400 font-bold w-24 text-xs focus:outline-none focus:border-emerald-400"
+                                    value={editFinalPrice}
+                                    onChange={(e) => setEditFinalPrice(e.target.value)}
+                                    placeholder="Precio Final"
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    title="Precio final (después del descuento/promo)"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const calc = calculateFinalPrice(editPrice, row.combo);
+                                      setEditFinalPrice(String(calc));
+                                    }}
+                                    className="text-[9px] text-slate-500 hover:text-slate-300 text-left underline"
+                                  >
+                                    Auto-calcular
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-emerald-400 font-bold text-sm">
+                                  {formatCurrency(finalPrice)}
+                                </span>
+                              )}
+                              {!isEditing && row.precio_final !== null && row.precio_final !== undefined && row.precio_final !== '' && (
+                                <span className="text-[8px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded font-mono font-bold" title="Modificado manualmente">Manual</span>
                               )}
                             </div>
                           </td>

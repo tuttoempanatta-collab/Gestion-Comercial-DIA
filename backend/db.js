@@ -66,7 +66,7 @@ module.exports = {
 
   updateSettings: async (settings) => {
     for (const [key, value] of Object.entries(settings)) {
-      const query = 'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2';
+      const query = 'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value';
       await pool.query(query, [key, value]);
     }
   },
