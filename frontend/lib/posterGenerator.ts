@@ -44,6 +44,15 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     const nxmMatch = text.match(/(\d+)\s*x\s*(\d+)/i);
     const llevandoMatch = text.match(/llevando\s*(\d+)/i);
     
+    // Simple percent discount is individual (e.g. "25%") and doesn't require multiple units.
+    const isSimplePercent = text.includes('%') && 
+                            !text.includes('2d') && 
+                            !text.includes('3r') && 
+                            !text.includes('segund') && 
+                            !text.includes('tercer') && 
+                            !text.includes('llevando') && 
+                            !text.includes('x');
+    
     // NxM combos (e.g. 3X2) ALWAYS take numbers from the combo text, never from manualUnits
     // manualUnits override only applies to LLEVANDO-type combos (no NxM pattern)
     const manualUnits = typeof item.requiredUnits === 'string' ? parseInt(item.requiredUnits as string) : item.requiredUnits;
@@ -53,8 +62,8 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       requiredUnits = parseInt(nxmMatch[1]);
       comboNumber = `${nxmMatch[1]}X${nxmMatch[2]}`;
       subCombo = `LLEVANDO ${nxmMatch[1]}`;
-    } else if (manualUnits && manualUnits > 0) {
-      // Manual override only for LLEVANDO-type combos
+    } else if (manualUnits && manualUnits > 0 && !isSimplePercent) {
+      // Manual override only for LLEVANDO-type combos and not simple percent discounts
       requiredUnits = manualUnits;
       comboNumber = 'LLEVANDO';
       subCombo = `${requiredUnits} UNIDADES`;
@@ -62,7 +71,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       requiredUnits = parseInt(llevandoMatch[1]);
       comboNumber = 'LLEVANDO';
       subCombo = `${llevandoMatch[1]} UNIDADES`;
-    } else if (text.includes('2d') || text.includes('segunda')) {
+    } else if (text.includes('2d') || text.includes('segunda') || text.includes('segundo')) {
       requiredUnits = 2;
     }
 
