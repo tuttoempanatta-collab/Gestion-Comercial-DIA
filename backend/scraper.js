@@ -1,5 +1,6 @@
 const { chromium } = require('playwright');
 const path = require('path');
+const fs = require('fs');
 const { db, saveCommercialAction } = require('./db');
 
 async function runScraper(extractionId, startDate, endDate, settings, pageSize = 50, onProgress) {
@@ -136,24 +137,24 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
         // Esperar que la grilla se actualice con los resultados
         console.log(`[Ext-${extractionId}] Esperando actualización de la tabla...`);
-        await page.waitForTimeout(20000);
+        await page.waitForTimeout(25000);
 
         // Esperar que desaparezca cualquier máscara de carga
-        await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 15000 }).catch(() => {});
+        await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
 
         // Configurar tamaño de página (50 filas) DESPUÉS de que carguen los resultados
         try {
           onProgress({ message: `Configurando vista (${pageSize} items/página)...`, current: 10, total: 100, percentage: 12 });
           const dropdownToggle = page.locator('button.btn.btn-primary.dropdown-toggle, .GridWithPaginationBar button.dropdown-toggle').first();
-          await dropdownToggle.waitFor({ state: 'visible', timeout: 8000 });
+          await dropdownToggle.waitFor({ state: 'visible', timeout: 15000 });
           await dropdownToggle.click();
 
           const option = page.locator(`a:has-text("${pageSize} rows"), a:has-text("${pageSize} filas")`).first();
-          await option.waitFor({ state: 'visible', timeout: 5000 });
+          await option.waitFor({ state: 'visible', timeout: 10000 });
           await option.click();
 
           console.log(`[DEBUG] Page size set to ${pageSize}`);
-          await page.waitForTimeout(8000); // esperar que recargue la grilla con 50 filas
+          await page.waitForTimeout(12000); // esperar que recargue la grilla con 50 filas
         } catch (e) {
           console.log('[DEBUG] Error configurando tamaño de página (puede continuar con valor default):', e.message);
         }
@@ -184,17 +185,41 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         // Search for pagination in all frames
         let foundPagination = false;
         for (const f of page.frames()) {
-          const paginationElements = await f.locator('button.btn.btn-primary.dropdown-toggle, .PagingButtons, .gx-pagination, span:has-text("de"), span:has-text("of")').all();
-          
-          for (const el of paginationElements) {
-            const text = await el.innerText();
-            const match = text.match(/(?:de|of)\s+(\d+)/i);
-            if (match) {
-              totalPages = parseInt(match[1]);
-              dataFrame = f; // Update dataFrame to the one that has pagination/table
-              foundPagination = true;
-              break;
+          // 1. Try to find specific pagination text (e.g. "Página 1 de 24")
+          try {
+            const pageElements = await f.locator('span, td, div, p').all();
+            for (const el of pageElements) {
+              const text = await el.innerText();
+              const match = text.match(/(?:pagina|p\u00e1gina|page)\s+\d+\s+(?:de|of)\s+(\d+)/i);
+              if (match) {
+                totalPages = parseInt(match[1]);
+                dataFrame = f;
+                foundPagination = true;
+                console.log(`[DEBUG] pagination text match: "${text}" -> totalPages = ${totalPages}`);
+                break;
+              }
             }
+          } catch (e) {
+            console.log('[DEBUG] Error checking specific page text:', e.message);
+          }
+          if (foundPagination) break;
+
+          // 2. Fallback to generic "de X" inside pagination classes only
+          try {
+            const paginationElements = await f.locator('.gx-pagination span, .PagingButtons span, .GridWithPaginationBar span, .gx-pagination-bar span').all();
+            for (const el of paginationElements) {
+              const text = await el.innerText();
+              const match = text.match(/(?:de|of)\s+(\d+)/i);
+              if (match) {
+                totalPages = parseInt(match[1]);
+                dataFrame = f;
+                foundPagination = true;
+                console.log(`[DEBUG] pagination fallback match: "${text}" -> totalPages = ${totalPages}`);
+                break;
+              }
+            }
+          } catch (e) {
+            console.log('[DEBUG] Error checking fallback pagination classes:', e.message);
           }
           if (foundPagination) break;
         }
@@ -295,11 +320,11 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         if (await nextButton.isVisible()) {
           await nextButton.click();
           // Wait for the table to change/reload
-          await dataFrame.waitForTimeout(4000);
+          await dataFrame.waitForTimeout(6000);
         } else {
           console.log('[DEBUG] Next button not visible, but totalPages > current page. Attempting click by ID...');
           await dataFrame.click('a[id*="NEXT"]').catch(() => {});
-          await dataFrame.waitForTimeout(4000);
+          await dataFrame.waitForTimeout(6000);
         }
       }
     }
