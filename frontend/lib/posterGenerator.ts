@@ -43,70 +43,51 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     
     const nxmMatch = text.match(/(\d+)\s*x\s*(\d+)/i);
     const llevandoMatch = text.match(/llevando\s*(\d+)/i);
-    
-    // Simple percent discount is individual (e.g. "25%") and doesn't require multiple units.
-    const isSimplePercent = text.includes('%') && 
-                            !text.includes('2d') && 
-                            !text.includes('3r') && 
-                            !text.includes('segund') && 
-                            !text.includes('tercer') && 
-                            !text.includes('llevando') && 
-                            !text.includes('x');
-    
-    // NxM combos (e.g. 3X2) ALWAYS take numbers from the combo text, never from manualUnits
-    // manualUnits override only applies to LLEVANDO-type combos (no NxM pattern)
+    const is2do = text.includes('2d') || text.includes('segunda') || text.includes('segundo');
+    const isLlevandoCombo = text.includes('llevando') || mainCombo.toUpperCase() === 'LLEVANDO';
     const manualUnits = typeof item.requiredUnits === 'string' ? parseInt(item.requiredUnits as string) : item.requiredUnits;
     
     if (nxmMatch) {
-      // 3X2, 2X1, etc: read directly from the combo text
+      // 1. NxM Combos (e.g. 3X2, 2X1, 4X3): requiredUnits = N (first digit)
       requiredUnits = parseInt(nxmMatch[1]);
       comboNumber = `${nxmMatch[1]}X${nxmMatch[2]}`;
       subCombo = `LLEVANDO ${nxmMatch[1]}`;
-    } else if (manualUnits && manualUnits > 0 && !isSimplePercent) {
-      // Manual override only for LLEVANDO-type combos and not simple percent discounts
-      requiredUnits = manualUnits;
-      comboNumber = 'LLEVANDO';
-      subCombo = `${requiredUnits} UNIDADES`;
-    } else if (llevandoMatch) {
-      requiredUnits = parseInt(llevandoMatch[1]);
-      comboNumber = 'LLEVANDO';
-      subCombo = `${llevandoMatch[1]} UNIDADES`;
-    } else if (text.includes('2d') || text.includes('segunda') || text.includes('segundo')) {
+    } else if (is2do) {
+      // 2. 2da / 2do Combos (e.g. 2DO AL 50%, 2DO AL 70%, 2DA UNIDAD): ALWAYS requiredUnits = 2
       requiredUnits = 2;
-    }
-
-    // Default to 1 if it's a "llevando" style but no units were found
-    if (requiredUnits === 0 && (text.includes('llevando') || comboNumber === 'LLEVANDO')) {
-      requiredUnits = 1;
-      if (comboNumber === 'LLEVANDO') subCombo = '1 UNIDAD';
-    }
-
-    if (!nxmMatch && !llevandoMatch) {
-      if (text.includes('2d') && text.includes('%')) {
-        const match = text.match(/(\d+)\s*(%)/);
-        if (match) {
-          comboNumber = match[1];
-          comboSymbol = match[2];
-          subCombo = '2da UNIDAD';
-        }
-      } else if (text.includes('%')) {
-        const match = text.match(/(\d+)\s*(%)/);
-        if (match) {
-          comboNumber = match[1];
-          comboSymbol = match[2];
-          subCombo = 'DESCUENTO';
-        }
-      } else if (text.includes('x')) {
-        const match = text.match(/(\d+x\d+)/);
-        if (match) {
-          comboNumber = match[1].toUpperCase();
-          const n = match[1].split('x')[0];
-          requiredUnits = parseInt(n);
-          subCombo = `LLEVANDO ${n}`;
-        }
+      const pctMatch = text.match(/(\d+)\s*(%)/);
+      if (pctMatch) {
+        comboNumber = pctMatch[1];
+        comboSymbol = pctMatch[2];
+        subCombo = '2da UNIDAD';
       } else {
-        comboNumber = mainCombo.toUpperCase();
+        comboNumber = '2da';
+        subCombo = 'UNIDAD';
       }
+    } else if (isLlevandoCombo) {
+      // 3. LLEVANDO Combos: ONLY category where manualUnits / user override is allowed
+      comboNumber = 'LLEVANDO';
+      if (manualUnits && manualUnits > 0) {
+        requiredUnits = manualUnits;
+      } else if (llevandoMatch) {
+        requiredUnits = parseInt(llevandoMatch[1]);
+      } else {
+        requiredUnits = 1;
+      }
+      subCombo = `${requiredUnits} UNIDAD${requiredUnits === 1 ? '' : 'ES'}`;
+    } else if (text.includes('%')) {
+      // 4. Simple Percentage Combos (e.g. 25%, 40%, 15%, 50% without 2do): individual promo, requiredUnits = 0
+      requiredUnits = 0;
+      const pctMatch = text.match(/(\d+)\s*(%)/);
+      if (pctMatch) {
+        comboNumber = pctMatch[1];
+        comboSymbol = pctMatch[2];
+        subCombo = 'DESCUENTO';
+      }
+    } else {
+      // 5. Fallback combo
+      comboNumber = mainCombo.toUpperCase();
+      requiredUnits = 0;
     }
 
     const smallBoxWidth = 50;

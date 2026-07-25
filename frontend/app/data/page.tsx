@@ -258,6 +258,7 @@ export default function DataPage() {
       const finalPrice = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
         ? parseFloat(String(item.precio_final).replace(',', '.'))
         : calculateFinalPrice(item.precio_fidelizado, item.combo);
+      const isLlevandoCombo = (item.combo || '').toLowerCase().includes('llevando');
       return {
         codigo: item.codigo,
         articulo: item.articulo,
@@ -271,7 +272,7 @@ export default function DataPage() {
         cashbackCondition: selectedPromo?.condition,
         cashbackPercentage: selectedPromo ? `${selectedPromo.discount * 100}%` : undefined,
         cashbackDay: selectedPromo?.day,
-        requiredUnits: item.cantidades ? parseInt(item.cantidades) : undefined,
+        requiredUnits: isLlevandoCombo && item.cantidades ? parseInt(item.cantidades) : undefined,
       };
     });
     const url = generatePosters(selectedItems, true) as string
@@ -285,6 +286,7 @@ export default function DataPage() {
       const finalPrice = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
         ? parseFloat(String(item.precio_final).replace(',', '.'))
         : calculateFinalPrice(item.precio_fidelizado, item.combo);
+      const isLlevandoCombo = (item.combo || '').toLowerCase().includes('llevando');
       return {
         codigo: item.codigo,
         articulo: item.articulo,
@@ -298,7 +300,7 @@ export default function DataPage() {
         cashbackCondition: selectedPromo?.condition,
         cashbackPercentage: selectedPromo ? `${selectedPromo.discount * 100}%` : undefined,
         cashbackDay: selectedPromo?.day,
-        requiredUnits: item.cantidades ? parseInt(item.cantidades) : undefined,
+        requiredUnits: isLlevandoCombo && item.cantidades ? parseInt(item.cantidades) : undefined,
       };
     });
     generatePosters(selectedItems, false)
