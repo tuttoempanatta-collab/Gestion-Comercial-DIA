@@ -251,6 +251,16 @@ export default function DataPage() {
     setSelectedIds(new Set([...Array.from(selectedIds), ...itemsWithCombo]))
   }
 
+  const deduplicateByCode = (items: any[]) => {
+    const seen = new Set<string>();
+    return items.filter(item => {
+      if (!item.codigo) return true;
+      if (seen.has(item.codigo)) return false;
+      seen.add(item.codigo);
+      return true;
+    });
+  };
+
   const handlePreviewPosters = () => {
     const selectedPromo = PROMOS.find(p => p.id === selectedPromoId);
     
@@ -275,7 +285,8 @@ export default function DataPage() {
         requiredUnits: isLlevandoCombo && item.cantidades ? parseInt(item.cantidades) : undefined,
       };
     });
-    const url = generatePosters(selectedItems, true) as string
+    const uniqueItems = deduplicateByCode(selectedItems);
+    const url = generatePosters(uniqueItems, true) as string
     setPdfPreviewUrl(url)
   }
 
@@ -303,7 +314,8 @@ export default function DataPage() {
         requiredUnits: isLlevandoCombo && item.cantidades ? parseInt(item.cantidades) : undefined,
       };
     });
-    generatePosters(selectedItems, false)
+    const uniqueItems = deduplicateByCode(selectedItems);
+    generatePosters(uniqueItems, false)
   }
 
   const formatCurrency = (value: string | number) => {

@@ -361,6 +361,14 @@ app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
             item.CurrentQuantityInUnits || 0
           ]
         );
+        const numPrice = parseFloat(item.PriceAmount || 0);
+        const priceFormatted = isNaN(numPrice) ? '0,00' : String(numPrice.toFixed(2)).replace('.', ',');
+        await pool.query(
+          `UPDATE commercial_actions 
+           SET precio_fidelizado = $1, stock = $2 
+           WHERE codigo = $3 AND (precio_final IS NULL OR precio_final = '')`,
+          [priceFormatted, item.CurrentQuantityInUnits || 0, String(item.ItemID)]
+        );
         imported++;
       }
     }

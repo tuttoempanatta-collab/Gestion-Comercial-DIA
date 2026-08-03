@@ -23,6 +23,37 @@ module.exports = {
     const enrichedData = await enrichWithCatalog(data);
 
     try {
+      // Deduplication check: prevent multiple rows for the same product code in the same extraction
+      const existing = await pool.query(
+        'SELECT id, cantidades, precio_fidelizado, stock FROM commercial_actions WHERE extraction_id = $1 AND codigo = $2',
+        [extractionId, String(enrichedData.codigo)]
+      );
+
+      if (existing.rows && existing.rows.length > 0) {
+        const row = existing.rows[0];
+        const currentCantidades = parseInt(row.cantidades || '0');
+        const newCantidades = parseInt(enrichedData.cantidades || '0');
+        
+        // Keep smaller positive cantidades if applicable (e.g. 3 instead of 6000 stock limit)
+        let bestCantidades = row.cantidades;
+        if (newCantidades > 0 && (currentCantidades === 0 || newCantidades < currentCantidades)) {
+          bestCantidades = enrichedData.cantidades;
+        }
+
+        let bestPrice = row.precio_fidelizado;
+        if ((!bestPrice || bestPrice === '0,00' || bestPrice === '0') && enrichedData.precio_fidelizado && enrichedData.precio_fidelizado !== '0,00') {
+          bestPrice = enrichedData.precio_fidelizado;
+        }
+
+        const updateQuery = `
+          UPDATE commercial_actions 
+          SET cantidades = $1, precio_fidelizado = $2, stock = $3
+          WHERE id = $4
+        `;
+        await pool.query(updateQuery, [bestCantidades, bestPrice, Math.max(row.stock || 0, enrichedData.stock || 0), row.id]);
+        return;
+      }
+
       const query = `
         INSERT INTO commercial_actions 
         (extraction_id, codigo, articulo, combo, precio_fidelizado, fecha_desde, fecha_hasta, cantidades, stock) 

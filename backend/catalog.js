@@ -32,7 +32,7 @@ module.exports = {
       item.articulo = enrichedDescription;
     }
 
-    // 2. Try Supabase catalog_items first
+    // 2. Try Supabase/DB catalog_items first
     try {
       const res = await pool.query(
         'SELECT loyalty_description, price_amount, current_quantity FROM catalog_items WHERE item_id = $1',
@@ -40,9 +40,9 @@ module.exports = {
       );
       if (res.rows.length > 0) {
         const row = res.rows[0];
-        const webPrice = parseFloat((item.precio_fidelizado || '0').replace(',', '.'));
-        if (isNaN(webPrice) || webPrice === 0) {
-          item.precio_fidelizado = String(row.price_amount || 0).replace('.', ',');
+        if (row.price_amount !== null && row.price_amount !== undefined) {
+          const numPrice = parseFloat(row.price_amount);
+          item.precio_fidelizado = isNaN(numPrice) ? '0,00' : String(numPrice.toFixed(2)).replace('.', ',');
         }
         item.stock = row.current_quantity || 0;
         return item;
@@ -53,15 +53,18 @@ module.exports = {
 
     // 3. Fallback: local catalog.db
     const db = getLocalCatalogDb();
-    if (!db) return { ...item, stock: 0 };
+    if (!db) {
+      item.stock = 0;
+      return item;
+    }
 
     try {
       const stmt = db.prepare('SELECT LoyaltyDescription, PriceAmount, CurrentQuantityInUnits FROM Item WHERE ItemID = ?');
-      const result = stmt.get(item.codigo);
+      const result = stmt.get(String(item.codigo));
       if (result) {
-        const webPrice = parseFloat((item.precio_fidelizado || '0').replace(',', '.'));
-        if (isNaN(webPrice) || webPrice === 0) {
-          item.precio_fidelizado = String(result.PriceAmount || 0).replace('.', ',');
+        if (result.PriceAmount !== null && result.PriceAmount !== undefined) {
+          const numPrice = parseFloat(result.PriceAmount);
+          item.precio_fidelizado = isNaN(numPrice) ? '0,00' : String(numPrice.toFixed(2)).replace('.', ',');
         }
         item.stock = result.CurrentQuantityInUnits || 0;
       } else {
