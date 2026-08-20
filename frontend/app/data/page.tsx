@@ -39,6 +39,7 @@ export default function DataPage() {
   const [editUnits, setEditUnits] = useState('')
   const [editPrice, setEditPrice] = useState('')
   const [editFinalPrice, setEditFinalPrice] = useState('')
+  const [editCombo, setEditCombo] = useState('')
   const [selectedCombo, setSelectedCombo] = useState('')
   const [dateFilterStart, setDateFilterStart] = useState('')
   const [dateFilterEnd, setDateFilterEnd] = useState('')
@@ -47,7 +48,7 @@ export default function DataPage() {
     const oldData = [...data];
     setData(prev => prev.map(item => 
       item.id === id 
-        ? { ...item, articulo: editValue, codigo: editCode, cantidades: editUnits, precio_fidelizado: editPrice, precio_final: editFinalPrice } 
+        ? { ...item, articulo: editValue, codigo: editCode, cantidades: editUnits, precio_fidelizado: editPrice, precio_final: editFinalPrice, combo: editCombo } 
         : item
     ));
 
@@ -59,7 +60,8 @@ export default function DataPage() {
         codigo: editCode, 
         cantidades: editUnits, 
         precio_fidelizado: editPrice,
-        precio_final: editFinalPrice 
+        precio_final: editFinalPrice,
+        combo: editCombo
       })
     })
     .then(async res => {
@@ -91,6 +93,7 @@ export default function DataPage() {
     setEditValue(item.articulo)
     setEditCode(item.codigo)
     setEditUnits(item.cantidades || '')
+    setEditCombo(item.combo || '')
     const raw = String(item.precio_fidelizado || '0').replace(',', '.')
     setEditPrice(isNaN(parseFloat(raw)) ? '0' : String(parseFloat(raw)))
     const finalPriceVal = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
@@ -363,7 +366,9 @@ export default function DataPage() {
     window.open(API_URL(`/api/export/${type}/${selectedExtraction}`))
   }
 
+  const presetCombos = ['15%', '20%', '25%', '30%', '35%', '40%', '50%', '2DO AL 30%', '2DO AL 40%', '2DO AL 50%', '2DO AL 60%', '2DO AL 70%', '2DO AL 80%', '2X1', '3X2', '4X3', 'LLEVANDO'];
   const uniqueCombos = Array.from(new Set(data.map(item => item.combo))).filter(Boolean)
+  const allComboOptions = Array.from(new Set([...presetCombos, ...uniqueCombos])).filter(Boolean)
 
   return (
     <>
@@ -789,7 +794,7 @@ export default function DataPage() {
                                     onChange={(e) => setEditCode(e.target.value)}
                                     placeholder="Código"
                                   />
-                                  {(row.combo || '').toLowerCase().includes('llevando') && (
+                                  {((isEditing ? editCombo : row.combo) || '').toLowerCase().includes('llevando') && (
                                     <input 
                                       className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-[10px] w-20"
                                       value={editUnits}
@@ -825,10 +830,30 @@ export default function DataPage() {
                               {row.stock} un.
                             </span>
                           </td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-1 rounded text-[10px] font-bold ${row.combo ? 'bg-red-500/10 text-red-400' : 'text-slate-600'}`}>
-                              {row.combo || 'N/A'}
-                            </span>
+                          <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                            {isEditing ? (
+                              <select
+                                className="bg-slate-800 border border-red-500/60 rounded px-2 py-1 text-red-300 font-bold text-xs focus:outline-none focus:border-red-400 cursor-pointer max-w-[130px]"
+                                value={editCombo}
+                                onChange={(e) => {
+                                  const newCombo = e.target.value;
+                                  setEditCombo(newCombo);
+                                  if (editPrice && !isNaN(parseFloat(editPrice))) {
+                                    const calc = calculateFinalPrice(editPrice, newCombo);
+                                    setEditFinalPrice(String(calc));
+                                  }
+                                }}
+                              >
+                                <option value="">(Sin combo / N/A)</option>
+                                {allComboOptions.map((c) => (
+                                  <option key={c} value={c}>{c}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className={`px-2 py-1 rounded text-[10px] font-bold ${row.combo ? 'bg-red-500/10 text-red-400' : 'text-slate-600'}`}>
+                                {row.combo || 'N/A'}
+                              </span>
+                            )}
                           </td>
                           <td className="px-6 py-4 text-slate-500" onClick={(e) => e.stopPropagation()}>
                             {isEditing ? (
@@ -863,7 +888,7 @@ export default function DataPage() {
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      const calc = calculateFinalPrice(editPrice, row.combo);
+                                      const calc = calculateFinalPrice(editPrice, editCombo);
                                       setEditFinalPrice(String(calc));
                                     }}
                                     className="text-[9px] text-slate-500 hover:text-slate-300 text-left underline"

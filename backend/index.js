@@ -246,7 +246,7 @@ app.put('/api/data/:id', async (req, res) => {
     return res.status(400).json({ error: 'Cuerpo de solicitud faltante' });
   }
 
-  const { articulo, codigo, cantidades, precio_fidelizado, precio_final } = req.body;
+  const { articulo, codigo, cantidades, precio_fidelizado, precio_final, combo } = req.body;
   console.log(`[Backend] PUT /api/data/${id}`, req.body);
   
   try {
@@ -263,13 +263,14 @@ app.put('/api/data/:id', async (req, res) => {
       ? parseFloat(String(precio_final).replace(',', '.'))
       : null;
 
-    const query = 'UPDATE commercial_actions SET articulo = $1, codigo = $2, cantidades = $3, precio_fidelizado = $4, precio_final = $5 WHERE id = $6';
+    const query = 'UPDATE commercial_actions SET articulo = $1, codigo = $2, cantidades = $3, precio_fidelizado = $4, precio_final = $5, combo = $6 WHERE id = $7';
     const params = [
       articulo || '',
       codigo || '',
       String(cantidades === undefined || cantidades === null ? '' : cantidades),
       isNaN(precioNum) ? null : precioNum,
       isNaN(precioFinalNum) ? null : precioFinalNum,
+      combo !== undefined && combo !== null ? String(combo) : '',
       targetId
     ];
 
