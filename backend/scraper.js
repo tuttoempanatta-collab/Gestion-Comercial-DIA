@@ -144,12 +144,42 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         const buscarBtn = page.locator('#BTNBUSCAR, input[value="Buscar"], button:has-text("Buscar")').first();
         if (await buscarBtn.isVisible()) {
           await buscarBtn.click();
-          console.log(`[Ext-${extractionId}] Botón Buscar presionado. Esperando actualización de datos...`);
-          await page.waitForTimeout(8000);
+          console.log(`[Ext-${extractionId}] Botón Buscar presionado. Esperando 2 minutos a que el portal DIA aplique los filtros de fecha...`);
+          onProgress({ message: 'Filtros enviados. Esperando respuesta del portal DIA (hasta 2 min)...', current: 7, total: 100, percentage: 11 });
+
+          // Esperar activamente la desaparición de las máscaras GeneXus (.gx-mask, #Loading, etc.)
+          const startTime = Date.now();
+          const maxWaitMs = 120000; // 2 minutos de tiempo de espera extra para la lentitud del portal DIA
+          let loaded = false;
+
+          while (Date.now() - startTime < maxWaitMs) {
+            await page.waitForTimeout(5000);
+            const isMaskVisible = await page.evaluate(() => {
+              const mask = document.querySelector('.gx-mask, .Loading, #Loading, .gx-mask-single');
+              return mask && mask.offsetParent !== null && getComputedStyle(mask).display !== 'none';
+            }).catch(() => false);
+
+            if (!isMaskVisible) {
+              const rowCount = await dataFrame.evaluate(() => {
+                const trs = document.querySelectorAll('#GridContainerTbl tr');
+                return trs ? trs.length : 0;
+              }).catch(() => 0);
+
+              if (rowCount > 1) {
+                console.log(`[Ext-${extractionId}] Grilla GeneXus actualizada tras ${Math.round((Date.now() - startTime)/1000)}s.`);
+                loaded = true;
+                break;
+              }
+            }
+          }
+
+          if (!loaded) {
+            console.log(`[Ext-${extractionId}] Tiempo de espera de 2 minutos alcanzado. Continuando proceso...`);
+          }
         }
 
-        // Aplicar tamaño de página (50 registros por página)
-        await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId);
+        // Aplicar tamaño de página (50 registros por página) y confirmar carga
+        await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId, onProgress);
 
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
@@ -160,9 +190,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     }
 
     let totalPages = 1;
-    onProgress({ message: 'Calculando total de páginas...', current: 12, total: 100, percentage: 14 });
+    onProgress({ message: 'Calculando total de páginas reales (vista de 50 ítems)...', current: 12, total: 100, percentage: 14 });
     
-    for (let attempt = 1; attempt <= 5; attempt++) {
+    for (let attempt = 1; attempt <= 6; attempt++) {
       try {
         const detected = await getExactTotalPages(dataFrame);
         if (detected && detected > 0) {
@@ -174,7 +204,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       } catch (e) {}
     }
 
-    onProgress({ message: `Iniciando extracción de ${totalPages} páginas...`, current: 0, total: totalPages, percentage: 15 });
+    onProgress({ message: `Iniciando extracción a velocidad normal (${totalPages} páginas)...`, current: 0, total: totalPages, percentage: 15 });
 
     const findDataFrameRecursive = async (parent) => {
       const frames = parent.childFrames();
@@ -304,55 +334,81 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
   }
 }
 
-async function applyPageSizeToPortal(page, frame, targetSize, extractionId) {
+async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onProgress) {
   console.log(`[Ext-${extractionId}] Aplicando vista de ${targetSize} registros por página en portal DIA...`);
+  if (onProgress) {
+    onProgress({ message: `Configurando vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
+  }
   const targetStr = String(targetSize);
 
-  try {
-    let applied = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      let applied = false;
 
-    // Método A: Buscar y presionar botón de desplegable de paginación en la grilla GeneXus
-    const dropdownBtns = await frame.locator('button.dropdown-toggle, .GridWithPaginationBar button, .gx-pagination-bar button, button.btn-primary, .dropdown-toggle').all();
-    for (const btn of dropdownBtns) {
-      if (await btn.isVisible()) {
-        console.log(`[Ext-${extractionId}] Clic en botón desplegable de paginación...`);
-        await btn.click({ timeout: 4000 }).catch(() => {});
-        await page.waitForTimeout(1000);
+      // Método A: Buscar y presionar botón de desplegable de paginación en la grilla GeneXus
+      const dropdownBtns = await frame.locator('button.dropdown-toggle, .GridWithPaginationBar button, .gx-pagination-bar button, button.btn-primary, .dropdown-toggle').all();
+      for (const btn of dropdownBtns) {
+        if (await btn.isVisible()) {
+          console.log(`[Ext-${extractionId}] (Intento ${attempt}) Clic en botón desplegable de paginación...`);
+          await btn.click({ timeout: 4000 }).catch(() => {});
+          await page.waitForTimeout(1500);
 
-        const optionEl = frame.locator(`a:has-text("${targetStr}"), span:has-text("${targetStr}"), li:has-text("${targetStr}"), option[value="${targetStr}"]`).first();
-        if (await optionEl.isVisible()) {
-          console.log(`[Ext-${extractionId}] Opción ${targetStr} registros seleccionada.`);
-          await optionEl.click({ timeout: 4000 }).catch(() => {});
-          applied = true;
-          break;
-        }
-      }
-    }
-
-    // Método B: Elemento <select>
-    if (!applied) {
-      const selectElements = await frame.locator('select[name*="GRID"], select[name*="PAGE"], select[id*="GRID"], select[id*="PAGE"], select').all();
-      for (const sel of selectElements) {
-        if (await sel.isVisible()) {
-          const text = await sel.innerText().catch(() => '');
-          if (text.includes(targetStr)) {
-            console.log(`[Ext-${extractionId}] Seleccionando ${targetStr} en elemento <select>...`);
-            await sel.selectOption(targetStr).catch(() => {});
-            await sel.dispatchEvent('change').catch(() => {});
-            await sel.dispatchEvent('blur').catch(() => {});
+          const optionEl = frame.locator(`a:has-text("${targetStr}"), span:has-text("${targetStr}"), li:has-text("${targetStr}"), option[value="${targetStr}"]`).first();
+          if (await optionEl.isVisible()) {
+            console.log(`[Ext-${extractionId}] Opción ${targetStr} registros seleccionada.`);
+            await optionEl.click({ timeout: 4000 }).catch(() => {});
             applied = true;
             break;
           }
         }
       }
+
+      // Método B: Elemento <select>
+      if (!applied) {
+        const selectElements = await frame.locator('select[name*="GRID"], select[name*="PAGE"], select[id*="GRID"], select[id*="PAGE"], select').all();
+        for (const sel of selectElements) {
+          if (await sel.isVisible()) {
+            const text = await sel.innerText().catch(() => '');
+            if (text.includes(targetStr)) {
+              console.log(`[Ext-${extractionId}] (Intento ${attempt}) Seleccionando ${targetStr} en elemento <select>...`);
+              await sel.selectOption(targetStr).catch(() => {});
+              await sel.dispatchEvent('change').catch(() => {});
+              await sel.dispatchEvent('blur').catch(() => {});
+              applied = true;
+              break;
+            }
+          }
+        }
+      }
+
+      console.log(`[Ext-${extractionId}] Esperando actualización AJAX de ${targetStr} filas (hasta 45s)...`);
+      await page.waitForTimeout(8000);
+
+      // Esperar activamente la carga de la grilla de 50 elementos
+      const startTime = Date.now();
+      while (Date.now() - startTime < 35000) {
+        const trCount = await frame.evaluate(() => {
+          const trs = document.querySelectorAll('#GridContainerTbl tr');
+          let validRows = 0;
+          for (const tr of trs) {
+            const tds = tr.querySelectorAll('td');
+            if (tds.length >= 7 && !tr.querySelector('th') && !tr.classList.contains('Grid_WorkWithHeader')) {
+              validRows++;
+            }
+          }
+          return validRows;
+        }).catch(() => 0);
+
+        if (trCount > 15) {
+          console.log(`[Ext-${extractionId}] Confirmado: ${trCount} filas presentes en la tabla (vista de ${targetStr} aplicada exitosamente).`);
+          return;
+        }
+        await page.waitForTimeout(4000);
+      }
+
+    } catch (e) {
+      console.log(`[Ext-${extractionId}] Intento ${attempt} de cambiar tamaño de página tuvo aviso:`, e.message);
     }
-
-    console.log(`[Ext-${extractionId}] Esperando actualización AJAX de la grilla GeneXus...`);
-    await page.waitForTimeout(8000);
-    await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 15000 }).catch(() => {});
-
-  } catch (e) {
-    console.log(`[Ext-${extractionId}] Aviso al ajustar tamaño de página:`, e.message);
   }
 }
 
