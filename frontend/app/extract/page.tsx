@@ -33,10 +33,14 @@ export default function ExtractPage() {
           fetch(API_URL(`/api/logs/${extractionId}`))
             .then(res => res.json())
             .then(data => {
-              setLogs(data.logs)
-              setProgress(data.progress)
+              if (data.logs && data.logs.length > 0) {
+                setLogs(data.logs)
+              }
+              if (data.progress && data.progress.percentage !== undefined) {
+                setProgress(data.progress)
+              }
               
-              const lastLog = data.logs[data.logs.length - 1]
+              const lastLog = data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : null
               if (lastLog?.message?.includes('finalizada') || lastLog?.message?.includes('completada')) {
                 setIsExtracting(false);
                 setStatus('completed');
@@ -48,6 +52,9 @@ export default function ExtractPage() {
                 localStorage.removeItem('activeExtraction')
                 localStorage.removeItem('activeExtractionId')
               }
+            })
+            .catch(err => {
+              console.error('[Polling Logs Error]:', err);
             })
         }
       }, 2000)

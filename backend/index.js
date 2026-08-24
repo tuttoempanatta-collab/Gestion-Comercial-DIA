@@ -183,11 +183,48 @@ app.get('/api/enrich/status', (req, res) => {
   res.json(enrichmentProgress);
 });
 
-app.get('/api/logs/:extractionId', (req, res) => {
+app.get('/api/logs/:extractionId', async (req, res) => {
   const { extractionId } = req.params;
+  const targetId = parseInt(extractionId);
+
+  if (activeLogs[targetId] && activeLogs[targetId].length > 0) {
+    return res.json({
+      logs: activeLogs[targetId],
+      progress: activeProgress[targetId] || { percentage: 0 }
+    });
+  }
+
+  // Fallback to database if RAM logs were wiped due to server restart
+  try {
+    const dbRes = await pool.query('SELECT status, items_count, error_message FROM extractions WHERE id = $1', [targetId]);
+    if (dbRes.rows && dbRes.rows.length > 0) {
+      const ext = dbRes.rows[0];
+      if (ext.status === 'completed') {
+        return res.json({
+          logs: [{ timestamp: new Date().toISOString(), message: `Extracción finalizada con éxito. ${ext.items_count} artículos procesados.` }],
+          progress: { percentage: 100, message: 'Extracción completada' }
+        });
+      } else if (ext.status === 'failed') {
+        return res.json({
+          logs: [{ timestamp: new Date().toISOString(), message: `Error: ${ext.error_message || 'Error durante el proceso'}` }],
+          progress: { percentage: 0, message: `Error: ${ext.error_message || 'Proceso fallido'}` }
+        });
+      } else if (ext.status === 'running') {
+        // Server restarted while extraction was running
+        await updateExtractionStatus(targetId, 'failed', 0, 'El servidor se reinició durante el proceso (límite de memoria o timeout en hosting)');
+        return res.json({
+          logs: [{ timestamp: new Date().toISOString(), message: 'Error: El servidor se reinició durante el proceso (límite de memoria o timeout en hosting).' }],
+          progress: { percentage: 0, message: 'Error: Servidor reiniciado' }
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[Logs DB Fallback Error]:', err.message);
+  }
+
   res.json({
-    logs: activeLogs[extractionId] || [],
-    progress: activeProgress[extractionId] || { percentage: 0 }
+    logs: activeLogs[targetId] || [],
+    progress: activeProgress[targetId] || { percentage: 0 }
   });
 });
 
