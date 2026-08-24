@@ -148,14 +148,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           await page.waitForTimeout(8000);
         }
 
-        try {
-          const selectPageSize = page.locator('select[name*="GRID1PAGE"], select[name*="vPAGE"], select[id*="PAGE"], select[class*="Grid"]').first();
-          if (await selectPageSize.isVisible()) {
-            console.log(`[Ext-${extractionId}] Cambiando tamaño de página en portal a ${pageSize}...`);
-            await selectPageSize.selectOption(String(pageSize));
-            await page.waitForTimeout(8000);
-          }
-        } catch (e) {}
+        // Aplicar tamaño de página (50 registros por página)
+        await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId);
 
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
@@ -170,45 +164,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
-        let foundPagination = false;
-        for (const f of page.frames()) {
-          try {
-            const pageElements = await f.locator('span, td, div, p').all();
-            for (const el of pageElements) {
-              const text = await el.innerText();
-              const match = text.match(/(?:pagina|p\u00e1gina|page)\s+\d+\s+(?:de|of)\s+(\d+)/i);
-              if (match) {
-                totalPages = parseInt(match[1]);
-                dataFrame = f;
-                foundPagination = true;
-                break;
-              }
-            }
-          } catch (e) {}
-          if (foundPagination) break;
-
-          try {
-            const paginationElements = await f.locator('.gx-pagination span, .PagingButtons span, .GridWithPaginationBar span, .gx-pagination-bar span').all();
-            for (const el of paginationElements) {
-              const text = await el.innerText();
-              const match = text.match(/(?:de|of)\s+(\d+)/i);
-              if (match) {
-                totalPages = parseInt(match[1]);
-                dataFrame = f;
-                foundPagination = true;
-                break;
-              }
-            }
-          } catch (e) {}
-          if (foundPagination) break;
-        }
-        
-        if (foundPagination) {
-          console.log(`[Ext-${extractionId}] Total páginas detectadas: ${totalPages}`);
+        const detected = await getExactTotalPages(dataFrame);
+        if (detected && detected > 0) {
+          totalPages = detected;
+          console.log(`[Ext-${extractionId}] Total páginas detectadas exitosamente: ${totalPages} (intento ${attempt})`);
           break;
         }
-        
-        await page.waitForTimeout(4000);
+        await page.waitForTimeout(3000);
       } catch (e) {}
     }
 
@@ -244,6 +206,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       if (global.cancelledExtractions?.has(extractionId)) {
         onProgress({ message: 'Cancelado.', current: p, total: totalPages, percentage: 100 });
         break;
+      }
+
+      // Auto-corregir totalPages si la grilla refrescó tardíamente y reporta un total menor (ej. 66 en lugar de 451)
+      const currentDetected = await getExactTotalPages(dataFrame);
+      if (currentDetected && currentDetected > 0 && currentDetected < totalPages) {
+        console.log(`[Ext-${extractionId}] Total de páginas actualizado en tiempo real: ${totalPages} -> ${currentDetected}`);
+        totalPages = currentDetected;
       }
 
       const statusMsg = filterExactDates && (targetExactStart || targetExactEnd)
@@ -332,6 +301,91 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     throw error;
   } finally {
     await browser.close();
+  }
+}
+
+async function applyPageSizeToPortal(page, frame, targetSize, extractionId) {
+  console.log(`[Ext-${extractionId}] Aplicando vista de ${targetSize} registros por página en portal DIA...`);
+  const targetStr = String(targetSize);
+
+  try {
+    let applied = false;
+
+    // Método A: Buscar y presionar botón de desplegable de paginación en la grilla GeneXus
+    const dropdownBtns = await frame.locator('button.dropdown-toggle, .GridWithPaginationBar button, .gx-pagination-bar button, button.btn-primary, .dropdown-toggle').all();
+    for (const btn of dropdownBtns) {
+      if (await btn.isVisible()) {
+        console.log(`[Ext-${extractionId}] Clic en botón desplegable de paginación...`);
+        await btn.click({ timeout: 4000 }).catch(() => {});
+        await page.waitForTimeout(1000);
+
+        const optionEl = frame.locator(`a:has-text("${targetStr}"), span:has-text("${targetStr}"), li:has-text("${targetStr}"), option[value="${targetStr}"]`).first();
+        if (await optionEl.isVisible()) {
+          console.log(`[Ext-${extractionId}] Opción ${targetStr} registros seleccionada.`);
+          await optionEl.click({ timeout: 4000 }).catch(() => {});
+          applied = true;
+          break;
+        }
+      }
+    }
+
+    // Método B: Elemento <select>
+    if (!applied) {
+      const selectElements = await frame.locator('select[name*="GRID"], select[name*="PAGE"], select[id*="GRID"], select[id*="PAGE"], select').all();
+      for (const sel of selectElements) {
+        if (await sel.isVisible()) {
+          const text = await sel.innerText().catch(() => '');
+          if (text.includes(targetStr)) {
+            console.log(`[Ext-${extractionId}] Seleccionando ${targetStr} en elemento <select>...`);
+            await sel.selectOption(targetStr).catch(() => {});
+            await sel.dispatchEvent('change').catch(() => {});
+            await sel.dispatchEvent('blur').catch(() => {});
+            applied = true;
+            break;
+          }
+        }
+      }
+    }
+
+    console.log(`[Ext-${extractionId}] Esperando actualización AJAX de la grilla GeneXus...`);
+    await page.waitForTimeout(8000);
+    await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 15000 }).catch(() => {});
+
+  } catch (e) {
+    console.log(`[Ext-${extractionId}] Aviso al ajustar tamaño de página:`, e.message);
+  }
+}
+
+async function getExactTotalPages(frame) {
+  try {
+    const total = await frame.evaluate(() => {
+      const bodyText = document.body.innerText || '';
+      // 1. Priorizar concordancia exacta del portal: "Página 1 de 66"
+      const m1 = bodyText.match(/P\u00e1gina\s+\d+\s+de\s+(\d+)/i);
+      if (m1) return parseInt(m1[1]);
+
+      const m2 = bodyText.match(/(?:pagina|page)\s+\d+\s+(?:de|of)\s+(\d+)/i);
+      if (m2) return parseInt(m2[1]);
+
+      // 2. Buscar en elementos de paginación al pie de la tabla
+      const pEls = document.querySelectorAll('.gx-pagination, .PagingButtons, .GridWithPaginationBar, .gx-pagination-bar, td, span, div');
+      for (const el of pEls) {
+        const t = el.innerText || '';
+        const m3 = t.match(/P\u00e1gina\s+\d+\s+de\s+(\d+)/i) || t.match(/(?:pagina|page)\s+\d+\s+(?:de|of)\s+(\d+)/i);
+        if (m3) return parseInt(m3[1]);
+      }
+
+      for (const el of pEls) {
+        const t = el.innerText || '';
+        const m4 = t.match(/\bde\s+(\d+)\b/i);
+        if (m4) return parseInt(m4[1]);
+      }
+
+      return null;
+    });
+    return total;
+  } catch (e) {
+    return null;
   }
 }
 
