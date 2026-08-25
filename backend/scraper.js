@@ -84,7 +84,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const frames = parent.childFrames();
       for (const f of frames) {
         try {
-          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE');
+          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE, #BTNBUSCAR, table, [id*="Grid"], [id*="GRID"]');
           if (hasTable) return f;
           const found = await findDataFrameRecursive(f);
           if (found) return found;
@@ -333,7 +333,7 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
       const startTime = Date.now();
       while (Date.now() - startTime < 35000) {
         const trCount = await frame.evaluate(() => {
-          const trs = document.querySelectorAll('#GridContainerTbl tr');
+          const trs = document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table.Grid tr, table[id*="Grid"] tr, table[id*="GRID"] tr, table tr');
           let validRows = 0;
           for (const tr of trs) {
             const tds = tr.querySelectorAll('td');
@@ -348,7 +348,7 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
           console.log(`[Ext-${extractionId}] Confirmado: ${trCount} filas presentes en la tabla (vista de ${targetStr} aplicada exitosamente).`);
           return;
         }
-        await page.waitForTimeout(4000);
+        await page.waitForTimeout(3000);
       }
 
     } catch (e) {
@@ -357,44 +357,50 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
   }
 }
 
-async function getExactTotalPages(frame) {
+async function getExactTotalPages(pageOrFrame) {
   try {
-    const total = await frame.evaluate(() => {
-      const bodyText = document.body.innerText || '';
+    const framesToScan = pageOrFrame.frames ? pageOrFrame.frames() : [pageOrFrame];
+    for (const frame of framesToScan) {
+      try {
+        const total = await frame.evaluate(() => {
+          const bodyText = document.body.innerText || '';
 
-      // 1. Coincidencia flexible de "Página X de Y", "Pág. X de Y", "Pagina X de Y", "Page X of Y"
-      const m1 = bodyText.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
-      if (m1) {
-        const p = parseInt(m1[1]);
-        if (p > 0) return p;
-      }
+          // 1. Coincidencia flexible de "Página X de Y", "Pág. X de Y", "Pagina X de Y", "Page X of Y"
+          const m1 = bodyText.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
+          if (m1) {
+            const p = parseInt(m1[1]);
+            if (p > 0) return p;
+          }
 
-      // 2. Buscar en elementos de paginación específicos de GeneXus
-      const pEls = document.querySelectorAll('.gx-pagination, .PagingButtons, .GridWithPaginationBar, .gx-pagination-bar, [class*="Pagination"], [id*="Pagination"]');
-      for (const el of pEls) {
-        const t = el.innerText || '';
-        const m2 = t.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i) || t.match(/\b(?:de|of)\s*(\d+)\b/i);
-        if (m2) {
-          const p = parseInt(m2[1]);
-          if (p > 0) return p;
-        }
-      }
+          // 2. Buscar en elementos de paginación específicos de GeneXus
+          const pEls = document.querySelectorAll('.gx-pagination, .PagingButtons, .GridWithPaginationBar, .gx-pagination-bar, [class*="Pagination"], [id*="Pagination"]');
+          for (const el of pEls) {
+            const t = el.innerText || '';
+            const m2 = t.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i) || t.match(/\b(?:de|of)\s*(\d+)\b/i);
+            if (m2) {
+              const p = parseInt(m2[1]);
+              if (p > 0) return p;
+            }
+          }
 
-      // 3. Obtener el número de página más alto de los botones numéricos de paginación
-      const pageButtons = Array.from(document.querySelectorAll('.PagingButtons a, .GridWithPaginationBar a, .gx-pagination a, ul.pagination a, table td a'))
-        .map(el => el.innerText.trim())
-        .filter(t => /^\d+$/.test(t))
-        .map(t => parseInt(t));
+          // 3. Obtener el número de página más alto de los botones numéricos de paginación
+          const pageButtons = Array.from(document.querySelectorAll('.PagingButtons a, .GridWithPaginationBar a, .gx-pagination a, ul.pagination a, table td a'))
+            .map(el => el.innerText.trim())
+            .filter(t => /^\d+$/.test(t))
+            .map(t => parseInt(t));
 
-      if (pageButtons.length > 0) {
-        const maxBtn = Math.max(...pageButtons);
-        if (maxBtn > 1) return maxBtn;
-      }
+          if (pageButtons.length > 0) {
+            const maxBtn = Math.max(...pageButtons);
+            if (maxBtn > 1) return maxBtn;
+          }
 
-      return null;
-    });
+          return null;
+        });
 
-    return total;
+        if (total && total > 0) return total;
+      } catch (e) {}
+    }
+    return null;
   } catch (e) {
     return null;
   }
