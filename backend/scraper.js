@@ -127,20 +127,18 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
         await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando 1 MINUTO COMPLETO (60s) a que el portal DIA procese el filtro de fechas...`);
-        onProgress({ message: 'Filtros enviados. Esperando 1 MINUTO COMPLETO (60s) a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
+        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando respuesta del portal DIA...`);
+        onProgress({ message: 'Filtros enviados. Esperando respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
 
-        // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
-        await page.waitForTimeout(60000);
+        await page.waitForTimeout(12000);
 
         // Re-detectar dataFrame por si el submit recargó el iframe
         dataFrame = await findDataFrame(page);
 
-        // Esperar si aún hubiera alguna máscara activa
-        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
-        console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
+        // Esperar si hubiere alguna máscara activa
+        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 20000 }).catch(() => {});
 
-        // Aplicar tamaño de página (50 registros por página) y confirmar carga
+        // Desplegar menú de paginación y hacer clic directamente en "50 filas"
         await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId, onProgress);
 
       } catch (e) {
@@ -280,37 +278,76 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 }
 
 async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onProgress) {
-  console.log(`[Ext-${extractionId}] Verificando controles de vista de filas en portal DIA...`);
+  console.log(`[Ext-${extractionId}] Aplicando vista de ${targetSize} registros por página mediante menú desplegable...`);
   if (onProgress) {
-    onProgress({ message: `Verificando configuración de vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
+    onProgress({ message: `Configurando vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
   }
   const targetStr = String(targetSize);
+  const optionText = `${targetStr} filas`; // "50 filas"
 
   try {
-    // Buscar exclusivamente elementos <select> de paginación explícitos sin hacer clic en botones genéricos que puedan reiniciar el formulario
-    const selectElements = await frame.locator('select[name*="GRID"], select[name*="PAGE"], select[id*="GRID"], select[id*="PAGE"]').all();
-    let applied = false;
+    // 1. Localizar la etiqueta de paginación al pie de la tabla (ej. "Página 1 de 333" o "Pág. 1 de...")
+    const pageLabelLocators = [
+      'text=/P\u00e1gina\\s+\\d+\\s+de/i',
+      'text=/P\u00e1g\\.?\\s+\\d+\\s+de/i',
+      '.GridWithPaginationBar',
+      '.PagingButtons',
+      'span:has-text("Página")',
+      'td:has-text("Página")'
+    ];
 
-    for (const sel of selectElements) {
-      if (await sel.isVisible({ timeout: 1500 }).catch(() => false)) {
-        const text = await sel.innerText().catch(() => '');
-        if (text.includes(targetStr)) {
-          console.log(`[Ext-${extractionId}] Seleccionando ${targetStr} en elemento <select> de paginación...`);
-          await sel.selectOption(targetStr).catch(() => {});
-          await sel.dispatchEvent('change').catch(() => {});
-          await page.waitForTimeout(3000);
-          applied = true;
-          break;
-        }
+    let opened = false;
+    for (const sel of pageLabelLocators) {
+      const loc = frame.locator(sel).first();
+      if (await loc.isVisible({ timeout: 2500 }).catch(() => false)) {
+        console.log(`[Ext-${extractionId}] Clic en etiqueta de paginación '${sel}' para desplegar menú...`);
+        await loc.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(1000);
+        opened = true;
+        break;
       }
     }
 
-    if (!applied) {
-      console.log(`[Ext-${extractionId}] El portal utiliza la vista de filas cargada nativamente por el filtro. Continuando...`);
+    if (!opened) {
+      console.log(`[Ext-${extractionId}] Intentando clic general en pie de tabla para desplegar pop-up...`);
+      const gridFooter = frame.locator('.GridWithPaginationBar, .PagingButtons, table tfoot, tr:has-text("Página")').first();
+      if (await gridFooter.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await gridFooter.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(1000);
+      }
+    }
+
+    // 2. Buscar y hacer clic EXCLUSIVAMENTE en la opción "50 filas" (sin tocar la casilla de texto "Ir a página")
+    const optionLocators = [
+      `text="${optionText}"`,
+      `a:has-text("${optionText}")`,
+      `span:has-text("${optionText}")`,
+      `td:has-text("${optionText}")`,
+      `div:has-text("${optionText}")`,
+      `li:has-text("${optionText}")`
+    ];
+
+    let selected = false;
+    for (const optSel of optionLocators) {
+      const optLoc = frame.locator(optSel).first();
+      if (await optLoc.isVisible({ timeout: 3500 }).catch(() => false)) {
+        console.log(`[Ext-${extractionId}] Opción '${optionText}' visualizada. Haciendo clic...`);
+        await optLoc.click({ force: true }).catch(() => {});
+        selected = true;
+        console.log(`[Ext-${extractionId}] Clic en '${optionText}' realizado exitosamente.`);
+        break;
+      }
+    }
+
+    if (selected) {
+      console.log(`[Ext-${extractionId}] Esperando actualización AJAX de la grilla a ${targetStr} filas por página...`);
+      await page.waitForTimeout(6000);
+    } else {
+      console.log(`[Ext-${extractionId}] No se localizó la opción '${optionText}' en el menú emergente. Continuando...`);
     }
 
   } catch (e) {
-    console.log(`[Ext-${extractionId}] Aviso en verificación de vista:`, e.message);
+    console.log(`[Ext-${extractionId}] Aviso al cambiar a ${targetSize} filas:`, e.message);
   }
 }
 
