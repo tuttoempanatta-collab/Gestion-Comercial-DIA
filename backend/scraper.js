@@ -326,21 +326,21 @@ async function getExactTotalPages(pageOrFrame) {
           const m1 = bodyText.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
           if (m1) {
             const p = parseInt(m1[1]);
-            if (p > 0) return p;
+            if (p > 1) return p;
           }
 
           // 2. Buscar en elementos de paginación específicos de GeneXus
           const pEls = document.querySelectorAll('.gx-pagination, .PagingButtons, .GridWithPaginationBar, .gx-pagination-bar, [class*="Pagination"], [id*="Pagination"]');
           for (const el of pEls) {
             const t = el.innerText || '';
-            const m2 = t.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i) || t.match(/\b(?:de|of)\s*(\d+)\b/i);
+            const m2 = t.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
             if (m2) {
               const p = parseInt(m2[1]);
-              if (p > 0) return p;
+              if (p > 1) return p;
             }
           }
 
-          // 3. Obtener el número de página más alto de los botones numéricos de paginación
+          // 3. Obtener el número de página más alto de los botones numéricos de paginación (ej. 1, 2, 3... 66)
           const pageButtons = Array.from(document.querySelectorAll('.PagingButtons a, .GridWithPaginationBar a, .gx-pagination a, ul.pagination a, table td a'))
             .map(el => el.innerText.trim())
             .filter(t => /^\d+$/.test(t))
@@ -354,7 +354,7 @@ async function getExactTotalPages(pageOrFrame) {
           return null;
         });
 
-        if (total && total > 0) return total;
+        if (total && total > 1) return total;
       } catch (e) {}
     }
     return null;
@@ -371,9 +371,20 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
     const el = frame.locator(selector).first();
     await el.waitFor({ state: 'visible', timeout: 15000 });
     await el.focus();
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(200);
 
-    // 1. Inyección directa en el DOM para asegurar que el valor quede en la propiedad y atributo de HTML
+    // 1. Limpiar completamente el campo de fecha
+    await el.click({ clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(200);
+
+    // 2. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026") para no duplicar barras en la máscara de GeneXus
+    const digitsOnly = valueStr.replace(/\D/g, '');
+
+    // 3. Tipear sólo la secuencia numérica de 8 dígitos para que la máscara nativa de GeneXus auto-formatee "DD/MM/YYYY"
+    await el.type(digitsOnly, { delay: 100 });
+
+    // 4. Inyección en el DOM y disparo de eventos GeneXus
     await el.evaluate((input, val) => {
       input.value = val;
       input.setAttribute('value', val);
@@ -382,14 +393,10 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
       input.dispatchEvent(new Event('blur', { bubbles: true }));
     }, valueStr);
 
-    // 2. Simulación de tipeo físico para forzar al parser de eventos de GeneXus
-    await el.click({ clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await el.type(valueStr, { delay: 80 });
     await page.keyboard.press('Tab');
     await page.waitForTimeout(500);
 
-    console.log(`[Ext-${extractionId}] Campo ${fieldName} registrado exitosamente.`);
+    console.log(`[Ext-${extractionId}] Campo ${fieldName} registrado exitosamente con máscara GeneXus (${valueStr}).`);
   } catch (e) {
     console.log(`[Ext-${extractionId}] Error registrando campo ${fieldName}:`, e.message);
   }
