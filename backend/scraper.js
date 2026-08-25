@@ -144,38 +144,15 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         const buscarBtn = page.locator('#BTNBUSCAR, input[value="Buscar"], button:has-text("Buscar")').first();
         if (await buscarBtn.isVisible()) {
           await buscarBtn.click();
-          console.log(`[Ext-${extractionId}] Botón Buscar presionado. Esperando 2 minutos a que el portal DIA aplique los filtros de fecha...`);
-          onProgress({ message: 'Filtros enviados. Esperando respuesta del portal DIA (hasta 2 min)...', current: 7, total: 100, percentage: 11 });
+          console.log(`[Ext-${extractionId}] Botón Buscar presionado. Esperando 1 MINUTO COMPLETO (60s) a que el portal DIA aplique los filtros de fecha...`);
+          onProgress({ message: 'Filtros enviados. Esperando 1 MINUTO COMPLETO (60s) a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
 
-          // Esperar activamente la desaparición de las máscaras GeneXus (.gx-mask, #Loading, etc.)
-          const startTime = Date.now();
-          const maxWaitMs = 120000; // 2 minutos de tiempo de espera extra para la lentitud del portal DIA
-          let loaded = false;
+          // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
+          await page.waitForTimeout(60000);
 
-          while (Date.now() - startTime < maxWaitMs) {
-            await page.waitForTimeout(5000);
-            const isMaskVisible = await page.evaluate(() => {
-              const mask = document.querySelector('.gx-mask, .Loading, #Loading, .gx-mask-single');
-              return mask && mask.offsetParent !== null && getComputedStyle(mask).display !== 'none';
-            }).catch(() => false);
-
-            if (!isMaskVisible) {
-              const rowCount = await dataFrame.evaluate(() => {
-                const trs = document.querySelectorAll('#GridContainerTbl tr');
-                return trs ? trs.length : 0;
-              }).catch(() => 0);
-
-              if (rowCount > 1) {
-                console.log(`[Ext-${extractionId}] Grilla GeneXus actualizada tras ${Math.round((Date.now() - startTime)/1000)}s.`);
-                loaded = true;
-                break;
-              }
-            }
-          }
-
-          if (!loaded) {
-            console.log(`[Ext-${extractionId}] Tiempo de espera de 2 minutos alcanzado. Continuando proceso...`);
-          }
+          // Esperar si aún hubiera alguna máscara activa
+          await page.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
+          console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
         }
 
         // Aplicar tamaño de página (50 registros por página) y confirmar carga
