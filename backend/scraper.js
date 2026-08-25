@@ -141,18 +141,18 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
         await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando 1 MINUTO COMPLETO (60s) a que el portal DIA procese el filtro de fechas...`);
-        onProgress({ message: 'Filtros enviados. Esperando 1 MINUTO COMPLETO (60s) a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
+        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando 40 segundos a que el portal DIA procese el filtro de fechas...`);
+        onProgress({ message: 'Filtros enviados. Esperando 40 seg. a que el portal DIA procese la búsqueda...', current: 7, total: 100, percentage: 11 });
 
-        // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
-        await page.waitForTimeout(60000);
+        // Pausa de 40 segundos — tiempo suficiente para que DIA procese el filtro sin sobrecargar la memoria
+        await page.waitForTimeout(40000);
 
         // Re-detectar dataFrame por si el submit recargó el iframe
         dataFrame = await findDataFrame(page);
 
         // Esperar si aún hubiera alguna máscara activa
-        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
-        console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
+        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 20000 }).catch(() => {});
+        console.log(`[Ext-${extractionId}] Espera completada. Filtros de fecha procesados por portal DIA.`);
 
         // Aplicar tamaño de página (50 registros por página) y confirmar carga
         await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId, onProgress);
@@ -164,6 +164,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       
       onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
     }
+
 
     let totalPages = 1;
     onProgress({ message: 'Calculando total de páginas reales (vista de 50 ítems)...', current: 12, total: 100, percentage: 14 });
@@ -212,14 +213,60 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 15000 }).catch(() => {});
       
-      // FIX CRÍTICO: NO usar window.saveRowToDb dentro de evaluate() — las funciones expuestas vía
-      // page.exposeFunction() no están disponibles en iframes hijos de GeneXus.
-      // En su lugar, extraemos las filas como array y las guardamos desde Node.js.
+      // ─── DIAGNÓSTICO: loguear qué hay en el frame antes de extraer ──────────
+      const frameUrl = dataFrame.url();
+      const diagInfo = await dataFrame.evaluate(() => {
+        const tables = document.querySelectorAll('table');
+        const gridTbl = document.querySelector('#GridContainerTbl');
+        const gridWW  = document.querySelector('.Grid_WorkWith');
+        const anyGrid = document.querySelector('[id*="Grid"], [id*="GRID"]');
+        const allTrs  = document.querySelectorAll('table tr');
+        
+        // Primer row con TDs para ver su estructura
+        let firstRowSample = '';
+        for (const tr of allTrs) {
+          const tds = tr.querySelectorAll('td');
+          if (tds.length >= 3) {
+            firstRowSample = Array.from(tds).map(td => `"${td.innerText.trim().slice(0,20)}"`).join(' | ');
+            break;
+          }
+        }
+
+        return {
+          totalTables:    tables.length,
+          hasGridContainerTbl: !!gridTbl,
+          hasGridWorkWith:     !!gridWW,
+          hasAnyGrid:          !!anyGrid,
+          totalTrs:            allTrs.length,
+          firstRowSample,
+          bodySnippet:         (document.body.innerText || '').slice(0, 200).replace(/\n/g, ' ')
+        };
+      }).catch(() => ({ error: 'evaluate failed' }));
+
+      console.log(`[DIAG] Frame: ${frameUrl}`);
+      console.log(`[DIAG] Tablas=${diagInfo.totalTables} #GridContainerTbl=${diagInfo.hasGridContainerTbl} .Grid_WorkWith=${diagInfo.hasGridWorkWith} anyGrid=${diagInfo.hasAnyGrid} TRs=${diagInfo.totalTrs}`);
+      console.log(`[DIAG] Primer row: ${diagInfo.firstRowSample || 'N/A'}`);
+      console.log(`[DIAG] Body (200 chars): ${diagInfo.bodySnippet || 'N/A'}`);
+      // ────────────────────────────────────────────────────────────────────────
+
+      // Extraer filas de la página actual y retornarlas como array (no usar window.saveRowToDb en iframes)
       const { rows, skippedCount } = await dataFrame.evaluate((params) => {
         const { filterExactDates, targetExactStart, targetExactEnd } = params;
-        const trs = Array.from(document.querySelectorAll(
-          '#GridContainerTbl tr, .Grid_WorkWith tr, table.Grid tr, table[id*="Grid"] tr, table[id*="GRID"] tr'
-        ));
+        // Intentar múltiples selectores de tabla en orden de prioridad
+        let trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
+        if (trs.length === 0) trs = Array.from(document.querySelectorAll('.Grid_WorkWith tr'));
+        if (trs.length === 0) trs = Array.from(document.querySelectorAll('table.Grid tr'));
+        if (trs.length === 0) trs = Array.from(document.querySelectorAll('table[id*="Grid"] tr'));
+        if (trs.length === 0) trs = Array.from(document.querySelectorAll('table[id*="GRID"] tr'));
+        // Fallback: cualquier tabla con >= 7 columnas
+        if (trs.length === 0) {
+          const tables = document.querySelectorAll('table');
+          for (const t of tables) {
+            const rows = t.querySelectorAll('tr');
+            if (rows.length > 1) { trs = Array.from(rows); break; }
+          }
+        }
+
         const rows = [];
         let skippedCount = 0;
 
@@ -252,7 +299,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         return { rows, skippedCount };
       }, { filterExactDates, targetExactStart, targetExactEnd });
 
-      // Guardar las filas en la BD desde Node.js (evita el problema de iframes)
+      // Guardar las filas en la BD desde Node.js
       for (const row of rows) {
         await saveCommercialAction(extractionId, row);
       }
@@ -260,6 +307,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       totalItems   += rows.length;
       totalSkipped += skippedCount;
       console.log(`[DEBUG] Pág. ${p}: ${rows.length} guardados, ${skippedCount} omitidos por fecha`);
+
 
       if (p < totalPages) {
         const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
