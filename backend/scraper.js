@@ -87,7 +87,12 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       await accionesComerciales.waitFor({ state: 'visible', timeout: 15000 });
       await accionesComerciales.click();
       await page.waitForLoadState('load');
-      console.log(`[Ext-${extractionId}] Navegación por menú completada.`);
+      console.log(`[Ext-${extractionId}] Navegación por menú completada. Esperando 40 segundos a que cargue la web...`);
+      onProgress({ message: 'Navegación por menú completada. Esperando 40s a carga inicial de pantalla...', current: 5, total: 100, percentage: 7 });
+
+      // Paso 1: Espera de 40 segundos post-navegación por menú oficial
+      await page.waitForTimeout(40000);
+
     } catch (e) {
       console.log(`[Ext-${extractionId}] Aviso navegando menú lateral:`, e.message);
     }
@@ -131,6 +136,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log(`[Ext-${extractionId}] Aplicando filtros: Desde=${startFormatted || 'Inicio'}, Hasta=${endFormatted || 'Hoy'}`);
 
       try {
+        // Paso 2: Tipeo numérico dígito por dígito en campos de fecha con máscara DD/MM/YYYY
         if (startFormatted) {
           await fillGeneXusDate(page, dataFrame, '#vDESDE', startFormatted, 'Desde', extractionId);
         }
@@ -139,22 +145,23 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           await fillGeneXusDate(page, dataFrame, '#vHASTA', endFormatted, 'Hasta', extractionId);
         }
 
+        // Paso 3: Clic en el botón Buscar y espera de 40 segundos
         await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando 1 MINUTO COMPLETO (60s) a que el portal DIA procese el filtro de fechas...`);
-        onProgress({ message: 'Filtros enviados. Esperando 1 MINUTO COMPLETO (60s) a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
+        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando 40 SEGUNDOS COMPLETOS a respuesta del portal DIA...`);
+        onProgress({ message: 'Filtros enviados. Esperando 40s a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
 
-        // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
-        await page.waitForTimeout(60000);
+        // Pausa de 40 segundos para permitir que DIA procese el filtro de fechas en su servidor
+        await page.waitForTimeout(40000);
 
         // Re-detectar dataFrame por si el submit recargó el iframe
         dataFrame = await findDataFrame(page);
 
         // Esperar si aún hubiera alguna máscara activa
         await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
-        console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
+        console.log(`[Ext-${extractionId}] Espera de 40s completada. Filtros de fecha procesados por portal DIA.`);
 
-        // Aplicar tamaño de página (50 registros por página) y confirmar carga
+        // Paso 4: Bajar hacia el pie, cambiar registro a 50 filas y esperar 30s
         await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId, onProgress);
 
       } catch (e) {
@@ -294,17 +301,17 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 }
 
 async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onProgress) {
-  console.log(`[Ext-${extractionId}] Configurando vista de ${targetSize} filas por página en portal DIA...`);
+  console.log(`[Ext-${extractionId}] Paso 4: Desplazando al pie de la grilla y configurando vista de ${targetSize} filas por página...`);
   if (onProgress) {
-    onProgress({ message: `Configurando vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
+    onProgress({ message: `Desplazando al pie y configurando vista de ${targetSize} filas...`, current: 10, total: 100, percentage: 13 });
   }
 
   try {
-    // El portal DIA muestra un dropdown de texto con opciones: "5 filas", "10 filas", "20 filas", "50 filas"
-    // Hay que hacer clic en el control que abre el menú (el icono de flecha al pie de la tabla), luego clicar en el texto "50 filas"
+    // 1. Desplazarse hacia el pie de la página/frame para visualizar la barra de paginación
+    await frame.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await page.waitForTimeout(1000);
 
-    // Paso 1: Hacer clic en el control desplegable de registros por página (ícono de flecha al pie de la grilla)
-    // El portal DIA usa un link/span con el número actual de registros o el ícono de paginación inferior
+    // 2. Hacer clic en el desplegable de registros por página al pie de la tabla
     const dropdownTriggers = [
       'a[id*="ROWSPERPAGE"]',
       'a[id*="rowsperpage"]',
@@ -332,10 +339,10 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
     }
 
     if (!dropdownOpened) {
-      console.log(`[Ext-${extractionId}] No se encontró trigger del dropdown. Intentando click directo en "50 filas"...`);
+      console.log(`[Ext-${extractionId}] No se encontró trigger del dropdown. Intentando clic directo en "${targetSize} filas"...`);
     }
 
-    // Paso 2: Hacer clic en la opción de texto "50 filas" (o la correspondiente al targetSize)
+    // 3. Hacer clic en la opción de texto "50 filas"
     const optionLabel = `${targetSize} filas`;
     const optionSelectors = [
       `a:has-text("${optionLabel}")`,
@@ -350,19 +357,26 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
       try {
         const optEl = frame.locator(sel).first();
         if (await optEl.isVisible({ timeout: 3000 })) {
-          console.log(`[Ext-${extractionId}] Haciendo click en opción "${optionLabel}" (selector: ${sel})...`);
+          console.log(`[Ext-${extractionId}] Haciendo clic en opción "${optionLabel}"...`);
           await optEl.click();
-          await page.waitForTimeout(8000); // Esperar recarga de tabla con 50 filas
           applied = true;
-          console.log(`[Ext-${extractionId}] Vista de ${targetSize} filas aplicada exitosamente.`);
+          console.log(`[Ext-${extractionId}] Opción ${optionLabel} seleccionada exitosamente.`);
           break;
         }
       } catch (e) {}
     }
 
-    if (!applied) {
-      console.log(`[Ext-${extractionId}] No se pudo clicar en "${optionLabel}". La tabla puede mostrar 10 filas. Continuando...`);
+    // 4. Pausa de 30 SEGUNDOS para permitir que la web cargue todos los registros de la vista de 50 filas
+    console.log(`[Ext-${extractionId}] Esperando 30 SEGUNDOS a que la web cargue todos los registros de 50 filas...`);
+    if (onProgress) {
+      onProgress({ message: 'Vista de 50 filas seleccionada. Esperando 30s a recarga completa de registros...', current: 11, total: 100, percentage: 13 });
     }
+    await page.waitForTimeout(30000);
+
+    // 5. Desplazarse nuevamente al pie para mapear la nueva cantidad de páginas
+    await frame.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    await page.waitForTimeout(1000);
+    console.log(`[Ext-${extractionId}] Recarga de 30s completada. Mapeando la nueva cantidad de páginas a extraer...`);
 
   } catch (e) {
     console.log(`[Ext-${extractionId}] Aviso en configuración de vista:`, e.message);
