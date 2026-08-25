@@ -136,8 +136,9 @@ export default function ExtractPage() {
                 type="date" 
                 value={startDate}
                 onChange={(e) => {
-                  setStartDate(e.target.value)
-                  if (!exactStartDate) setExactStartDate(e.target.value)
+                  const val = e.target.value;
+                  setStartDate(val);
+                  setExactStartDate(val);
                 }}
                 className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500 transition-colors"
               />
@@ -149,8 +150,9 @@ export default function ExtractPage() {
                 type="date" 
                 value={endDate}
                 onChange={(e) => {
-                  setEndDate(e.target.value)
-                  if (!exactEndDate) setExactEndDate(e.target.value)
+                  const val = e.target.value;
+                  setEndDate(val);
+                  setExactEndDate(val);
                 }}
                 className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500 transition-colors"
               />

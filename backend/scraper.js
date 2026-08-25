@@ -50,49 +50,35 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     }
 
     await page.waitForLoadState('load');
-    onProgress({ message: 'Sesión iniciada. Navegando a la tabla...', current: 5, total: 100, percentage: 5 });
+    onProgress({ message: 'Sesión iniciada. Navegando mediante menú oficial...', current: 5, total: 100, percentage: 5 });
 
     await context.route('**/*.{png,jpg,jpeg,gif,svg}', route => route.abort());
 
-    let isTableLoaded = false;
+    // Navegar siempre por el menú lateral oficial para garantizar el árbol de sesión de GeneXus
     try {
-      console.log(`[Ext-${extractionId}] Intentando navegar directamente a la tabla...`);
-      await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview', { 
-        waitUntil: 'commit',
-        timeout: 25000 
-      });
-      await page.waitForLoadState('load');
-      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 8000 });
-      isTableLoaded = true;
-      console.log(`[Ext-${extractionId}] Navegación directa exitosa.`);
-    } catch (e) {
-      console.log(`[Ext-${extractionId}] Navegación directa no disponible, usando menú lateral...`);
-    }
-
-    if (!isTableLoaded) {
-      try {
-        const menuBtn = page.locator('a.sidebar-toggle, button.sidebar-toggle, .navbar-toggle, [data-toggle="offcanvas"], i.fa-bars, .icon-bar').first();
-        if (await menuBtn.isVisible()) {
-          await menuBtn.click();
-          await page.waitForTimeout(1000);
-        }
-
-        const gestionOperativa = page.locator('text="Gestion Operativa", text="GESTION OPERATIVA", a:has-text("Gestion Operativa")').first();
-        if (await gestionOperativa.isVisible()) {
-          await gestionOperativa.click();
-          await page.waitForTimeout(1000);
-        }
-
-        const accionesComerciales = page.locator('text="Acciones comerciales generales", text="ACCIONES COMERCIALES GENERALES", a:has-text("Acciones comerciales generales")').first();
-        await accionesComerciales.waitFor({ state: 'visible', timeout: 15000 });
-        await accionesComerciales.click();
-        await page.waitForLoadState('load');
-      } catch (e) {
-        console.log(`[Ext-${extractionId}] Aviso en menú lateral:`, e.message);
+      console.log(`[Ext-${extractionId}] Navegando mediante menú lateral de GeneXus...`);
+      const menuBtn = page.locator('a.sidebar-toggle, button.sidebar-toggle, .navbar-toggle, [data-toggle="offcanvas"], i.fa-bars, .icon-bar').first();
+      if (await menuBtn.isVisible()) {
+        await menuBtn.click();
+        await page.waitForTimeout(1000);
       }
+
+      const gestionOperativa = page.locator('text="Gestion Operativa", text="GESTION OPERATIVA", a:has-text("Gestion Operativa")').first();
+      if (await gestionOperativa.isVisible()) {
+        await gestionOperativa.click();
+        await page.waitForTimeout(1000);
+      }
+
+      const accionesComerciales = page.locator('text="Acciones comerciales generales", text="ACCIONES COMERCIALES GENERALES", a:has-text("Acciones comerciales generales")').first();
+      await accionesComerciales.waitFor({ state: 'visible', timeout: 15000 });
+      await accionesComerciales.click();
+      await page.waitForLoadState('load');
+      console.log(`[Ext-${extractionId}] Navegación por menú completada.`);
+    } catch (e) {
+      console.log(`[Ext-${extractionId}] Aviso navegando menú lateral:`, e.message);
     }
 
-    onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
+    onProgress({ message: 'Buscando panel de datos GeneXus...', current: 5, total: 100, percentage: 7 });
     
     const findDataFrameRecursive = async (parent) => {
       const frames = parent.childFrames();
