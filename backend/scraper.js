@@ -93,10 +93,30 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     }
 
     onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
-    let dataFrame = page;
+    
+    const findDataFrameRecursive = async (parent) => {
+      const frames = parent.childFrames();
+      for (const f of frames) {
+        try {
+          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE');
+          if (hasTable) return f;
+          const found = await findDataFrameRecursive(f);
+          if (found) return found;
+        } catch (e) {}
+      }
+      return null;
+    };
+
+    const findDataFrame = async (p) => {
+      const found = await findDataFrameRecursive(p.mainFrame());
+      return found || p.mainFrame();
+    };
+
+    let dataFrame = await findDataFrame(page);
+    console.log(`[Ext-${extractionId}] Frame de datos de GeneXus detectado: ${dataFrame.url()}`);
 
     try {
-      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 40000 });
+      await dataFrame.waitForSelector('#vDESDE, #GridContainerTbl', { state: 'visible', timeout: 40000 });
       console.log('[DEBUG] Panel de filtros detectado (#vDESDE visible)');
     } catch (e) {
       console.log('[DEBUG] Timeout esperando #vDESDE, continuando...', e.message);
@@ -127,8 +147,11 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
         await page.waitForTimeout(60000);
 
+        // Re-detectar dataFrame por si el submit recargó el iframe
+        dataFrame = await findDataFrame(page);
+
         // Esperar si aún hubiera alguna máscara activa
-        await page.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
+        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
         console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
 
         // Aplicar tamaño de página (50 registros por página) y confirmar carga
@@ -147,6 +170,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     
     for (let attempt = 1; attempt <= 6; attempt++) {
       try {
+        dataFrame = await findDataFrame(page);
         const detected = await getExactTotalPages(dataFrame);
         if (detected && detected > 0) {
           totalPages = detected;
@@ -158,24 +182,6 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     }
 
     onProgress({ message: `Iniciando extracción a velocidad normal (${totalPages} páginas)...`, current: 0, total: totalPages, percentage: 15 });
-
-    const findDataFrameRecursive = async (parent) => {
-      const frames = parent.childFrames();
-      for (const f of frames) {
-        try {
-          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE');
-          if (hasTable) return f;
-          const found = await findDataFrameRecursive(f);
-          if (found) return found;
-        } catch (e) {}
-      }
-      return null;
-    };
-
-    const findDataFrame = async (p) => {
-      const found = await findDataFrameRecursive(p.mainFrame());
-      return found || p.mainFrame();
-    };
 
     await page.exposeFunction('saveRowToDb', async (row) => {
       await saveCommercialAction(extractionId, row);
