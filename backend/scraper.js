@@ -280,80 +280,37 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 }
 
 async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onProgress) {
-  console.log(`[Ext-${extractionId}] Aplicando vista de ${targetSize} registros por página en portal DIA...`);
+  console.log(`[Ext-${extractionId}] Verificando controles de vista de filas en portal DIA...`);
   if (onProgress) {
-    onProgress({ message: `Configurando vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
+    onProgress({ message: `Verificando configuración de vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
   }
   const targetStr = String(targetSize);
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      let applied = false;
+  try {
+    // Buscar exclusivamente elementos <select> de paginación explícitos sin hacer clic en botones genéricos que puedan reiniciar el formulario
+    const selectElements = await frame.locator('select[name*="GRID"], select[name*="PAGE"], select[id*="GRID"], select[id*="PAGE"]').all();
+    let applied = false;
 
-      // Método A: Buscar y presionar botón de desplegable de paginación en la grilla GeneXus
-      const dropdownBtns = await frame.locator('button.dropdown-toggle, .GridWithPaginationBar button, .gx-pagination-bar button, button.btn-primary, .dropdown-toggle').all();
-      for (const btn of dropdownBtns) {
-        if (await btn.isVisible()) {
-          console.log(`[Ext-${extractionId}] (Intento ${attempt}) Clic en botón desplegable de paginación...`);
-          await btn.click({ timeout: 4000 }).catch(() => {});
-          await page.waitForTimeout(1500);
-
-          const optionEl = frame.locator(`a:has-text("${targetStr}"), span:has-text("${targetStr}"), li:has-text("${targetStr}"), option[value="${targetStr}"]`).first();
-          if (await optionEl.isVisible()) {
-            console.log(`[Ext-${extractionId}] Opción ${targetStr} registros seleccionada.`);
-            await optionEl.click({ timeout: 4000 }).catch(() => {});
-            applied = true;
-            break;
-          }
+    for (const sel of selectElements) {
+      if (await sel.isVisible({ timeout: 1500 }).catch(() => false)) {
+        const text = await sel.innerText().catch(() => '');
+        if (text.includes(targetStr)) {
+          console.log(`[Ext-${extractionId}] Seleccionando ${targetStr} en elemento <select> de paginación...`);
+          await sel.selectOption(targetStr).catch(() => {});
+          await sel.dispatchEvent('change').catch(() => {});
+          await page.waitForTimeout(3000);
+          applied = true;
+          break;
         }
       }
-
-      // Método B: Elemento <select>
-      if (!applied) {
-        const selectElements = await frame.locator('select[name*="GRID"], select[name*="PAGE"], select[id*="GRID"], select[id*="PAGE"], select').all();
-        for (const sel of selectElements) {
-          if (await sel.isVisible()) {
-            const text = await sel.innerText().catch(() => '');
-            if (text.includes(targetStr)) {
-              console.log(`[Ext-${extractionId}] (Intento ${attempt}) Seleccionando ${targetStr} en elemento <select>...`);
-              await sel.selectOption(targetStr).catch(() => {});
-              await sel.dispatchEvent('change').catch(() => {});
-              await sel.dispatchEvent('blur').catch(() => {});
-              applied = true;
-              break;
-            }
-          }
-        }
-      }
-
-      console.log(`[Ext-${extractionId}] Esperando actualización AJAX de ${targetStr} filas (hasta 45s)...`);
-      await page.waitForTimeout(8000);
-
-      // Esperar activamente la carga de la grilla de 50 elementos
-      const startTime = Date.now();
-      while (Date.now() - startTime < 35000) {
-        const trCount = await frame.evaluate(() => {
-          const trs = document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table.Grid tr, table[id*="Grid"] tr, table[id*="GRID"] tr, table tr');
-          let validRows = 0;
-          for (const tr of trs) {
-            const tds = tr.querySelectorAll('td');
-            if (tds.length >= 7 && !tr.querySelector('th') && !tr.classList.contains('Grid_WorkWithHeader')) {
-              validRows++;
-            }
-          }
-          return validRows;
-        }).catch(() => 0);
-
-        if (trCount > 15) {
-          console.log(`[Ext-${extractionId}] Confirmado: ${trCount} filas presentes en la tabla (vista de ${targetStr} aplicada exitosamente).`);
-          return;
-        }
-        await page.waitForTimeout(3000);
-      }
-
-    } catch (e) {
-      console.log(`[Ext-${extractionId}] Intento ${attempt} de cambiar tamaño de página tuvo aviso:`, e.message);
     }
+
+    if (!applied) {
+      console.log(`[Ext-${extractionId}] El portal utiliza la vista de filas cargada nativamente por el filtro. Continuando...`);
+    }
+
+  } catch (e) {
+    console.log(`[Ext-${extractionId}] Aviso en verificación de vista:`, e.message);
   }
 }
 
