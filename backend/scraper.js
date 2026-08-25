@@ -458,11 +458,16 @@ function parseDate(dateStr) {
 
 function formatDateForPortal(dateStr) {
   if (!dateStr) return "";
-  // input is YYYY-MM-DD
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) return "";
-  const [year, month, day] = parts;
-  return `${day}/${month}/${year}`;
+  const cleaned = String(dateStr).trim();
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(cleaned)) {
+    return cleaned;
+  }
+  const parts = cleaned.split('-');
+  if (parts.length === 3) {
+    const [year, month, day] = parts;
+    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+  }
+  return cleaned;
 }
 
 module.exports = { runScraper };
