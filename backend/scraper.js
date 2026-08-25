@@ -423,7 +423,8 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
     await page.keyboard.press('Tab');
     await page.waitForTimeout(500);
 
-    console.log(`[Ext-${extractionId}] Campo ${fieldName} registrado exitosamente con máscara GeneXus (${valueStr}).`);
+    const checkVal = await el.evaluate(i => i.value).catch(() => '');
+    console.log(`[Ext-${extractionId}] Campo ${fieldName} registrado exitosamente con máscara GeneXus (Enviado: '${valueStr}', Verificado en DOM: '${checkVal}').`);
   } catch (e) {
     console.log(`[Ext-${extractionId}] Error registrando campo ${fieldName}:`, e.message);
   }

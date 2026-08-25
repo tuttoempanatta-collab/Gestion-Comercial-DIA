@@ -4,13 +4,25 @@ import { useState, useEffect, useRef } from 'react'
 import { Play, Terminal, Loader2, CheckCircle2, AlertCircle, Calendar } from 'lucide-react'
 import { API_URL } from '@/lib/api'
 
+const getDefaultDates = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const lastDay = new Date(year, now.getMonth() + 1, 0).getDate();
+  return {
+    start: `${year}-${month}-01`,
+    end: `${year}-${month}-${String(lastDay).padStart(2, '0')}`
+  };
+};
+
 export default function ExtractPage() {
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [pageSize, setPageSize] = useState('10')
-  const [filterExactDates, setFilterExactDates] = useState(false)
-  const [exactStartDate, setExactStartDate] = useState('')
-  const [exactEndDate, setExactEndDate] = useState('')
+  const defaults = getDefaultDates();
+  const [startDate, setStartDate] = useState(defaults.start)
+  const [endDate, setEndDate] = useState(defaults.end)
+  const [pageSize, setPageSize] = useState('50')
+  const [filterExactDates, setFilterExactDates] = useState(true)
+  const [exactStartDate, setExactStartDate] = useState(defaults.start)
+  const [exactEndDate, setExactEndDate] = useState(defaults.end)
   const [isExtracting, setIsExtracting] = useState(false)
   const [logs, setLogs] = useState<any[]>([])
   const [progress, setProgress] = useState({ percentage: 0, message: '' })
@@ -66,6 +78,11 @@ export default function ExtractPage() {
   }, [isExtracting, extractionId])
 
   const handleStartExtraction = async () => {
+    if (!startDate || !endDate) {
+      alert('Por favor selecciona la Fecha Desde y Fecha Hasta antes de iniciar la extracción.')
+      return
+    }
+
     setIsExtracting(true)
     setStatus('running')
     setLogs([])
