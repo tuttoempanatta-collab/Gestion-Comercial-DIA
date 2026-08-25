@@ -204,7 +204,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       
       const pageResults = await dataFrame.evaluate(async (params) => {
         const { filterExactDates, targetExactStart, targetExactEnd } = params;
-        const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
+        const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table.Grid tr, table[id*="Grid"] tr, table[id*="GRID"] tr'));
         let savedCount = 0;
         let skippedCount = 0;
 
@@ -361,29 +361,39 @@ async function getExactTotalPages(frame) {
   try {
     const total = await frame.evaluate(() => {
       const bodyText = document.body.innerText || '';
-      // 1. Priorizar concordancia exacta del portal: "Página 1 de 66"
-      const m1 = bodyText.match(/P\u00e1gina\s+\d+\s+de\s+(\d+)/i);
-      if (m1) return parseInt(m1[1]);
 
-      const m2 = bodyText.match(/(?:pagina|page)\s+\d+\s+(?:de|of)\s+(\d+)/i);
-      if (m2) return parseInt(m2[1]);
-
-      // 2. Buscar en elementos de paginación al pie de la tabla
-      const pEls = document.querySelectorAll('.gx-pagination, .PagingButtons, .GridWithPaginationBar, .gx-pagination-bar, td, span, div');
-      for (const el of pEls) {
-        const t = el.innerText || '';
-        const m3 = t.match(/P\u00e1gina\s+\d+\s+de\s+(\d+)/i) || t.match(/(?:pagina|page)\s+\d+\s+(?:de|of)\s+(\d+)/i);
-        if (m3) return parseInt(m3[1]);
+      // 1. Coincidencia flexible de "Página X de Y", "Pág. X de Y", "Pagina X de Y", "Page X of Y"
+      const m1 = bodyText.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
+      if (m1) {
+        const p = parseInt(m1[1]);
+        if (p > 0) return p;
       }
 
+      // 2. Buscar en elementos de paginación específicos de GeneXus
+      const pEls = document.querySelectorAll('.gx-pagination, .PagingButtons, .GridWithPaginationBar, .gx-pagination-bar, [class*="Pagination"], [id*="Pagination"]');
       for (const el of pEls) {
         const t = el.innerText || '';
-        const m4 = t.match(/\bde\s+(\d+)\b/i);
-        if (m4) return parseInt(m4[1]);
+        const m2 = t.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i) || t.match(/\b(?:de|of)\s*(\d+)\b/i);
+        if (m2) {
+          const p = parseInt(m2[1]);
+          if (p > 0) return p;
+        }
+      }
+
+      // 3. Obtener el número de página más alto de los botones numéricos de paginación
+      const pageButtons = Array.from(document.querySelectorAll('.PagingButtons a, .GridWithPaginationBar a, .gx-pagination a, ul.pagination a, table td a'))
+        .map(el => el.innerText.trim())
+        .filter(t => /^\d+$/.test(t))
+        .map(t => parseInt(t));
+
+      if (pageButtons.length > 0) {
+        const maxBtn = Math.max(...pageButtons);
+        if (maxBtn > 1) return maxBtn;
       }
 
       return null;
     });
+
     return total;
   } catch (e) {
     return null;
