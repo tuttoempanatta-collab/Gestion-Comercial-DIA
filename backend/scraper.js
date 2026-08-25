@@ -127,43 +127,20 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
         await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-        console.log(`[Ext-${extractionId}] Búsqueda enviada al servidor de DIA. Aguardando respuesta de consulta de mes completo (hasta 45s)...`);
-        onProgress({ message: 'Filtros enviados. Aguardando respuesta de consulta de mes completo en portal DIA...', current: 7, total: 100, percentage: 11 });
+        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando 1 MINUTO COMPLETO (60s) a que el portal DIA procese el filtro de fechas...`);
+        onProgress({ message: 'Filtros enviados. Esperando 1 MINUTO COMPLETO (60s) a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
 
-        // 1. Pausa inicial y re-detección de dataFrame por si ocurrió recarga de marco
-        await page.waitForTimeout(5000);
+        // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
+        await page.waitForTimeout(60000);
+
+        // Re-detectar dataFrame por si el submit recargó el iframe
         dataFrame = await findDataFrame(page);
 
-        // 2. Esperar a que se oculten máscaras o animaciones de carga de GeneXus
-        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 40000 }).catch(() => {});
+        // Esperar si aún hubiera alguna máscara activa
+        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
+        console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
 
-        // 3. Esperar activamente a que la grilla contenga registros o la etiqueta "Página 1 de..."
-        console.log(`[Ext-${extractionId}] Verificando estabilización de grilla inicial en pantalla...`);
-        const startTimeGrid = Date.now();
-        while (Date.now() - startTimeGrid < 35000) {
-          dataFrame = await findDataFrame(page);
-          const isGridReady = await dataFrame.evaluate(() => {
-            const trs = document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table.Grid tr, table[id*="Grid"] tr, table tr');
-            const text = document.body.innerText || '';
-            const hasPaging = /P\u00e1gina\s+\d+/i.test(text) || /P\u00e1g\.?\s+\d+/i.test(text);
-            let validRows = 0;
-            for (const tr of trs) {
-              const tds = tr.querySelectorAll('td');
-              if (tds.length >= 7 && !tr.querySelector('th') && !tr.classList.contains('Grid_WorkWithHeader')) {
-                validRows++;
-              }
-            }
-            return validRows > 0 || hasPaging;
-          }).catch(() => false);
-
-          if (isGridReady) {
-            console.log(`[Ext-${extractionId}] Grilla inicial del portal DIA cargada y estable. Procediendo a ajustar vista a ${pageSize} filas por página.`);
-            break;
-          }
-          await page.waitForTimeout(3000);
-        }
-
-        // 4. Desplegar menú de paginación y hacer clic en la opción "50 filas"
+        // Aplicar tamaño de página (50 registros por página) y confirmar carga
         await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId, onProgress);
 
       } catch (e) {
@@ -303,76 +280,78 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 }
 
 async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onProgress) {
-  console.log(`[Ext-${extractionId}] Aplicando vista de ${targetSize} registros por página mediante menú desplegable...`);
+  console.log(`[Ext-${extractionId}] Configurando vista de ${targetSize} filas por página en portal DIA...`);
   if (onProgress) {
     onProgress({ message: `Configurando vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
   }
-  const targetStr = String(targetSize);
-  const optionText = `${targetStr} filas`; // "50 filas"
 
   try {
-    // 1. Inyectar clic en DOM JS y Playwright locator para desplegar el pop-up de "Página 1 de 333"
-    let opened = await frame.evaluate(() => {
-      const allEls = Array.from(document.querySelectorAll('span, td, div, a, p'));
-      const label = allEls.find(el => /P\u00e1gina\s+\d+\s+de/i.test(el.innerText || '') || /P\u00e1g\.?\s+\d+\s+de/i.test(el.innerText || ''));
-      if (label) {
-        label.click();
-        label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        return true;
-      }
-      return false;
-    }).catch(() => false);
+    // El portal DIA muestra un dropdown de texto con opciones: "5 filas", "10 filas", "20 filas", "50 filas"
+    // Hay que hacer clic en el control que abre el menú (el icono de flecha al pie de la tabla), luego clicar en el texto "50 filas"
 
-    if (!opened) {
-      const loc = frame.locator('text=/P\u00e1gina\\s+\\d+\\s+de/i, text=/P\u00e1g\\.?\\s+\\d+\\s+de/i, .GridWithPaginationBar, .PagingButtons').first();
-      if (await loc.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await loc.click({ force: true }).catch(() => {});
-        opened = true;
-      }
-    }
+    // Paso 1: Hacer clic en el control desplegable de registros por página (ícono de flecha al pie de la grilla)
+    // El portal DIA usa un link/span con el número actual de registros o el ícono de paginación inferior
+    const dropdownTriggers = [
+      'a[id*="ROWSPERPAGE"]',
+      'a[id*="rowsperpage"]',
+      '.gx-pagination-page-size',
+      'a:has-text("10 filas")',
+      'a:has-text("5 filas")',
+      'span:has-text("10 filas")',
+      'li:has-text("10 filas")',
+      '.GridWithPaginationBar a',
+      '[id*="ROWSPERPAGE"]',
+    ];
 
-    console.log(`[Ext-${extractionId}] Esperando despliegue del menú emergente (${opened ? 'etiqueta clickeada' : 'buscando pop-up'})...`);
-    await page.waitForTimeout(1500);
-
-    // 2. Buscar y hacer clic EXCLUSIVAMENTE en el nodo hoja de "50 filas"
-    let selected = await frame.evaluate((targetLabel) => {
-      const allEls = Array.from(document.querySelectorAll('*'));
-      const leaf = allEls.find(el => el.children.length === 0 && el.textContent && el.textContent.trim() === targetLabel);
-      if (leaf) {
-        leaf.click();
-        leaf.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        if (leaf.parentElement) {
-          leaf.parentElement.click();
-          leaf.parentElement.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    let dropdownOpened = false;
+    for (const trigger of dropdownTriggers) {
+      try {
+        const el = frame.locator(trigger).first();
+        if (await el.isVisible({ timeout: 2000 })) {
+          console.log(`[Ext-${extractionId}] Abriendo menú de registros por página con: ${trigger}`);
+          await el.click();
+          await page.waitForTimeout(1500);
+          dropdownOpened = true;
+          break;
         }
-        return true;
-      }
-      const opt = allEls.find(el => el.textContent && el.textContent.trim() === targetLabel);
-      if (opt) {
-        opt.click();
-        opt.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        return true;
-      }
-      return false;
-    }, optionText).catch(() => false);
-
-    if (!selected) {
-      const optLoc = frame.locator(`text="${optionText}", a:has-text("${optionText}"), span:has-text("${optionText}"), td:has-text("${optionText}"), div:has-text("${optionText}")`).first();
-      if (await optLoc.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await optLoc.click({ force: true }).catch(() => {});
-        selected = true;
-      }
+      } catch (e) {}
     }
 
-    if (selected) {
-      console.log(`[Ext-${extractionId}] Opción '${optionText}' seleccionada exitosamente. Esperando recarga de grilla a 50 filas...`);
-      await page.waitForTimeout(7000);
-    } else {
-      console.log(`[Ext-${extractionId}] No se pudo seleccionar '${optionText}'. Continuando con grilla actual...`);
+    if (!dropdownOpened) {
+      console.log(`[Ext-${extractionId}] No se encontró trigger del dropdown. Intentando click directo en "50 filas"...`);
+    }
+
+    // Paso 2: Hacer clic en la opción de texto "50 filas" (o la correspondiente al targetSize)
+    const optionLabel = `${targetSize} filas`;
+    const optionSelectors = [
+      `a:has-text("${optionLabel}")`,
+      `span:has-text("${optionLabel}")`,
+      `li:has-text("${optionLabel}")`,
+      `a:has-text("${targetSize}")`,
+      `li > a:has-text("${targetSize}")`,
+    ];
+
+    let applied = false;
+    for (const sel of optionSelectors) {
+      try {
+        const optEl = frame.locator(sel).first();
+        if (await optEl.isVisible({ timeout: 3000 })) {
+          console.log(`[Ext-${extractionId}] Haciendo click en opción "${optionLabel}" (selector: ${sel})...`);
+          await optEl.click();
+          await page.waitForTimeout(8000); // Esperar recarga de tabla con 50 filas
+          applied = true;
+          console.log(`[Ext-${extractionId}] Vista de ${targetSize} filas aplicada exitosamente.`);
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (!applied) {
+      console.log(`[Ext-${extractionId}] No se pudo clicar en "${optionLabel}". La tabla puede mostrar 10 filas. Continuando...`);
     }
 
   } catch (e) {
-    console.log(`[Ext-${extractionId}] Aviso al cambiar a ${targetSize} filas:`, e.message);
+    console.log(`[Ext-${extractionId}] Aviso en configuración de vista:`, e.message);
   }
 }
 
@@ -388,7 +367,7 @@ async function getExactTotalPages(pageOrFrame) {
           const m1 = bodyText.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
           if (m1) {
             const p = parseInt(m1[1]);
-            if (p > 0) return p;
+            if (p > 1) return p;
           }
 
           // 2. Buscar en elementos de paginación específicos de GeneXus
@@ -398,7 +377,7 @@ async function getExactTotalPages(pageOrFrame) {
             const m2 = t.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
             if (m2) {
               const p = parseInt(m2[1]);
-              if (p > 0) return p;
+              if (p > 1) return p;
             }
           }
 
@@ -410,13 +389,13 @@ async function getExactTotalPages(pageOrFrame) {
 
           if (pageButtons.length > 0) {
             const maxBtn = Math.max(...pageButtons);
-            if (maxBtn > 0) return maxBtn;
+            if (maxBtn > 1) return maxBtn;
           }
 
           return null;
         });
 
-        if (total && total > 0) return total;
+        if (total && total > 1) return total;
       } catch (e) {}
     }
     return null;
@@ -433,49 +412,31 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
     const el = frame.locator(selector).first();
     await el.waitFor({ state: 'visible', timeout: 15000 });
 
-    // 1. Hacer clic para enfocar el campo
-    await el.click({ clickCount: 1 });
-    await page.waitForTimeout(300);
-
-    // 2. Seleccionar todo y eliminar el contenido actual
+    // 1. Hacer click para enfocar el campo y limpiar el contenido
+    await el.click({ clickCount: 3 });
+    await page.waitForTimeout(200);
     await page.keyboard.press('Control+a');
-    await page.waitForTimeout(100);
     await page.keyboard.press('Delete');
-    await page.waitForTimeout(100);
-    await page.keyboard.press('Backspace');
     await page.waitForTimeout(200);
 
-    // 3. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026")
-    //    La máscara de GeneXus auto-inserta "/" al tipear solo números
+    // 2. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026")
+    // La máscara nativa de GeneXus insertará automáticamente las barras "/" al tipear los dígitos
     const digitsOnly = valueStr.replace(/\D/g, '');
+    console.log(`[Ext-${extractionId}] Tipeando dígitos "${digitsOnly}" en campo ${fieldName} (máscara GeneXus auto-formatea DD/MM/YYYY)`);
 
-    // 4. Tipear dígito a dígito con delay para que la máscara GeneXus procese cada uno
-    await el.type(digitsOnly, { delay: 120 });
-    await page.waitForTimeout(400);
+    // 3. Tipear dígito por dígito con delay para que la máscara los procese correctamente
+    for (const digit of digitsOnly) {
+      await page.keyboard.type(digit);
+      await page.waitForTimeout(80);
+    }
 
-    // 5. SOLO Tab para mover el foco al siguiente campo (NUNCA Enter, que submittea el form)
+    await page.waitForTimeout(300);
     await page.keyboard.press('Tab');
     await page.waitForTimeout(500);
 
-    // 6. Verificar que el valor quedó registrado en el DOM
-    const checkVal = await el.evaluate(i => i.value).catch(() => '');
-    console.log(`[Ext-${extractionId}] Campo ${fieldName} verificado en DOM: '${checkVal}' (enviado: '${valueStr}').`);
-
-    // 7. Si el campo quedó vacío, intentar inyección directa via evaluate
-    if (!checkVal || checkVal.replace(/[_\/]/g, '').length < 8) {
-      console.log(`[Ext-${extractionId}] Campo ${fieldName} vacío, intentando inyección directa...`);
-      await el.evaluate((input, val) => {
-        input.value = val;
-        input.setAttribute('value', val);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        input.dispatchEvent(new Event('blur', { bubbles: true }));
-        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-      }, valueStr);
-      await page.waitForTimeout(300);
-      const checkVal2 = await el.evaluate(i => i.value).catch(() => '');
-      console.log(`[Ext-${extractionId}] Campo ${fieldName} post-inyección directa: '${checkVal2}'.`);
-    }
+    // 4. Verificar el valor final del campo
+    const finalValue = await el.inputValue().catch(() => 'N/A');
+    console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${finalValue}" (esperado: "${valueStr}").`);
 
   } catch (e) {
     console.log(`[Ext-${extractionId}] Error registrando campo ${fieldName}:`, e.message);
@@ -510,16 +471,11 @@ function parseDate(dateStr) {
 
 function formatDateForPortal(dateStr) {
   if (!dateStr) return "";
-  const cleaned = String(dateStr).trim();
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(cleaned)) {
-    return cleaned;
-  }
-  const parts = cleaned.split('-');
-  if (parts.length === 3) {
-    const [year, month, day] = parts;
-    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
-  }
-  return cleaned;
+  // input is YYYY-MM-DD
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return "";
+  const [year, month, day] = parts;
+  return `${day}/${month}/${year}`;
 }
 
 module.exports = { runScraper };
