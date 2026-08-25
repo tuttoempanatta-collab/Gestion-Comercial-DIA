@@ -286,64 +286,54 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
   const optionText = `${targetStr} filas`; // "50 filas"
 
   try {
-    // 1. Localizar la etiqueta de paginación al pie de la tabla (ej. "Página 1 de 333" o "Pág. 1 de...")
-    const pageLabelLocators = [
-      'text=/P\u00e1gina\\s+\\d+\\s+de/i',
-      'text=/P\u00e1g\\.?\\s+\\d+\\s+de/i',
-      '.GridWithPaginationBar',
-      '.PagingButtons',
-      'span:has-text("Página")',
-      'td:has-text("Página")'
-    ];
-
-    let opened = false;
-    for (const sel of pageLabelLocators) {
-      const loc = frame.locator(sel).first();
-      if (await loc.isVisible({ timeout: 2500 }).catch(() => false)) {
-        console.log(`[Ext-${extractionId}] Clic en etiqueta de paginación '${sel}' para desplegar menú...`);
-        await loc.click({ force: true }).catch(() => {});
-        await page.waitForTimeout(1000);
-        opened = true;
-        break;
+    // 1. Inyectar clic en DOM JS y Playwright locator para desplegar el pop-up de "Página 1 de 333"
+    let opened = await frame.evaluate(() => {
+      const allEls = Array.from(document.querySelectorAll('span, td, div, a, p'));
+      const label = allEls.find(el => /P\u00e1gina\s+\d+\s+de/i.test(el.innerText || '') || /P\u00e1g\.?\s+\d+\s+de/i.test(el.innerText || ''));
+      if (label) {
+        label.click();
+        label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return true;
       }
-    }
+      return false;
+    }).catch(() => false);
 
     if (!opened) {
-      console.log(`[Ext-${extractionId}] Intentando clic general en pie de tabla para desplegar pop-up...`);
-      const gridFooter = frame.locator('.GridWithPaginationBar, .PagingButtons, table tfoot, tr:has-text("Página")').first();
-      if (await gridFooter.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await gridFooter.click({ force: true }).catch(() => {});
-        await page.waitForTimeout(1000);
+      const loc = frame.locator('text=/P\u00e1gina\\s+\\d+\\s+de/i, text=/P\u00e1g\\.?\\s+\\d+\\s+de/i, .GridWithPaginationBar').first();
+      if (await loc.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await loc.click({ force: true }).catch(() => {});
+        opened = true;
       }
     }
 
-    // 2. Buscar y hacer clic EXCLUSIVAMENTE en la opción "50 filas" (sin tocar la casilla de texto "Ir a página")
-    const optionLocators = [
-      `text="${optionText}"`,
-      `a:has-text("${optionText}")`,
-      `span:has-text("${optionText}")`,
-      `td:has-text("${optionText}")`,
-      `div:has-text("${optionText}")`,
-      `li:has-text("${optionText}")`
-    ];
+    console.log(`[Ext-${extractionId}] Esperando despliegue del menú emergente (${opened ? 'etiqueta clickeada' : 'buscando pop-up'})...`);
+    await page.waitForTimeout(1500);
 
-    let selected = false;
-    for (const optSel of optionLocators) {
-      const optLoc = frame.locator(optSel).first();
-      if (await optLoc.isVisible({ timeout: 3500 }).catch(() => false)) {
-        console.log(`[Ext-${extractionId}] Opción '${optionText}' visualizada. Haciendo clic...`);
+    // 2. Buscar y hacer clic EXCLUSIVAMENTE en la opción "50 filas" (sin tocar la casilla de texto "Ir a página")
+    let selected = await frame.evaluate((targetLabel) => {
+      const allEls = Array.from(document.querySelectorAll('a, span, td, div, li, option'));
+      const opt = allEls.find(el => el.innerText && el.innerText.trim() === targetLabel);
+      if (opt) {
+        opt.click();
+        opt.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return true;
+      }
+      return false;
+    }, optionText).catch(() => false);
+
+    if (!selected) {
+      const optLoc = frame.locator(`text="${optionText}", a:has-text("${optionText}"), span:has-text("${optionText}"), td:has-text("${optionText}"), div:has-text("${optionText}")`).first();
+      if (await optLoc.isVisible({ timeout: 3000 }).catch(() => false)) {
         await optLoc.click({ force: true }).catch(() => {});
         selected = true;
-        console.log(`[Ext-${extractionId}] Clic en '${optionText}' realizado exitosamente.`);
-        break;
       }
     }
 
     if (selected) {
-      console.log(`[Ext-${extractionId}] Esperando actualización AJAX de la grilla a ${targetStr} filas por página...`);
-      await page.waitForTimeout(6000);
+      console.log(`[Ext-${extractionId}] Opción '${optionText}' seleccionada exitosamente. Esperando recarga de grilla a 50 filas...`);
+      await page.waitForTimeout(7000);
     } else {
-      console.log(`[Ext-${extractionId}] No se localizó la opción '${optionText}' en el menú emergente. Continuando...`);
+      console.log(`[Ext-${extractionId}] No se pudo seleccionar '${optionText}'. Continuando con grilla actual...`);
     }
 
   } catch (e) {
@@ -363,7 +353,7 @@ async function getExactTotalPages(pageOrFrame) {
           const m1 = bodyText.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
           if (m1) {
             const p = parseInt(m1[1]);
-            if (p > 1) return p;
+            if (p > 0) return p;
           }
 
           // 2. Buscar en elementos de paginación específicos de GeneXus
@@ -373,7 +363,7 @@ async function getExactTotalPages(pageOrFrame) {
             const m2 = t.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
             if (m2) {
               const p = parseInt(m2[1]);
-              if (p > 1) return p;
+              if (p > 0) return p;
             }
           }
 
@@ -385,13 +375,13 @@ async function getExactTotalPages(pageOrFrame) {
 
           if (pageButtons.length > 0) {
             const maxBtn = Math.max(...pageButtons);
-            if (maxBtn > 1) return maxBtn;
+            if (maxBtn > 0) return maxBtn;
           }
 
           return null;
         });
 
-        if (total && total > 1) return total;
+        if (total && total > 0) return total;
       } catch (e) {}
     }
     return null;
