@@ -127,18 +127,43 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
         await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando respuesta del portal DIA...`);
-        onProgress({ message: 'Filtros enviados. Esperando respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
+        console.log(`[Ext-${extractionId}] Búsqueda enviada al servidor de DIA. Aguardando respuesta de consulta de mes completo (hasta 45s)...`);
+        onProgress({ message: 'Filtros enviados. Aguardando respuesta de consulta de mes completo en portal DIA...', current: 7, total: 100, percentage: 11 });
 
-        await page.waitForTimeout(12000);
-
-        // Re-detectar dataFrame por si el submit recargó el iframe
+        // 1. Pausa inicial y re-detección de dataFrame por si ocurrió recarga de marco
+        await page.waitForTimeout(5000);
         dataFrame = await findDataFrame(page);
 
-        // Esperar si hubiere alguna máscara activa
-        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 20000 }).catch(() => {});
+        // 2. Esperar a que se oculten máscaras o animaciones de carga de GeneXus
+        await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 40000 }).catch(() => {});
 
-        // Desplegar menú de paginación y hacer clic directamente en "50 filas"
+        // 3. Esperar activamente a que la grilla contenga registros o la etiqueta "Página 1 de..."
+        console.log(`[Ext-${extractionId}] Verificando estabilización de grilla inicial en pantalla...`);
+        const startTimeGrid = Date.now();
+        while (Date.now() - startTimeGrid < 35000) {
+          dataFrame = await findDataFrame(page);
+          const isGridReady = await dataFrame.evaluate(() => {
+            const trs = document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table.Grid tr, table[id*="Grid"] tr, table tr');
+            const text = document.body.innerText || '';
+            const hasPaging = /P\u00e1gina\s+\d+/i.test(text) || /P\u00e1g\.?\s+\d+/i.test(text);
+            let validRows = 0;
+            for (const tr of trs) {
+              const tds = tr.querySelectorAll('td');
+              if (tds.length >= 7 && !tr.querySelector('th') && !tr.classList.contains('Grid_WorkWithHeader')) {
+                validRows++;
+              }
+            }
+            return validRows > 0 || hasPaging;
+          }).catch(() => false);
+
+          if (isGridReady) {
+            console.log(`[Ext-${extractionId}] Grilla inicial del portal DIA cargada y estable. Procediendo a ajustar vista a ${pageSize} filas por página.`);
+            break;
+          }
+          await page.waitForTimeout(3000);
+        }
+
+        // 4. Desplegar menú de paginación y hacer clic en la opción "50 filas"
         await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId, onProgress);
 
       } catch (e) {
