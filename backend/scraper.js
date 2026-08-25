@@ -15,39 +15,45 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
   console.log(`[DEBUG] runScraper started for ID: ${extractionId} with pageSize: ${pageSize}`);
   const browser = await chromium.launch({ 
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',      // Usa /tmp en lugar de /dev/shm (crítico en Render)
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-      '--disable-extensions',
-      '--disable-background-networking',
-      '--disable-default-apps',
-      '--disable-sync',
-      '--disable-translate',
-      '--hide-scrollbars',
-      '--metrics-recording-only',
-      '--mute-audio',
-      '--no-first-run',
-      '--safebrowsing-disable-auto-update',
-      '--js-flags=--max-old-space-size=256',  // Limitar heap JS del browser a 256MB
-      '--memory-pressure-thresholds=critical_threshold=0.7,moderate_threshold=0.5',
-    ]
+    args: process.platform === 'win32' 
+      ? ['--no-sandbox', '--disable-setuid-sandbox'] 
+      : [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-zygote',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-breakpad',
+          '--disable-component-update',
+          '--disable-domain-reliability',
+          '--disable-ipc-flooding-protection',
+          '--disable-renderer-backgrounding',
+          '--disk-cache-size=1',
+          '--js-flags=--max-old-space-size=256'
+        ]
   });
 
   const context = await browser.newContext({
-    viewport: { width: 1024, height: 768 },
+    viewport: { width: 1280, height: 720 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
   });
+
+  // Bloquear inmediatamente imágenes, fuentes, media y estilos pesados antes de cargar la página para ahorrar hasta 70% RAM
+  await context.route('**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot,css,mp4,mp3}', route => route.abort());
+
   const page = await context.newPage();
 
   try {
     console.log(`[Ext-${extractionId}] Iniciando scraper...`);
     onProgress({ message: 'Preparando navegador...', current: 0, total: 100, percentage: 2 });
     
-    await page.goto(settings.portal_url, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.goto(settings.portal_url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     onProgress({ message: 'Portal cargado. Identificándose...', current: 0, total: 100, percentage: 5 });
 
     const loginSelector = '#vSECUSERNAME, #vUSERSEGLGN';
@@ -56,21 +62,11 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       await page.fill(loginSelector, settings.username);
       await page.fill(passSelector, settings.password);
       await page.click('#BTNENTER');
-      await page.waitForTimeout(5000);
+      await page.waitForTimeout(4000);
     }
 
-    await page.waitForLoadState('load');
+    await page.waitForLoadState('domcontentloaded');
     onProgress({ message: 'Sesión iniciada. Navegando mediante menú oficial...', current: 5, total: 100, percentage: 5 });
-
-    await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico,woff,woff2,ttf,eot,mp4,webm,ogg,mp3,wav}', route => route.abort());
-    await context.route('**/*.css', async (route) => {
-      // Permitir CSS del portal DIA, bloquear CDNs externos
-      if (route.request().url().includes('supermercadosdia') || route.request().url().includes('portalfranquicias')) {
-        await route.continue();
-      } else {
-        await route.abort();
-      }
-    });
 
     // Navegar siempre por el menú lateral oficial para garantizar el árbol de sesión de GeneXus
     try {
@@ -260,13 +256,6 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       totalItems += pageResults.savedCount;
       totalSkipped += pageResults.skippedCount;
       console.log(`[DEBUG] Page ${p}: Saved ${pageResults.savedCount} rows, Skipped ${pageResults.skippedCount} rows`);
-
-      // Cada 10 páginas: pausa breve para que el GC libere memoria y evitar OOM en Render
-      if (p % 10 === 0) {
-        console.log(`[Ext-${extractionId}] Pausa de limpieza de memoria en página ${p}/${totalPages}...`);
-        await page.waitForTimeout(2000);
-        if (global.gc) global.gc();
-      }
 
       if (p < totalPages) {
         const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';

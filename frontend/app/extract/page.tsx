@@ -78,11 +78,6 @@ export default function ExtractPage() {
   }, [isExtracting, extractionId])
 
   const handleStartExtraction = async () => {
-    if (!startDate || !endDate) {
-      alert('Por favor selecciona la Fecha Desde y Fecha Hasta antes de iniciar la extracción.')
-      return
-    }
-
     setIsExtracting(true)
     setStatus('running')
     setLogs([])
