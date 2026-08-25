@@ -324,7 +324,7 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
     }).catch(() => false);
 
     if (!opened) {
-      const loc = frame.locator('text=/P\u00e1gina\\s+\\d+\\s+de/i, text=/P\u00e1g\\.?\\s+\\d+\\s+de/i, .GridWithPaginationBar').first();
+      const loc = frame.locator('text=/P\u00e1gina\\s+\\d+\\s+de/i, text=/P\u00e1g\\.?\\s+\\d+\\s+de/i, .GridWithPaginationBar, .PagingButtons').first();
       if (await loc.isVisible({ timeout: 3000 }).catch(() => false)) {
         await loc.click({ force: true }).catch(() => {});
         opened = true;
@@ -334,10 +334,20 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
     console.log(`[Ext-${extractionId}] Esperando despliegue del menú emergente (${opened ? 'etiqueta clickeada' : 'buscando pop-up'})...`);
     await page.waitForTimeout(1500);
 
-    // 2. Buscar y hacer clic EXCLUSIVAMENTE en la opción "50 filas" (sin tocar la casilla de texto "Ir a página")
+    // 2. Buscar y hacer clic EXCLUSIVAMENTE en el nodo hoja de "50 filas"
     let selected = await frame.evaluate((targetLabel) => {
-      const allEls = Array.from(document.querySelectorAll('a, span, td, div, li, option'));
-      const opt = allEls.find(el => el.innerText && el.innerText.trim() === targetLabel);
+      const allEls = Array.from(document.querySelectorAll('*'));
+      const leaf = allEls.find(el => el.children.length === 0 && el.textContent && el.textContent.trim() === targetLabel);
+      if (leaf) {
+        leaf.click();
+        leaf.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        if (leaf.parentElement) {
+          leaf.parentElement.click();
+          leaf.parentElement.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        }
+        return true;
+      }
+      const opt = allEls.find(el => el.textContent && el.textContent.trim() === targetLabel);
       if (opt) {
         opt.click();
         opt.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
@@ -430,11 +440,14 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
     await page.keyboard.press('Backspace');
     await page.waitForTimeout(200);
 
-    // 2. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026") para no duplicar barras en la máscara de GeneXus
+    // 2. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026")
     const digitsOnly = valueStr.replace(/\D/g, '');
 
-    // 3. Tipear sólo la secuencia numérica de 8 dígitos para que la máscara nativa de GeneXus auto-formatee "DD/MM/YYYY"
-    await el.type(digitsOnly, { delay: 100 });
+    // 3. Tipear sólo los 8 dígitos e ingresar Enter y Tab para forzar a GeneXus a comprometer la fecha en su estado interno
+    await el.type(digitsOnly, { delay: 90 });
+    await page.keyboard.press('Enter').catch(() => {});
+    await page.keyboard.press('Tab').catch(() => {});
+    await page.waitForTimeout(300);
 
     // 4. Inyección en el DOM y disparo de eventos GeneXus
     await el.evaluate((input, val) => {
@@ -445,8 +458,8 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
       input.dispatchEvent(new Event('blur', { bubbles: true }));
     }, valueStr);
 
-    await page.keyboard.press('Tab');
-    await page.waitForTimeout(500);
+    await page.keyboard.press('Tab').catch(() => {});
+    await page.waitForTimeout(400);
 
     const checkVal = await el.evaluate(i => i.value).catch(() => '');
     console.log(`[Ext-${extractionId}] Campo ${fieldName} registrado exitosamente con máscara GeneXus (Enviado: '${valueStr}', Verificado en DOM: '${checkVal}').`);
