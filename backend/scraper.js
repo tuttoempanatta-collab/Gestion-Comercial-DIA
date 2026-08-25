@@ -112,48 +112,24 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       try {
         if (startFormatted) {
-          try {
-            const desdeEl = page.locator('#vDESDE').first();
-            await desdeEl.waitFor({ state: 'visible', timeout: 15000 });
-            await desdeEl.click({ clickCount: 3 });
-            await desdeEl.fill(startFormatted);
-            await desdeEl.dispatchEvent('change');
-            await desdeEl.press('Tab');
-            console.log(`[Ext-${extractionId}] Desde llenado: ${startFormatted}`);
-          } catch (e) {
-            console.log('[DEBUG] Error llenando #vDESDE:', e.message);
-            onProgress({ message: 'Aviso: No se encontró campo "Desde"', current: 5, total: 100, percentage: 10 });
-          }
+          await fillGeneXusDate(page, dataFrame, '#vDESDE', startFormatted, 'Desde', extractionId);
         }
 
         if (endFormatted) {
-          try {
-            const hastaEl = page.locator('#vHASTA').first();
-            await hastaEl.waitFor({ state: 'visible', timeout: 15000 });
-            await hastaEl.click();
-            await hastaEl.fill(endFormatted);
-            await hastaEl.dispatchEvent('change');
-            await hastaEl.press('Tab');
-            console.log(`[Ext-${extractionId}] Hasta llenado: ${endFormatted}`);
-          } catch (e) {
-            console.log('[DEBUG] Error llenando #vHASTA:', e.message);
-            onProgress({ message: 'Aviso: No se encontró campo "Hasta"', current: 5, total: 100, percentage: 10 });
-          }
+          await fillGeneXusDate(page, dataFrame, '#vHASTA', endFormatted, 'Hasta', extractionId);
         }
 
-        const buscarBtn = page.locator('#BTNBUSCAR, input[value="Buscar"], button:has-text("Buscar")').first();
-        if (await buscarBtn.isVisible()) {
-          await buscarBtn.click();
-          console.log(`[Ext-${extractionId}] Botón Buscar presionado. Esperando 1 MINUTO COMPLETO (60s) a que el portal DIA aplique los filtros de fecha...`);
-          onProgress({ message: 'Filtros enviados. Esperando 1 MINUTO COMPLETO (60s) a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
+        await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-          // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
-          await page.waitForTimeout(60000);
+        console.log(`[Ext-${extractionId}] Búsqueda enviada. Esperando 1 MINUTO COMPLETO (60s) a que el portal DIA procese el filtro de fechas...`);
+        onProgress({ message: 'Filtros enviados. Esperando 1 MINUTO COMPLETO (60s) a respuesta del portal DIA...', current: 7, total: 100, percentage: 11 });
 
-          // Esperar si aún hubiera alguna máscara activa
-          await page.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
-          console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
-        }
+        // Pausa incondicional de 60 segundos para permitir que DIA procese el filtro de fechas en su servidor sin interferencias
+        await page.waitForTimeout(60000);
+
+        // Esperar si aún hubiera alguna máscara activa
+        await page.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 30000 }).catch(() => {});
+        console.log(`[Ext-${extractionId}] Minuto de espera completado. Filtros de fecha procesados por portal DIA.`);
 
         // Aplicar tamaño de página (50 registros por página) y confirmar carga
         await applyPageSizeToPortal(page, dataFrame, pageSize, extractionId, onProgress);
@@ -419,6 +395,59 @@ async function getExactTotalPages(frame) {
     return total;
   } catch (e) {
     return null;
+  }
+}
+
+async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extractionId) {
+  if (!valueStr) return;
+  console.log(`[Ext-${extractionId}] Registrando campo GeneXus ${fieldName}: ${valueStr}...`);
+
+  try {
+    const el = frame.locator(selector).first();
+    await el.waitFor({ state: 'visible', timeout: 15000 });
+    await el.focus();
+    await page.waitForTimeout(300);
+
+    // 1. Inyección directa en el DOM para asegurar que el valor quede en la propiedad y atributo de HTML
+    await el.evaluate((input, val) => {
+      input.value = val;
+      input.setAttribute('value', val);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+    }, valueStr);
+
+    // 2. Simulación de tipeo físico para forzar al parser de eventos de GeneXus
+    await el.click({ clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await el.type(valueStr, { delay: 80 });
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(500);
+
+    console.log(`[Ext-${extractionId}] Campo ${fieldName} registrado exitosamente.`);
+  } catch (e) {
+    console.log(`[Ext-${extractionId}] Error registrando campo ${fieldName}:`, e.message);
+  }
+}
+
+async function clickGeneXusBuscar(page, frame, extractionId) {
+  console.log(`[Ext-${extractionId}] Disparando evento de búsqueda GeneXus...`);
+  try {
+    const buscarBtn = frame.locator('#BTNBUSCAR, input[value="Buscar"], button:has-text("Buscar"), input[name="BTNBUSCAR"]').first();
+    if (await buscarBtn.isVisible()) {
+      await buscarBtn.click();
+    }
+
+    // Disparar además el evento nativo del framework GeneXus si está disponible
+    await frame.evaluate(() => {
+      if (window.gx && window.gx.evt && window.gx.evt.execEvt) {
+        try {
+          window.gx.evt.execEvt("E'BUSCAR'.", this);
+        } catch(e) {}
+      }
+    }).catch(() => {});
+  } catch (e) {
+    console.log(`[Ext-${extractionId}] Aviso al presionar Buscar:`, e.message);
   }
 }
 
