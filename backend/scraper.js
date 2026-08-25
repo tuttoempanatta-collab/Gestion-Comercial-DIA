@@ -15,20 +15,30 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
   console.log(`[DEBUG] runScraper started for ID: ${extractionId} with pageSize: ${pageSize}`);
   const browser = await chromium.launch({ 
     headless: true,
-    args: process.platform === 'win32' 
-      ? ['--no-sandbox', '--disable-setuid-sandbox'] 
-      : [
-          '--no-sandbox', 
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--no-zygote',
-          '--single-process'
-        ]
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',      // Usa /tmp en lugar de /dev/shm (crítico en Render)
+      '--disable-gpu',
+      '--no-zygote',
+      '--single-process',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-sync',
+      '--disable-translate',
+      '--hide-scrollbars',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update',
+      '--js-flags=--max-old-space-size=256',  // Limitar heap JS del browser a 256MB
+      '--memory-pressure-thresholds=critical_threshold=0.7,moderate_threshold=0.5',
+    ]
   });
 
   const context = await browser.newContext({
-    viewport: { width: 1280, height: 720 },
+    viewport: { width: 1024, height: 768 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
@@ -52,7 +62,15 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     await page.waitForLoadState('load');
     onProgress({ message: 'Sesión iniciada. Navegando mediante menú oficial...', current: 5, total: 100, percentage: 5 });
 
-    await context.route('**/*.{png,jpg,jpeg,gif,svg}', route => route.abort());
+    await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico,woff,woff2,ttf,eot,mp4,webm,ogg,mp3,wav}', route => route.abort());
+    await context.route('**/*.css', async (route) => {
+      // Permitir CSS del portal DIA, bloquear CDNs externos
+      if (route.request().url().includes('supermercadosdia') || route.request().url().includes('portalfranquicias')) {
+        await route.continue();
+      } else {
+        await route.abort();
+      }
+    });
 
     // Navegar siempre por el menú lateral oficial para garantizar el árbol de sesión de GeneXus
     try {
@@ -242,6 +260,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       totalItems += pageResults.savedCount;
       totalSkipped += pageResults.skippedCount;
       console.log(`[DEBUG] Page ${p}: Saved ${pageResults.savedCount} rows, Skipped ${pageResults.skippedCount} rows`);
+
+      // Cada 10 páginas: pausa breve para que el GC libere memoria y evitar OOM en Render
+      if (p % 10 === 0) {
+        console.log(`[Ext-${extractionId}] Pausa de limpieza de memoria en página ${p}/${totalPages}...`);
+        await page.waitForTimeout(2000);
+        if (global.gc) global.gc();
+      }
 
       if (p < totalPages) {
         const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
