@@ -432,37 +432,51 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
   try {
     const el = frame.locator(selector).first();
     await el.waitFor({ state: 'visible', timeout: 15000 });
-    await el.focus();
-    await page.waitForTimeout(200);
 
-    // 1. Limpiar completamente el campo de fecha
-    await el.click({ clickCount: 3 });
+    // 1. Hacer clic para enfocar el campo
+    await el.click({ clickCount: 1 });
+    await page.waitForTimeout(300);
+
+    // 2. Seleccionar todo y eliminar el contenido actual
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(100);
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(100);
     await page.keyboard.press('Backspace');
     await page.waitForTimeout(200);
 
-    // 2. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026")
+    // 3. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026")
+    //    La máscara de GeneXus auto-inserta "/" al tipear solo números
     const digitsOnly = valueStr.replace(/\D/g, '');
 
-    // 3. Tipear sólo los 8 dígitos e ingresar Enter y Tab para forzar a GeneXus a comprometer la fecha en su estado interno
-    await el.type(digitsOnly, { delay: 90 });
-    await page.keyboard.press('Enter').catch(() => {});
-    await page.keyboard.press('Tab').catch(() => {});
-    await page.waitForTimeout(300);
-
-    // 4. Inyección en el DOM y disparo de eventos GeneXus
-    await el.evaluate((input, val) => {
-      input.value = val;
-      input.setAttribute('value', val);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      input.dispatchEvent(new Event('blur', { bubbles: true }));
-    }, valueStr);
-
-    await page.keyboard.press('Tab').catch(() => {});
+    // 4. Tipear dígito a dígito con delay para que la máscara GeneXus procese cada uno
+    await el.type(digitsOnly, { delay: 120 });
     await page.waitForTimeout(400);
 
+    // 5. SOLO Tab para mover el foco al siguiente campo (NUNCA Enter, que submittea el form)
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(500);
+
+    // 6. Verificar que el valor quedó registrado en el DOM
     const checkVal = await el.evaluate(i => i.value).catch(() => '');
-    console.log(`[Ext-${extractionId}] Campo ${fieldName} registrado exitosamente con máscara GeneXus (Enviado: '${valueStr}', Verificado en DOM: '${checkVal}').`);
+    console.log(`[Ext-${extractionId}] Campo ${fieldName} verificado en DOM: '${checkVal}' (enviado: '${valueStr}').`);
+
+    // 7. Si el campo quedó vacío, intentar inyección directa via evaluate
+    if (!checkVal || checkVal.replace(/[_\/]/g, '').length < 8) {
+      console.log(`[Ext-${extractionId}] Campo ${fieldName} vacío, intentando inyección directa...`);
+      await el.evaluate((input, val) => {
+        input.value = val;
+        input.setAttribute('value', val);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      }, valueStr);
+      await page.waitForTimeout(300);
+      const checkVal2 = await el.evaluate(i => i.value).catch(() => '');
+      console.log(`[Ext-${extractionId}] Campo ${fieldName} post-inyección directa: '${checkVal2}'.`);
+    }
+
   } catch (e) {
     console.log(`[Ext-${extractionId}] Error registrando campo ${fieldName}:`, e.message);
   }
