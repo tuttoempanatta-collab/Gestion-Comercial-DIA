@@ -69,7 +69,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     await page.waitForLoadState('domcontentloaded');
     onProgress({ message: 'Sesión iniciada. Navegando mediante menú oficial...', current: 2, total: 100, percentage: 6 });
 
-    // ─── PASO 1: Navegar por menú lateral oficial ─────────────────────────────
+    // ─── PASO 1: Navegar a la vista de Promociones ───────────────────────────
+    const promoUrl = 'https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview';
     try {
       console.log(`[Ext-${extractionId}] Navegando mediante menú lateral de GeneXus...`);
       const menuBtn = page.locator('a.sidebar-toggle, button.sidebar-toggle, .navbar-toggle, [data-toggle="offcanvas"], i.fa-bars, .icon-bar').first();
@@ -85,30 +86,35 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       }
 
       const accionesComerciales = page.locator('text="Acciones comerciales generales", text="ACCIONES COMERCIALES GENERALES", a:has-text("Acciones comerciales generales")').first();
-      await accionesComerciales.waitFor({ state: 'visible', timeout: 15000 });
-      await accionesComerciales.click();
-      console.log(`[Ext-${extractionId}] Click en "Acciones comerciales generales" realizado.`);
+      if (await accionesComerciales.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await accionesComerciales.click();
+        console.log(`[Ext-${extractionId}] Click en "Acciones comerciales generales" realizado.`);
+      }
     } catch (e) {
       console.log(`[Ext-${extractionId}] Aviso navegando menú lateral:`, e.message);
     }
 
-    // Esperar a que el portal abra y cargue la vista de ARTÍCULOS PROMO VIEW (puede ser en nueva pestaña o en iframe)
-    console.log(`[Ext-${extractionId}] PASO 1: Esperando 40 segundos para que cargue la vista de promociones...`);
-    onProgress({ message: 'PASO 1: Esperando 40 seg. a que el portal DIA cargue la grilla...', current: 4, total: 100, percentage: 8 });
-    await page.waitForTimeout(40000);
-
-    // Si el menú abrió una nueva pestaña en el navegador, cambiar a esa pestaña
+    // Esperar y verificar si ya estamos en la URL oficial de articulospromoview
+    await page.waitForTimeout(5000);
     const openPages = context.pages();
     for (const p of openPages) {
-      const pTitle = await p.title().catch(() => '');
       const pUrl = p.url();
-      console.log(`[Ext-${extractionId}] Pestaña detectada: "${pTitle}" (${pUrl})`);
-      if (pTitle.toLowerCase().includes('promo') || pUrl.toLowerCase().includes('promo') || pUrl.toLowerCase().includes('articulos')) {
-        console.log(`[Ext-${extractionId}] Cambiando a pestaña activa: "${pTitle}"`);
+      if (pUrl.includes('articulospromoview') || pUrl.includes('com.portalsocios')) {
+        console.log(`[Ext-${extractionId}] Cambiando a pestaña de Promociones: ${pUrl}`);
         page = p;
         break;
       }
     }
+
+    // Si aún no está en la URL de articulospromoview, navegar directamente (con sesión ya autenticada)
+    if (!page.url().includes('articulospromoview')) {
+      console.log(`[Ext-${extractionId}] Navegando directamente a URL oficial: ${promoUrl}`);
+      await page.goto(promoUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+    }
+
+    console.log(`[Ext-${extractionId}] PASO 1: Esperando carga completa de Artículos Promo View...`);
+    onProgress({ message: 'PASO 1: Esperando a que el portal DIA cargue la grilla...', current: 4, total: 100, percentage: 8 });
+    await page.waitForTimeout(20000);
 
     // Detectar el frame que contiene los controles de GeneXus
     let dataFrame = await findDataFrame(page, 15000);
@@ -125,23 +131,23 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       try {
         if (startFormatted) {
-          await fillGeneXusDate(page, dataFrame, '#vDESDE, input[name*="vDESDE"], input[name*="DESDE"]', startFormatted, 'Desde', extractionId);
+          await fillGeneXusDate(page, dataFrame, '#vDESDE, input[name*="vDESDE"], input[name*="DESDE"], [id*="DESDE"]', startFormatted, 'Desde', extractionId);
         }
         if (endFormatted) {
-          await fillGeneXusDate(page, dataFrame, '#vHASTA, input[name*="vHASTA"], input[name*="HASTA"]', endFormatted, 'Hasta', extractionId);
+          await fillGeneXusDate(page, dataFrame, '#vHASTA, input[name*="vHASTA"], input[name*="HASTA"], [id*="HASTA"]', endFormatted, 'Hasta', extractionId);
         }
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error ingresando fechas:`, e.message);
       }
 
-      // ─── PASO 3: Click en BUSCAR y esperar 40 segundos ──────────────────────
+      // ─── PASO 3: Click en BUSCAR y esperar 30 segundos ──────────────────────
       console.log(`[Ext-${extractionId}] PASO 3: Clicando en botón BUSCAR...`);
-      onProgress({ message: 'PASO 3: Clicando en BUSCAR y esperando 40 seg. a que DIA procese...', current: 9, total: 100, percentage: 14 });
+      onProgress({ message: 'PASO 3: Clicando en BUSCAR y esperando a que DIA procese...', current: 9, total: 100, percentage: 14 });
 
       await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-      // Esperar 40 segundos para que el servidor de DIA procese la búsqueda
-      await page.waitForTimeout(40000);
+      // Esperar 30 segundos para que el servidor de DIA procese la búsqueda
+      await page.waitForTimeout(30000);
 
       // Re-detectar frame por si hubo recarga
       dataFrame = await findDataFrame(page, 8000);
@@ -157,6 +163,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       // Re-detectar frame tras cambio de tamaño de página
       dataFrame = await findDataFrame(page, 8000);
     }
+
 
     // ─── PASO 5: Mapear total de páginas y extraer una a una ─────────────────
     let totalPages = 1;
@@ -338,6 +345,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         
         let navSuccess = false;
         const nextSelectors = [
+          'a:has-text("Sig")',
           '#GRIDPAGING_NEXT',
           'a[id*="GRIDPAGING_NEXT"]',
           'a[id*="PAGINGNEXT"]',
@@ -345,22 +353,25 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           'a[id*="next"]',
           '.gx-paging-next',
           'li.next a',
-          'a:has-text("Sig")',
           'a:has-text("Siguiente")',
           'a:has-text("Next")',
           '[title="Siguiente"]',
           '[title="Next"]'
         ];
 
-        for (const nSel of nextSelectors) {
-          try {
-            const nextBtn = dataFrame.locator(nSel).first();
-            if (await nextBtn.isVisible({ timeout: 2000 })) {
-              await nextBtn.click();
-              navSuccess = true;
-              break;
-            }
-          } catch (e) {}
+        for (const f of uniqueFramesToScan) {
+          if (navSuccess) break;
+          for (const nSel of nextSelectors) {
+            try {
+              const nextBtn = f.locator(nSel).first();
+              if (await nextBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
+                console.log(`[Ext-${extractionId}] Clic en siguiente página con selector: ${nSel}`);
+                await nextBtn.click();
+                navSuccess = true;
+                break;
+              }
+            } catch (e) {}
+          }
         }
 
         if (!navSuccess) {
@@ -375,6 +386,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         // Esperar 4 segundos a que la tabla cargue la nueva página
         await page.waitForTimeout(4000);
       }
+
     }
 
     const finalSummaryMsg = filterExactDates && totalSkipped > 0
