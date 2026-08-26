@@ -469,23 +469,27 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
         await f.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       } catch (e) {}
 
-      // Paso 1: Intentar abrir trigger de dropdown
+      // Paso 1: Abrir el menú emergente de paginación clicando en el botón 'Página X de Y' al pie
       const dropdownTriggers = [
+        'a:has-text("Página")',
+        'span:has-text("Página")',
+        'a:has-text("Pág")',
+        'span:has-text("Pág")',
         '[id*="ROWSPERPAGE"]',
         'a[id*="ROWSPERPAGE"]',
         'a[id*="rowsperpage"]',
         '.gx-pagination-page-size',
-        'a:has-text("10 filas")',
-        'a:has-text("5 filas")',
-        'span:has-text("10 filas")',
+        '[class*="Pagination"] a',
+        '[class*="pagination"] a',
         '.GridWithPaginationBar a',
+        '[id*="PAGING"] a'
       ];
 
       for (const trigger of dropdownTriggers) {
         try {
           const el = f.locator(trigger).first();
           if (await el.isVisible({ timeout: 1500 }).catch(() => false)) {
-            console.log(`[Ext-${extractionId}] Abriendo menú de registros por página con: ${trigger}`);
+            console.log(`[Ext-${extractionId}] Abriendo popup de paginación con: ${trigger}`);
             await el.click();
             await page.waitForTimeout(1000);
             break;
@@ -493,12 +497,13 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
         } catch (e) {}
       }
 
-      // Paso 2: Clicar en la opción "50 filas"
+      // Paso 2: Clicar en la opción "50 filas" dentro del popup desplegado
       const optionLabel = `${targetSize} filas`;
       const optionSelectors = [
         `a:has-text("${optionLabel}")`,
         `span:has-text("${optionLabel}")`,
         `li:has-text("${optionLabel}")`,
+        `text="${optionLabel}"`,
         `a:has-text("${targetSize}")`,
         `li > a:has-text("${targetSize}")`,
       ];
@@ -509,11 +514,11 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
           if (await optEl.isVisible({ timeout: 2000 }).catch(() => false)) {
             console.log(`[Ext-${extractionId}] Haciendo click en opción "${optionLabel}" (selector: ${sel})...`);
             await optEl.click();
-            console.log(`[Ext-${extractionId}] Esperando 30 segundos a que la tabla recargue con ${targetSize} filas...`);
+            console.log(`[Ext-${extractionId}] Esperando 15 segundos a que la tabla recargue con ${targetSize} filas...`);
             if (onProgress) {
-              onProgress({ message: `PASO 4: Esperando 30 seg. a que cargue la vista de ${targetSize} filas...`, current: 11, total: 100, percentage: 17 });
+              onProgress({ message: `PASO 4: Esperando 15 seg. a que cargue la vista de ${targetSize} filas...`, current: 11, total: 100, percentage: 17 });
             }
-            await page.waitForTimeout(30000);
+            await page.waitForTimeout(15000);
             applied = true;
             console.log(`[Ext-${extractionId}] Vista de ${targetSize} filas aplicada exitosamente.`);
             break;
@@ -523,13 +528,14 @@ async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onPr
     }
 
     if (!applied) {
-      console.log(`[Ext-${extractionId}] Opción "${targetSize} filas" no encontrada. Continuando con tamaño por defecto.`);
+      console.log(`[Ext-${extractionId}] Opción "${targetSize} filas" no encontrada. Continuando con la vista actual.`);
     }
 
   } catch (e) {
     console.log(`[Ext-${extractionId}] Aviso en configuración de vista:`, e.message);
   }
 }
+
 
 async function getExactTotalPages(pageOrFrame) {
   try {
