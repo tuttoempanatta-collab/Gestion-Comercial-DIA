@@ -92,10 +92,23 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log(`[Ext-${extractionId}] Aviso navegando menú lateral:`, e.message);
     }
 
-    // Espera oficial de 40 segundos para que la vista ARTÍCULOS PROMO VIEW cargue completamente
+    // Esperar a que el portal abra y cargue la vista de ARTÍCULOS PROMO VIEW (puede ser en nueva pestaña o en iframe)
     console.log(`[Ext-${extractionId}] PASO 1: Esperando 40 segundos para que cargue la vista de promociones...`);
     onProgress({ message: 'PASO 1: Esperando 40 seg. a que el portal DIA cargue la grilla...', current: 4, total: 100, percentage: 8 });
     await page.waitForTimeout(40000);
+
+    // Si el menú abrió una nueva pestaña en el navegador, cambiar a esa pestaña
+    const openPages = context.pages();
+    for (const p of openPages) {
+      const pTitle = await p.title().catch(() => '');
+      const pUrl = p.url();
+      console.log(`[Ext-${extractionId}] Pestaña detectada: "${pTitle}" (${pUrl})`);
+      if (pTitle.toLowerCase().includes('promo') || pUrl.toLowerCase().includes('promo') || pUrl.toLowerCase().includes('articulos')) {
+        console.log(`[Ext-${extractionId}] Cambiando a pestaña activa: "${pTitle}"`);
+        page = p;
+        break;
+      }
+    }
 
     // Detectar el frame que contiene los controles de GeneXus
     let dataFrame = await findDataFrame(page, 15000);
