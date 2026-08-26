@@ -44,8 +44,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
   });
 
-  // Bloquear inmediatamente imágenes, fuentes, media y estilos pesados antes de cargar la página para ahorrar hasta 70% RAM
-  await context.route('**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot,css,mp4,mp3}', route => route.abort());
+  // Bloquear solo imágenes y media (NO bloquear CSS — GeneXus necesita el CSS para inicializar su runtime JS)
+  await context.route('**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,eot,mp4,mp3,webp,ico}', route => route.abort());
+
 
   const page = await context.newPage();
 
