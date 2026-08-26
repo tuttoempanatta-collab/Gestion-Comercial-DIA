@@ -368,6 +368,30 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 }
 
 
+async function findDataFrame(p, maxWaitMs = 15000) {
+  const targets = '#vDESDE, #BTNBUSCAR, #GridContainerTbl, .Grid_WorkWith, table';
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    const allFrames = p.frames ? p.frames() : [p];
+    for (const f of allFrames) {
+      try {
+        const el = await f.$(targets);
+        if (el) {
+          return f;
+        }
+      } catch (e) {}
+    }
+    if (p.waitForTimeout) {
+      await p.waitForTimeout(1000);
+    } else {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  
+  return p.mainFrame ? p.mainFrame() : p;
+}
+
 async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onProgress) {
   console.log(`[Ext-${extractionId}] Configurando vista de ${targetSize} filas por página en portal DIA...`);
   if (onProgress) {
