@@ -4,25 +4,10 @@ import { useState, useEffect, useRef } from 'react'
 import { Play, Terminal, Loader2, CheckCircle2, AlertCircle, Calendar } from 'lucide-react'
 import { API_URL } from '@/lib/api'
 
-const getDefaultDates = () => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const lastDay = new Date(year, now.getMonth() + 1, 0).getDate();
-  return {
-    start: `${year}-${month}-01`,
-    end: `${year}-${month}-${String(lastDay).padStart(2, '0')}`
-  };
-};
-
 export default function ExtractPage() {
-  const defaults = getDefaultDates();
-  const [startDate, setStartDate] = useState(defaults.start)
-  const [endDate, setEndDate] = useState(defaults.end)
-  const [pageSize, setPageSize] = useState('50')
-  const [filterExactDates, setFilterExactDates] = useState(true)
-  const [exactStartDate, setExactStartDate] = useState(defaults.start)
-  const [exactEndDate, setExactEndDate] = useState(defaults.end)
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [pageSize, setPageSize] = useState('10')
   const [isExtracting, setIsExtracting] = useState(false)
   const [logs, setLogs] = useState<any[]>([])
   const [progress, setProgress] = useState({ percentage: 0, message: '' })
@@ -90,14 +75,7 @@ export default function ExtractPage() {
       const res = await fetch(API_URL('/api/extract'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          startDate, 
-          endDate, 
-          pageSize,
-          filterExactDates,
-          exactStartDate: exactStartDate || startDate,
-          exactEndDate: exactEndDate || endDate
-        })
+        body: JSON.stringify({ startDate, endDate, pageSize })
       })
       const data = await res.json()
 
@@ -147,11 +125,7 @@ export default function ExtractPage() {
               <input 
                 type="date" 
                 value={startDate}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setStartDate(val);
-                  setExactStartDate(val);
-                }}
+                onChange={(e) => setStartDate(e.target.value)}
                 className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500 transition-colors"
               />
             </div>
@@ -161,11 +135,7 @@ export default function ExtractPage() {
               <input 
                 type="date" 
                 value={endDate}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setEndDate(val);
-                  setExactEndDate(val);
-                }}
+                onChange={(e) => setEndDate(e.target.value)}
                 className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500 transition-colors"
               />
             </div>
@@ -182,54 +152,6 @@ export default function ExtractPage() {
                 <option value="20">20 registros por página</option>
                 <option value="50">50 registros por página</option>
               </select>
-            </div>
-
-            {/* Second Filter: Exact Date Matching */}
-            <div className="pt-2 border-t border-slate-800 flex flex-col gap-3">
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-300">
-                <input 
-                  type="checkbox"
-                  checked={filterExactDates}
-                  onChange={(e) => {
-                    setFilterExactDates(e.target.checked)
-                    if (e.target.checked) {
-                      if (!exactStartDate) setExactStartDate(startDate)
-                      if (!exactEndDate) setExactEndDate(endDate)
-                    }
-                  }}
-                  className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-red-600 focus:ring-red-500 focus:ring-offset-slate-900"
-                />
-                Filtrar por coincidencia exacta de vigencia de oferta
-              </label>
-
-              {filterExactDates && (
-                <div className="flex flex-col gap-3 p-3 bg-slate-900/60 border border-slate-800 rounded-xl animate-fade-in">
-                  <span className="text-[10px] text-slate-400">
-                    Omite automáticamente ofertas semanales u de otras fechas que no coincidan con la vigencia requerida.
-                  </span>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-medium text-slate-400">Vigencia Desde</label>
-                      <input 
-                        type="date" 
-                        value={exactStartDate || startDate}
-                        onChange={(e) => setExactStartDate(e.target.value)}
-                        className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-red-500"
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[10px] font-medium text-slate-400">Vigencia Hasta</label>
-                      <input 
-                        type="date" 
-                        value={exactEndDate || endDate}
-                        onChange={(e) => setExactEndDate(e.target.value)}
-                        className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-red-500"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 

@@ -101,7 +101,7 @@ app.post('/api/cancel-extract', (req, res) => {
 });
 
 app.post('/api/extract', async (req, res) => {
-  const { startDate, endDate, pageSize, filterExactDates, exactStartDate, exactEndDate } = req.body;
+  const { startDate, endDate, pageSize } = req.body;
   
   try {
     const extractionId = await createExtraction(startDate, endDate);
@@ -112,24 +112,16 @@ app.post('/api/extract', async (req, res) => {
     
     console.log(`[DEBUG] Finalizando preparación para Ext-${extractionId}. Llamando a runScraper...`);
     
-    // Start scraper in background with options
-    runScraper(
-      extractionId, 
-      startDate, 
-      endDate, 
-      settings, 
-      pageSize, 
-      (progressObj) => {
-        const normalized = typeof progressObj === 'string' 
-          ? { message: progressObj, percentage: 0 } 
-          : progressObj;
+    // Start scraper in background
+    runScraper(extractionId, startDate, endDate, settings, pageSize, (progressObj) => {
+      const normalized = typeof progressObj === 'string' 
+        ? { message: progressObj, percentage: 0 } 
+        : progressObj;
 
-        console.log(`[Ext-${extractionId}] ${normalized.message}`);
-        activeLogs[extractionId].push({ timestamp: new Date().toISOString(), ...normalized });
-        activeProgress[extractionId] = normalized;
-      },
-      { filterExactDates, exactStartDate, exactEndDate }
-    )
+      console.log(`[Ext-${extractionId}] ${normalized.message}`);
+      activeLogs[extractionId].push({ timestamp: new Date().toISOString(), ...normalized });
+      activeProgress[extractionId] = normalized;
+    })
     .then(async (count) => {
       await updateExtractionStatus(extractionId, 'completed', count);
       console.log(`[Ext-${extractionId}] Extracción finalizada con éxito. ${count} artículos procesados.`);
