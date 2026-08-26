@@ -201,103 +201,123 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       // Esperar a que la grilla esté disponible
       await dataFrame.waitForSelector('table tr, #GridContainerTbl, .Grid_WorkWith', { timeout: 10000 }).catch(() => {});
 
-      // ─── Extraer filas de la página actual con mapeo dinámico de columnas ────
-      const { rows, skippedCount, diagRow } = await dataFrame.evaluate((params) => {
-        const { filterExactDates, targetExactStart, targetExactEnd } = params;
-        
-        // Buscar todas las filas de tabla en el documento
-        let trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
-        if (trs.length === 0) trs = Array.from(document.querySelectorAll('.Grid_WorkWith tr'));
-        if (trs.length === 0) trs = Array.from(document.querySelectorAll('table.Grid tr'));
-        if (trs.length === 0) trs = Array.from(document.querySelectorAll('table[id*="Grid"] tr'));
-        if (trs.length === 0) trs = Array.from(document.querySelectorAll('table[id*="GRID"] tr'));
-        if (trs.length === 0) {
-          const tables = document.querySelectorAll('table');
-          for (const t of tables) {
-            const r = t.querySelectorAll('tr');
-            if (r.length > 2) { trs = Array.from(r); break; }
-          }
-        }
+      // ─── Extraer filas: buscar en dataFrame y en todos los frames secundarios ────
+      let pageRows = [];
+      let pageSkipped = 0;
+      let pageDiag = '';
 
-        const rows = [];
-        let skippedCount = 0;
-        let diagRow = '';
+      const framesToScanForRows = [dataFrame, ...(page.frames ? page.frames() : [])];
+      const uniqueFramesToScan = Array.from(new Set(framesToScanForRows));
 
-        for (const row of trs) {
-          const tds = Array.from(row.querySelectorAll('td'));
-          if (tds.length < 5 || row.querySelector('th') || row.classList.contains('Grid_WorkWithHeader')) {
-            continue;
-          }
-
-          const cellTexts = tds.map(td => td.innerText.trim());
-          if (!diagRow && cellTexts.length >= 3) {
-            diagRow = cellTexts.slice(0, 7).join(' | ');
-          }
-
-          // Detección dinámica: buscar la columna que tiene el código numérico (4 a 8 dígitos)
-          let codeIdx = cellTexts.findIndex((t, idx) => /^\d{4,8}$/.test(t) && idx <= 2);
-          if (codeIdx === -1) {
-            codeIdx = cellTexts.findIndex((t, idx) => /^\d+$/.test(t) && idx <= 2);
-          }
-          if (codeIdx === -1) continue; // No es fila de datos
-
-          const codigo = cellTexts[codeIdx] || '';
-          const articulo = cellTexts[codeIdx + 1] || '';
-          const combo = cellTexts[codeIdx + 2] || '';
-          const precio_fidelizado = '0,00';
-
-          // Buscar fechas con formato DD/MM/YYYY en las celdas
-          const dateIndices = [];
-          cellTexts.forEach((t, idx) => {
-            if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
-              dateIndices.push(idx);
-            }
-          });
-
-          const fecha_desde = dateIndices.length >= 1 ? cellTexts[dateIndices[0]] : (cellTexts[codeIdx + 4] || '');
-          const fecha_hasta = dateIndices.length >= 2 ? cellTexts[dateIndices[1]] : (cellTexts[codeIdx + 5] || '');
-          const cantidades  = cellTexts[codeIdx + 6] || cellTexts[cellTexts.length - 1] || '1';
-
-          const data = {
-            codigo,
-            articulo,
-            combo,
-            precio_fidelizado,
-            fecha_desde,
-            fecha_hasta,
-            cantidades
-          };
-
-          if (data.codigo) {
-            if (filterExactDates) {
-              const matchStart = !targetExactStart || data.fecha_desde === targetExactStart;
-              const matchEnd   = !targetExactEnd   || data.fecha_hasta === targetExactEnd;
-              if (!matchStart || !matchEnd) {
-                skippedCount++;
-                continue;
+      for (const f of uniqueFramesToScan) {
+        try {
+          const res = await f.evaluate((params) => {
+            const { filterExactDates, targetExactStart, targetExactEnd } = params;
+            
+            // Buscar todas las filas de tabla en el documento
+            let trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
+            if (trs.length === 0) trs = Array.from(document.querySelectorAll('.Grid_WorkWith tr'));
+            if (trs.length === 0) trs = Array.from(document.querySelectorAll('table.Grid tr'));
+            if (trs.length === 0) trs = Array.from(document.querySelectorAll('table[id*="Grid"] tr'));
+            if (trs.length === 0) trs = Array.from(document.querySelectorAll('table[id*="GRID"] tr'));
+            if (trs.length === 0) {
+              const tables = document.querySelectorAll('table');
+              for (const t of tables) {
+                const r = t.querySelectorAll('tr');
+                if (r.length > 2) { trs = Array.from(r); break; }
               }
             }
-            rows.push(data);
+
+            const rows = [];
+            let skippedCount = 0;
+            let diagRow = '';
+
+            for (const row of trs) {
+              const tds = Array.from(row.querySelectorAll('td'));
+              if (tds.length < 5 || row.querySelector('th') || row.classList.contains('Grid_WorkWithHeader')) {
+                continue;
+              }
+
+              const cellTexts = tds.map(td => td.innerText.trim());
+              if (!diagRow && cellTexts.length >= 3) {
+                diagRow = cellTexts.slice(0, 7).join(' | ');
+              }
+
+              // Detección dinámica: buscar la columna que tiene el código numérico (4 a 8 dígitos)
+              let codeIdx = cellTexts.findIndex((t, idx) => /^\d{4,8}$/.test(t) && idx <= 2);
+              if (codeIdx === -1) {
+                codeIdx = cellTexts.findIndex((t, idx) => /^\d+$/.test(t) && idx <= 2);
+              }
+              if (codeIdx === -1) continue; // No es fila de datos
+
+              const codigo = cellTexts[codeIdx] || '';
+              const articulo = cellTexts[codeIdx + 1] || '';
+              const combo = cellTexts[codeIdx + 2] || '';
+              const precio_fidelizado = '0,00';
+
+              // Buscar fechas con formato DD/MM/YYYY en las celdas
+              const dateIndices = [];
+              cellTexts.forEach((t, idx) => {
+                if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) {
+                  dateIndices.push(idx);
+                }
+              });
+
+              const fecha_desde = dateIndices.length >= 1 ? cellTexts[dateIndices[0]] : (cellTexts[codeIdx + 4] || '');
+              const fecha_hasta = dateIndices.length >= 2 ? cellTexts[dateIndices[1]] : (cellTexts[codeIdx + 5] || '');
+              const cantidades  = cellTexts[codeIdx + 6] || cellTexts[cellTexts.length - 1] || '1';
+
+              const data = {
+                codigo,
+                articulo,
+                combo,
+                precio_fidelizado,
+                fecha_desde,
+                fecha_hasta,
+                cantidades
+              };
+
+              if (data.codigo) {
+                if (filterExactDates) {
+                  const matchStart = !targetExactStart || data.fecha_desde === targetExactStart;
+                  const matchEnd   = !targetExactEnd   || data.fecha_hasta === targetExactEnd;
+                  if (!matchStart || !matchEnd) {
+                    skippedCount++;
+                    continue;
+                  }
+                }
+                rows.push(data);
+              }
+            }
+            return { rows, skippedCount, diagRow };
+          }, { filterExactDates, targetExactStart, targetExactEnd });
+
+          if (res.rows && res.rows.length > 0) {
+            pageRows = res.rows;
+            pageSkipped = res.skippedCount;
+            pageDiag = res.diagRow;
+            dataFrame = f; // Vincular al frame donde realmente están los datos
+            break;
           }
-        }
-        return { rows, skippedCount, diagRow };
-      }, { filterExactDates, targetExactStart, targetExactEnd });
+        } catch (e) {}
+      }
 
       // Guardar las filas extraídas en la base de datos
-      for (const row of rows) {
+      for (const row of pageRows) {
         await saveCommercialAction(extractionId, row);
       }
 
-      totalItems   += rows.length;
-      totalSkipped += skippedCount;
+      totalItems   += pageRows.length;
+      totalSkipped += pageSkipped;
 
-      console.log(`[Ext-${extractionId}] Pág. ${p}/${totalPages}: ${rows.length} guardados (acumulado: ${totalItems}). Muestra: [${diagRow || 'sin datos'}]`);
+      console.log(`[Ext-${extractionId}] Pág. ${p}/${totalPages}: ${pageRows.length} guardados (acumulado: ${totalItems}). Muestra: [${pageDiag || 'sin datos'}]`);
       onProgress({ 
-        message: `Página ${p}/${totalPages} completada (${rows.length} ítems en esta pág., ${totalItems} acumulados)...`, 
+        message: `Página ${p}/${totalPages} completada (${pageRows.length} ítems en esta pág., ${totalItems} acumulados)...`, 
         current: p, 
         total: totalPages,
         percentage: progressPct
       });
+
 
       // ─── Navegar a la siguiente página si no es la última ──────────────────
       if (p < totalPages) {
@@ -368,20 +388,34 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 }
 
 
-async function findDataFrame(p, maxWaitMs = 15000) {
-  const targets = '#vDESDE, #BTNBUSCAR, #GridContainerTbl, .Grid_WorkWith, table';
+// ─── Helpers de localización y GeneXus multi-frame ──────────────────────────
+
+async function findDataFrame(p, maxWaitMs = 25000) {
+  const specificTargets = '#vDESDE, #BTNBUSCAR, #GridContainerTbl, .Grid_WorkWith, input[name*="vDESDE"], table[id*="Grid"]';
   const startTime = Date.now();
   
   while (Date.now() - startTime < maxWaitMs) {
     const allFrames = p.frames ? p.frames() : [p];
+    
+    // Prioridad 1: frames que contengan elementos específicos de GeneXus
     for (const f of allFrames) {
       try {
-        const el = await f.$(targets);
+        const el = await f.$(specificTargets);
         if (el) {
+          console.log(`[findDataFrame] Frame específico encontrado: ${f.url()}`);
           return f;
         }
       } catch (e) {}
     }
+    
+    // Prioridad 2: frame por coincidencia en URL
+    for (const f of allFrames) {
+      if (f.url().toLowerCase().includes('articulospromoview') || f.url().toLowerCase().includes('promo')) {
+        console.log(`[findDataFrame] Frame por URL encontrado: ${f.url()}`);
+        return f;
+      }
+    }
+
     if (p.waitForTimeout) {
       await p.waitForTimeout(1000);
     } else {
@@ -395,77 +429,76 @@ async function findDataFrame(p, maxWaitMs = 15000) {
 async function applyPageSizeToPortal(page, frame, targetSize, extractionId, onProgress) {
   console.log(`[Ext-${extractionId}] Configurando vista de ${targetSize} filas por página en portal DIA...`);
   if (onProgress) {
-    onProgress({ message: `Configurando vista de ${targetSize} registros por página...`, current: 10, total: 100, percentage: 13 });
+    onProgress({ message: `PASO 4: Configurando vista de ${targetSize} registros por página...`, current: 11, total: 100, percentage: 16 });
   }
 
   try {
-    // El portal DIA muestra un dropdown de texto con opciones: "5 filas", "10 filas", "20 filas", "50 filas"
-    // Hay que hacer clic en el control que abre el menú (el icono de flecha al pie de la tabla), luego clicar en el texto "50 filas"
-
-    // Paso 1: Hacer clic en el control desplegable de registros por página (ícono de flecha al pie de la grilla)
-    // El portal DIA usa un link/span con el número actual de registros o el ícono de paginación inferior
-    const dropdownTriggers = [
-      'a[id*="ROWSPERPAGE"]',
-      'a[id*="rowsperpage"]',
-      '.gx-pagination-page-size',
-      'a:has-text("10 filas")',
-      'a:has-text("5 filas")',
-      'span:has-text("10 filas")',
-      'li:has-text("10 filas")',
-      '.GridWithPaginationBar a',
-      '[id*="ROWSPERPAGE"]',
-    ];
-
-    let dropdownOpened = false;
-    for (const trigger of dropdownTriggers) {
-      try {
-        const el = frame.locator(trigger).first();
-        if (await el.isVisible({ timeout: 2000 })) {
-          console.log(`[Ext-${extractionId}] Abriendo menú de registros por página con: ${trigger}`);
-          await el.click();
-          await page.waitForTimeout(1500);
-          dropdownOpened = true;
-          break;
-        }
-      } catch (e) {}
-    }
-
-    if (!dropdownOpened) {
-      console.log(`[Ext-${extractionId}] No se encontró trigger del dropdown. Intentando click directo en "50 filas"...`);
-    }
-
-    // Paso 2: Hacer clic en la opción de texto "50 filas" (o la correspondiente al targetSize)
-    const optionLabel = `${targetSize} filas`;
-    const optionSelectors = [
-      `a:has-text("${optionLabel}")`,
-      `span:has-text("${optionLabel}")`,
-      `li:has-text("${optionLabel}")`,
-      `a:has-text("${targetSize}")`,
-      `li > a:has-text("${targetSize}")`,
-    ];
-
+    const framesToTry = [frame, ...(page.frames ? page.frames() : [])];
+    const uniqueFrames = Array.from(new Set(framesToTry));
     let applied = false;
-    for (const sel of optionSelectors) {
-      try {
-        const optEl = frame.locator(sel).first();
-        if (await optEl.isVisible({ timeout: 3000 })) {
-          console.log(`[Ext-${extractionId}] Haciendo click en opción "${optionLabel}" (selector: ${sel})...`);
-          await optEl.click();
-          console.log(`[Ext-${extractionId}] Esperando 30 segundos a que la tabla recargue con ${targetSize} filas...`);
-          if (onProgress) {
-            onProgress({ message: `PASO 4: Esperando 30 seg. a que cargue la vista de ${targetSize} filas...`, current: 11, total: 100, percentage: 17 });
-          }
-          await page.waitForTimeout(30000); // Esperar 30 segundos para que cargue la web con 50 registros
-          applied = true;
-          console.log(`[Ext-${extractionId}] Vista de ${targetSize} filas aplicada exitosamente.`);
-          break;
-        }
-      } catch (e) {}
-    }
 
+    for (const f of uniqueFrames) {
+      if (applied) break;
+
+      try {
+        await f.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      } catch (e) {}
+
+      // Paso 1: Intentar abrir trigger de dropdown
+      const dropdownTriggers = [
+        '[id*="ROWSPERPAGE"]',
+        'a[id*="ROWSPERPAGE"]',
+        'a[id*="rowsperpage"]',
+        '.gx-pagination-page-size',
+        'a:has-text("10 filas")',
+        'a:has-text("5 filas")',
+        'span:has-text("10 filas")',
+        '.GridWithPaginationBar a',
+      ];
+
+      for (const trigger of dropdownTriggers) {
+        try {
+          const el = f.locator(trigger).first();
+          if (await el.isVisible({ timeout: 1500 }).catch(() => false)) {
+            console.log(`[Ext-${extractionId}] Abriendo menú de registros por página con: ${trigger}`);
+            await el.click();
+            await page.waitForTimeout(1000);
+            break;
+          }
+        } catch (e) {}
+      }
+
+      // Paso 2: Clicar en la opción "50 filas"
+      const optionLabel = `${targetSize} filas`;
+      const optionSelectors = [
+        `a:has-text("${optionLabel}")`,
+        `span:has-text("${optionLabel}")`,
+        `li:has-text("${optionLabel}")`,
+        `a:has-text("${targetSize}")`,
+        `li > a:has-text("${targetSize}")`,
+      ];
+
+      for (const sel of optionSelectors) {
+        try {
+          const optEl = f.locator(sel).first();
+          if (await optEl.isVisible({ timeout: 2000 }).catch(() => false)) {
+            console.log(`[Ext-${extractionId}] Haciendo click en opción "${optionLabel}" (selector: ${sel})...`);
+            await optEl.click();
+            console.log(`[Ext-${extractionId}] Esperando 30 segundos a que la tabla recargue con ${targetSize} filas...`);
+            if (onProgress) {
+              onProgress({ message: `PASO 4: Esperando 30 seg. a que cargue la vista de ${targetSize} filas...`, current: 11, total: 100, percentage: 17 });
+            }
+            await page.waitForTimeout(30000);
+            applied = true;
+            console.log(`[Ext-${extractionId}] Vista de ${targetSize} filas aplicada exitosamente.`);
+            break;
+          }
+        } catch (e) {}
+      }
+    }
 
     if (!applied) {
-      console.log(`[Ext-${extractionId}] No se pudo clicar en "${optionLabel}". La tabla puede mostrar 10 filas. Continuando...`);
+      console.log(`[Ext-${extractionId}] Opción "${targetSize} filas" no encontrada. Continuando con tamaño por defecto.`);
     }
 
   } catch (e) {
@@ -481,13 +514,13 @@ async function getExactTotalPages(pageOrFrame) {
         const result = await frame.evaluate(() => {
           const bodyText = document.body.innerText || '';
 
-          // 1. Coincidencia flexible de "Página X de Y" / "Pág. X de Y" / "Page X of Y"
+          // 1. "Página X de Y" / "Pág. X de Y" / "Page X of Y"
           const m1 = bodyText.match(/(?:P\u00e1gina|P\u00e1g\.?|Pagina|Page)\s*\d+\s*(?:de|of)\s*(\d+)/i);
           if (m1) {
             return { total: parseInt(m1[1]), source: 'bodyText-regex', match: m1[0] };
           }
 
-          // 2. Buscar en elementos de paginación específicos de GeneXus
+          // 2. Elementos de paginación específicos de GeneXus
           const pEls = document.querySelectorAll('.gx-pagination, .PagingButtons, .GridWithPaginationBar, .gx-pagination-bar, [class*="Pagination"], [id*="Pagination"]');
           for (const el of pEls) {
             const t = el.innerText || '';
@@ -513,10 +546,9 @@ async function getExactTotalPages(pageOrFrame) {
           return null;
         });
 
-        if (result) {
+        if (result && result.total >= 1) {
           console.log(`[PageDetect] Total=${result.total} fuente=${result.source} texto="${result.match}"`);
-          // Aceptar cualquier valor >= 1 (incluyendo 1 pagina real)
-          if (result.total >= 1) return result.total;
+          return result.total;
         }
       } catch (e) {}
     }
@@ -526,64 +558,67 @@ async function getExactTotalPages(pageOrFrame) {
   }
 }
 
-
 async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extractionId) {
-  if (!valueStr) return;
+  if (!valueStr) return false;
   console.log(`[Ext-${extractionId}] Registrando campo GeneXus ${fieldName}: ${valueStr}...`);
 
-  try {
-    const el = frame.locator(selector).first();
-    await el.waitFor({ state: 'visible', timeout: 15000 });
+  const framesToTry = [frame, ...(page.frames ? page.frames() : [])];
+  const uniqueFrames = Array.from(new Set(framesToTry));
 
-    // 1. Hacer click para enfocar el campo y limpiar el contenido
-    await el.click({ clickCount: 3 });
-    await page.waitForTimeout(200);
-    await page.keyboard.press('Control+a');
-    await page.keyboard.press('Delete');
-    await page.waitForTimeout(200);
+  for (const f of uniqueFrames) {
+    try {
+      const el = f.locator(selector).first();
+      if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await el.click({ clickCount: 3 });
+        await page.waitForTimeout(200);
+        await page.keyboard.press('Control+a');
+        await page.keyboard.press('Delete');
+        await page.waitForTimeout(200);
 
-    // 2. Extraer sólo los dígitos (ej. "01092026" a partir de "01/09/2026")
-    // La máscara nativa de GeneXus insertará automáticamente las barras "/" al tipear los dígitos
-    const digitsOnly = valueStr.replace(/\D/g, '');
-    console.log(`[Ext-${extractionId}] Tipeando dígitos "${digitsOnly}" en campo ${fieldName} (máscara GeneXus auto-formatea DD/MM/YYYY)`);
+        const digitsOnly = valueStr.replace(/\D/g, '');
+        console.log(`[Ext-${extractionId}] Tipeando dígitos "${digitsOnly}" en campo ${fieldName} (frame: ${f.url()})`);
 
-    // 3. Tipear dígito por dígito con delay para que la máscara los procese correctamente
-    for (const digit of digitsOnly) {
-      await page.keyboard.type(digit);
-      await page.waitForTimeout(80);
-    }
+        for (const digit of digitsOnly) {
+          await page.keyboard.type(digit);
+          await page.waitForTimeout(80);
+        }
 
-    await page.waitForTimeout(300);
-    await page.keyboard.press('Tab');
-    await page.waitForTimeout(500);
+        await page.waitForTimeout(300);
+        await page.keyboard.press('Tab');
+        await page.waitForTimeout(400);
 
-    // 4. Verificar el valor final del campo
-    const finalValue = await el.inputValue().catch(() => 'N/A');
-    console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${finalValue}" (esperado: "${valueStr}").`);
-
-  } catch (e) {
-    console.log(`[Ext-${extractionId}] Error registrando campo ${fieldName}:`, e.message);
+        const finalValue = await el.inputValue().catch(() => 'N/A');
+        console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${finalValue}" (esperado: "${valueStr}").`);
+        return true;
+      }
+    } catch (e) {}
   }
+  console.log(`[Ext-${extractionId}] Campo ${fieldName} no encontrado.`);
+  return false;
 }
 
 async function clickGeneXusBuscar(page, frame, extractionId) {
   console.log(`[Ext-${extractionId}] Disparando evento de búsqueda GeneXus...`);
-  try {
-    const buscarBtn = frame.locator('#BTNBUSCAR, input[value="Buscar"], button:has-text("Buscar"), input[name="BTNBUSCAR"]').first();
-    if (await buscarBtn.isVisible()) {
-      await buscarBtn.click();
-    }
+  const framesToTry = [frame, ...(page.frames ? page.frames() : [])];
+  const uniqueFrames = Array.from(new Set(framesToTry));
 
-    // Disparar además el evento nativo del framework GeneXus si está disponible
-    await frame.evaluate(() => {
+  for (const f of uniqueFrames) {
+    try {
+      const buscarBtn = f.locator('#BTNBUSCAR, input[value="Buscar"], button:has-text("Buscar"), input[name*="BTNBUSCAR"]').first();
+      if (await buscarBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await buscarBtn.click();
+        console.log(`[Ext-${extractionId}] Clic en BUSCAR realizado en frame: ${f.url()}`);
+        return;
+      }
+    } catch (e) {}
+  }
+
+  for (const f of uniqueFrames) {
+    await f.evaluate(() => {
       if (window.gx && window.gx.evt && window.gx.evt.execEvt) {
-        try {
-          window.gx.evt.execEvt("E'BUSCAR'.", this);
-        } catch(e) {}
+        try { window.gx.evt.execEvt("E'BUSCAR'.", this); } catch(e) {}
       }
     }).catch(() => {});
-  } catch (e) {
-    console.log(`[Ext-${extractionId}] Aviso al presionar Buscar:`, e.message);
   }
 }
 
