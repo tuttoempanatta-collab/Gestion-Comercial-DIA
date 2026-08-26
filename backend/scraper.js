@@ -154,8 +154,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         // Pausa de 40 segundos — tiempo suficiente para que DIA procese el filtro sin sobrecargar la memoria
         await page.waitForTimeout(40000);
 
-        // Re-detectar dataFrame por si el submit recargó el iframe
-        dataFrame = await findDataFrame(page);
+        // Re-detectar dataFrame por si el submit recargó el iframe (timeout corto: 8s)
+        dataFrame = await findDataFrame(page, 8000);
 
         // Esperar si aún hubiera alguna máscara activa
         await dataFrame.waitForSelector('.gx-mask, .Loading, #Loading, .gx-mask-single', { state: 'hidden', timeout: 20000 }).catch(() => {});
@@ -174,37 +174,44 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
 
     let totalPages = 1;
-    onProgress({ message: 'Calculando total de páginas reales (vista de 50 ítems)...', current: 12, total: 100, percentage: 14 });
+    onProgress({ message: 'Calculando total de páginas (vista de 50 ítems)...', current: 12, total: 100, percentage: 14 });
     
-    for (let attempt = 1; attempt <= 6; attempt++) {
+    // Detectar el total de páginas con máx. 3 intentos y 4s entre intentos (NO volver a hacer 90s de búsqueda)
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        dataFrame = await findDataFrame(page);
         const detected = await getExactTotalPages(dataFrame);
         if (detected && detected > 0) {
           totalPages = detected;
-          console.log(`[Ext-${extractionId}] Total páginas detectadas exitosamente: ${totalPages} (intento ${attempt})`);
+          console.log(`[Ext-${extractionId}] Total páginas detectado: ${totalPages} (intento ${attempt})`);
           break;
         }
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(4000);
       } catch (e) {}
     }
 
-    onProgress({ message: `Iniciando extracción a velocidad normal (${totalPages} páginas)...`, current: 0, total: totalPages, percentage: 15 });
+    console.log(`[Ext-${extractionId}] Procesando ${totalPages} página(s) con ${pageSize} filas c/u.`);
+    onProgress({ message: `Iniciando extracción: ${totalPages} páginas de ${pageSize} filas c/u...`, current: 0, total: totalPages, percentage: 15 });
 
     let totalItems = 0;
     let totalSkipped = 0;
     for (let p = 1; p <= totalPages; p++) {
-      dataFrame = await findDataFrame(page);
+      // Solo re-detectar el frame si está inválido (evita el delay de 8-90s en cada página)
+      try {
+        await dataFrame.$('body');
+      } catch (e) {
+        console.log(`[Ext-${extractionId}] Frame inválido en pág. ${p}, re-detectando...`);
+        dataFrame = await findDataFrame(page, 8000);
+      }
       
       if (global.cancelledExtractions?.has(extractionId)) {
         onProgress({ message: 'Cancelado.', current: p, total: totalPages, percentage: 100 });
         break;
       }
 
-      // Auto-corregir totalPages si la grilla refrescó tardíamente y reporta un total menor (ej. 66 en lugar de 451)
-      const currentDetected = await getExactTotalPages(dataFrame);
+      // Auto-corregir totalPages si la grilla reporta un total menor
+      const currentDetected = await getExactTotalPages(dataFrame).catch(() => null);
       if (currentDetected && currentDetected > 0 && currentDetected < totalPages) {
-        console.log(`[Ext-${extractionId}] Total de páginas actualizado en tiempo real: ${totalPages} -> ${currentDetected}`);
+        console.log(`[Ext-${extractionId}] Total páginas corregido: ${totalPages} → ${currentDetected}`);
         totalPages = currentDetected;
       }
 
