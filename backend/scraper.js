@@ -94,34 +94,40 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     }
 
     onProgress({ message: 'Buscando panel de datos GeneXus...', current: 5, total: 100, percentage: 7 });
-    
-    const findDataFrameRecursive = async (parent) => {
-      const frames = parent.childFrames();
-      for (const f of frames) {
-        try {
-          const hasTable = await f.$('#GridContainerTbl, .Grid_WorkWith, #vDESDE, #BTNBUSCAR, table, [id*="Grid"], [id*="GRID"]');
-          if (hasTable) return f;
-          const found = await findDataFrameRecursive(f);
-          if (found) return found;
-        } catch (e) {}
-      }
-      return null;
-    };
 
-    const findDataFrame = async (p) => {
-      const found = await findDataFrameRecursive(p.mainFrame());
-      return found || p.mainFrame();
+    // Función de detección de frame con POLLING ACTIVO:
+    // Prueba todos los frames disponibles cada 2 segundos hasta que uno de ellos
+    // tenga los elementos del formulario GeneXus (#vDESDE, #BTNBUSCAR o #GridContainerTbl).
+    // Esto es necesario porque GeneXus carga el contenido en iframes que pueden tardar en aparecer.
+    const findDataFrame = async (p, maxWaitMs = 90000) => {
+      const targets = '#vDESDE, #BTNBUSCAR, #GridContainerTbl, .Grid_WorkWith';
+      const startTime = Date.now();
+      
+      while (Date.now() - startTime < maxWaitMs) {
+        const allFrames = p.frames();
+        console.log(`[FrameSearch] Escaneando ${allFrames.length} frame(s)...`);
+        
+        for (const f of allFrames) {
+          try {
+            const el = await f.$(targets);
+            if (el) {
+              console.log(`[FrameSearch] Frame con formulario GeneXus encontrado: ${f.url()}`);
+              return f;
+            }
+          } catch (e) {}
+        }
+        
+        console.log(`[FrameSearch] Frame con GeneXus no encontrado aún. Esperando 2s... (elapsed: ${Math.round((Date.now()-startTime)/1000)}s)`);
+        await p.waitForTimeout(2000);
+      }
+      
+      console.log(`[FrameSearch] Timeout. Usando mainFrame como fallback.`);
+      return p.mainFrame();
     };
 
     let dataFrame = await findDataFrame(page);
-    console.log(`[Ext-${extractionId}] Frame de datos de GeneXus detectado: ${dataFrame.url()}`);
+    console.log(`[Ext-${extractionId}] Frame GeneXus activo: ${dataFrame.url()}`);
 
-    try {
-      await dataFrame.waitForSelector('#vDESDE, #GridContainerTbl', { state: 'visible', timeout: 40000 });
-      console.log('[DEBUG] Panel de filtros detectado (#vDESDE visible)');
-    } catch (e) {
-      console.log('[DEBUG] Timeout esperando #vDESDE, continuando...', e.message);
-    }
 
     if (startDate || endDate) {
       onProgress({ message: 'Aplicando filtros de fecha en portal DIA...', current: 5, total: 100, percentage: 10 });
