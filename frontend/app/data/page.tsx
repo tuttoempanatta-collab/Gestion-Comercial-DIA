@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check, Pencil } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check, Pencil, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 import { generatePosters } from '@/lib/posterGenerator'
 import { Smartphone, CreditCard, Wallet, Info } from 'lucide-react'
 import { API_URL } from '@/lib/api'
+
 
 const PROMOS = [
   { id: 'mp', name: 'Mercado Pago', day: 'Miércoles', discount: 0.10, condition: 'Sin tope de reintegro' },
@@ -92,6 +93,23 @@ export default function DataPage() {
   const [dateFilterEnd, setDateFilterEnd] = useState('')
   const [exactStartMatch, setExactStartMatch] = useState(false)
   const [exactEndMatch, setExactEndMatch] = useState(false)
+  const [sortColumn, setSortColumn] = useState<string | null>(null)
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
+
+  const handleSort = (colKey: string) => {
+    if (sortColumn === colKey) {
+      if (sortDirection === 'asc') {
+        setSortDirection('desc')
+      } else {
+        setSortColumn(null)
+        setSortDirection('asc')
+      }
+    } else {
+      setSortColumn(colKey)
+      setSortDirection('asc')
+    }
+  }
+
 
   const handleUpdateRecord = (id: number) => {
     const oldData = [...data];
@@ -293,14 +311,69 @@ export default function DataPage() {
     return baseFilter && hasStock;
   })
 
+  const sortedAndFilteredData = useMemo(() => {
+    let result = [...filteredData]
+    if (!sortColumn) return result
+
+    return result.sort((a, b) => {
+      let valA: any = ''
+      let valB: any = ''
+
+      if (sortColumn === 'producto') {
+        valA = (a.articulo || a.codigo || '').toString().toLowerCase()
+        valB = (b.articulo || b.codigo || '').toString().toLowerCase()
+      } else if (sortColumn === 'desde') {
+        const parseDateMs = (dStr: string) => {
+          if (!dStr) return 0
+          const parts = dStr.split('/')
+          if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).getTime()
+          return new Date(dStr).getTime() || 0
+        }
+        valA = parseDateMs(a.fecha_desde)
+        valB = parseDateMs(b.fecha_desde)
+      } else if (sortColumn === 'hasta') {
+        const parseDateMs = (dStr: string) => {
+          if (!dStr) return 0
+          const parts = dStr.split('/')
+          if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).getTime()
+          return new Date(dStr).getTime() || 0
+        }
+        valA = parseDateMs(a.fecha_hasta)
+        valB = parseDateMs(b.fecha_hasta)
+      } else if (sortColumn === 'stock') {
+        valA = Number(a.stock || 0)
+        valB = Number(b.stock || 0)
+      } else if (sortColumn === 'combo') {
+        valA = (a.combo || '').toString().toLowerCase()
+        valB = (b.combo || '').toString().toLowerCase()
+      } else if (sortColumn === 'precio') {
+        valA = parseFloat(String(a.precio_fidelizado || '0').replace('.', '').replace(',', '.')) || 0
+        valB = parseFloat(String(b.precio_fidelizado || '0').replace('.', '').replace(',', '.')) || 0
+      } else if (sortColumn === 'final') {
+        const priceA = a.precio_final !== null && a.precio_final !== undefined && a.precio_final !== ''
+          ? parseFloat(String(a.precio_final).replace(',', '.'))
+          : calculateFinalPrice(a.precio_fidelizado, a.combo)
+        const priceB = b.precio_final !== null && b.precio_final !== undefined && b.precio_final !== ''
+          ? parseFloat(String(b.precio_final).replace(',', '.'))
+          : calculateFinalPrice(b.precio_fidelizado, b.combo)
+        valA = priceA || 0
+        valB = priceB || 0
+      }
+
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [filteredData, sortColumn, sortDirection])
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredData.length) {
+    if (selectedIds.size === sortedAndFilteredData.length) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(filteredData.map(item => item.id)))
+      setSelectedIds(new Set(sortedAndFilteredData.map(item => item.id)))
     }
   }
+
 
   const toggleSelectItem = (id: number) => {
     const newSelected = new Set(selectedIds)
@@ -858,23 +931,59 @@ export default function DataPage() {
                       <th className="px-6 py-4 border-b border-slate-800 w-12 text-center">
                         <input 
                           type="checkbox" 
-                          checked={selectedIds.size > 0 && selectedIds.size === filteredData.length}
+                          checked={selectedIds.size > 0 && selectedIds.size === sortedAndFilteredData.length}
                           onChange={toggleSelectAll}
                           className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-red-600 focus:ring-red-500 focus:ring-offset-slate-900"
                         />
                       </th>
-                      <th className="px-6 py-4 border-b border-slate-800">Producto</th>
-                      <th className="px-6 py-4 border-b border-slate-800">Desde</th>
-                      <th className="px-6 py-4 border-b border-slate-800">Hasta</th>
-                      <th className="px-6 py-4 border-b border-slate-800">Stock</th>
-                      <th className="px-6 py-4 border-b border-slate-800">Combo</th>
-                      <th className="px-6 py-4 border-b border-slate-800">Precio</th>
-                      <th className="px-6 py-4 border-b border-slate-800">Final</th>
+                      <th onClick={() => handleSort('producto')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
+                        <div className="flex items-center gap-1.5">
+                          <span>Producto</span>
+                          {sortColumn === 'producto' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+                        </div>
+                      </th>
+                      <th onClick={() => handleSort('desde')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
+                        <div className="flex items-center gap-1.5">
+                          <span>Desde</span>
+                          {sortColumn === 'desde' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+                        </div>
+                      </th>
+                      <th onClick={() => handleSort('hasta')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
+                        <div className="flex items-center gap-1.5">
+                          <span>Hasta</span>
+                          {sortColumn === 'hasta' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+                        </div>
+                      </th>
+                      <th onClick={() => handleSort('stock')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
+                        <div className="flex items-center gap-1.5">
+                          <span>Stock</span>
+                          {sortColumn === 'stock' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+                        </div>
+                      </th>
+                      <th onClick={() => handleSort('combo')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
+                        <div className="flex items-center gap-1.5">
+                          <span>Combo</span>
+                          {sortColumn === 'combo' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+                        </div>
+                      </th>
+                      <th onClick={() => handleSort('precio')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
+                        <div className="flex items-center gap-1.5">
+                          <span>Precio</span>
+                          {sortColumn === 'precio' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+                        </div>
+                      </th>
+                      <th onClick={() => handleSort('final')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
+                        <div className="flex items-center gap-1.5">
+                          <span>Final</span>
+                          {sortColumn === 'final' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+                        </div>
+                      </th>
                       <th className="px-6 py-4 border-b border-slate-800 text-right">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/50 text-xs">
-                    {filteredData.length > 0 ? filteredData.map((row) => {
+                    {sortedAndFilteredData.length > 0 ? sortedAndFilteredData.map((row) => {
+
                       const finalPrice = row.precio_final !== null && row.precio_final !== undefined && row.precio_final !== ''
                         ? parseFloat(String(row.precio_final).replace(',', '.'))
                         : calculateFinalPrice(row.precio_fidelizado, row.combo);
