@@ -100,53 +100,114 @@ export default function ExtractMonthlyPage() {
     })
   }
 
+  const calculateWeeklySubRanges = (startStr: string, endStr: string) => {
+    if (!startStr || !endStr) return [{ start: startStr, end: endStr, label: 'Mes Completo' }]
+
+    const start = new Date(startStr + 'T00:00:00')
+    const end = new Date(endStr + 'T00:00:00')
+    
+    const diffDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 3600 * 24))
+    if (diffDays <= 10) {
+      return [{ start: startStr, end: endStr, label: `Período (${startStr} a ${endStr})` }]
+    }
+
+    const year = start.getFullYear()
+    const month = start.getMonth()
+    const lastDayOfMonth = new Date(year, month + 1, 0).getDate()
+
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const format = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`
+
+    const w1End = Math.min(7, lastDayOfMonth)
+    const w2Start = 8
+    const w2End = Math.min(15, lastDayOfMonth)
+    const w3Start = 16
+    const w3End = Math.min(22, lastDayOfMonth)
+    const w4Start = 23
+    const w4End = lastDayOfMonth
+
+    return [
+      { start: format(year, month, 1),       end: format(year, month, w1End), label: `Semana 1 (${format(year, month, 1)} al ${format(year, month, w1End)})` },
+      { start: format(year, month, w2Start), end: format(year, month, w2End), label: `Semana 2 (${format(year, month, w2Start)} al ${format(year, month, w2End)})` },
+      { start: format(year, month, w3Start), end: format(year, month, w3End), label: `Semana 3 (${format(year, month, w3Start)} al ${format(year, month, w3End)})` },
+      { start: format(year, month, w4Start), end: format(year, month, w4End), label: `Semana 4 (${format(year, month, w4Start)} al ${format(year, month, w4End)})` },
+    ]
+  }
+
   const handleStartExtraction = async () => {
     setIsExtracting(true)
     setStatus('running')
     setLogs([])
     setExtractionId(null)
-    setProgress({ percentage: 0, message: 'Iniciando Extracción Mensual por Etapas...' })
-    
-    const STAGE_MAX_PAGES = 15;
-    const ESTIMATED_MAX_PAGES = 75; // Soporta mes completo (ej. 75 u 80 páginas)
-    const totalStages = Math.ceil(ESTIMATED_MAX_PAGES / STAGE_MAX_PAGES);
-    setTotalStagesCount(totalStages)
+
+    const subRanges = calculateWeeklySubRanges(startDate, endDate)
+    setTotalStagesCount(subRanges.length)
 
     try {
-      for (let s = 1; s <= totalStages; s++) {
-        const startP = (s - 1) * STAGE_MAX_PAGES + 1;
-        setCurrentStage(s)
+      for (let i = 0; i < subRanges.length; i++) {
+        const stage = subRanges[i]
+        setCurrentStage(i + 1)
+
+        setLogs(prev => [...prev, { 
+          timestamp: new Date().toISOString(), 
+          message: `--- LOTE SEMANAL ${i + 1}/${subRanges.length}: ${stage.label} ---` 
+        }])
         
-        setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `--- ETAPA ${s}/${totalStages} (Páginas ${startP} a ${startP + STAGE_MAX_PAGES - 1}) ---` }])
-        
-        const id = await runStageCall(startP, STAGE_MAX_PAGES, s);
-        setExtractionId(id)
-        
-        const success = await pollStageCompletion(id);
-        if (!success) {
-          throw new Error(`La Etapa ${s} falló o se interrumpió.`);
+        setProgress({ percentage: 0, message: `Iniciando ${stage.label}...` })
+
+        const res = await fetch(API_URL('/api/extract'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            startDate: stage.start, 
+            endDate: stage.end, 
+            pageSize, 
+            startPage: 1, 
+            maxPages: 30, 
+            stageName: `Extracción Mensual - ${stage.label}` 
+          })
+        })
+        const data = await res.json()
+        if (!res.ok || data.extractionId == null) {
+          throw new Error(data.error || `Error en Lote ${i + 1}`)
         }
-        
-        setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `✨ Etapa ${s}/${totalStages} finalizada. Archivo guardado de forma independiente.` }])
-        
-        // Pausa de 3 segundos entre etapas para permitir limpieza completa de RAM en servidor
-        if (s < totalStages) {
-          setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `⏳ Aguardando 3 segundos para liberar memoria RAM antes de la Etapa ${s + 1}...` }])
+
+        setExtractionId(data.extractionId)
+
+        const success = await pollStageCompletion(data.extractionId)
+        if (!success) {
+          throw new Error(`El Lote ${i + 1} (${stage.label}) falló o se interrumpió.`)
+        }
+
+        setLogs(prev => [...prev, { 
+          timestamp: new Date().toISOString(), 
+          message: `✨ Lote ${i + 1}/${subRanges.length} (${stage.label}) completado con éxito. Navegador cerrado y RAM liberada.` 
+        }])
+
+        if (i < subRanges.length - 1) {
+          setLogs(prev => [...prev, { 
+            timestamp: new Date().toISOString(), 
+            message: `⏳ Aguardando 3 segundos para liberar memoria RAM antes del siguiente lote...` 
+          }])
           await new Promise(r => setTimeout(r, 3000))
         }
       }
 
       setIsExtracting(false)
       setStatus('completed')
-      setProgress({ percentage: 100, message: '¡Extracción Mensual completada en todas las etapas!' })
-      setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `🎉 ¡PROCESO FINALIZADO! Se han extraído y guardado todas las etapas por separado. Podés unificarlas directamente en el módulo de Cartelería.` }])
+      setProgress({ percentage: 100, message: '¡Extracción Mensual completada en todos los lotes semanales!' })
+      setLogs(prev => [...prev, { 
+        timestamp: new Date().toISOString(), 
+        message: `🎉 ¡PROCESO FINALIZADO! Se han extraído las 4 semanas del mes en lotes limpios e independientes. Podés unificarlos directamente en el módulo de Cartelería.` 
+      }])
     } catch (err: any) {
-      console.error('[Extracción Mensual por Etapas Error]', err)
+      console.error('[Extracción Mensual por Semanas Error]', err)
       setIsExtracting(false)
       setStatus('failed')
       setProgress({ percentage: 0, message: `❌ ${err.message}` })
     }
   }
+
 
 
   return (

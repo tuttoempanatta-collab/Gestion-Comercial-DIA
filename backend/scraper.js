@@ -323,24 +323,55 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     console.log(`[Ext-${extractionId}] Procesando sub-etapa: Páginas ${startPageParam} a ${endPageParam} (de ${totalPages} totales).`);
 
-    // Si startPageParam > 1, avanzar la paginación hasta la página inicial requerida
+    // Si startPageParam > 1, salto directo a la página inicial mediante popup de GeneXus
     if (startPageParam > 1) {
-      console.log(`[Ext-${extractionId}] Avanzando paginación a página inicial ${startPageParam}...`);
-      onProgress({ message: `Avanzando paginación a página ${startPageParam}...`, current: 0, total: totalPages, percentage: 15 });
+      console.log(`[Ext-${extractionId}] Realizando salto directo a página inicial ${startPageParam}...`);
+      onProgress({ message: `Saltando directamente a página ${startPageParam}...`, current: 0, total: totalPages, percentage: 15 });
 
-      for (let skip = 1; skip < startPageParam; skip++) {
-        dataFrame = await findDataFrame(page);
-        const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
-        const nextBtn = dataFrame.locator(nextSelector).first();
-        if (await nextBtn.isVisible().catch(() => false)) {
-          await nextBtn.click();
-          await page.waitForTimeout(3000);
-        } else {
-          await dataFrame.click('a[id*="NEXT"]').catch(() => {});
-          await page.waitForTimeout(3000);
+      let jumped = false;
+      const framesToTry = [dataFrame, ...(page.frames ? page.frames() : [])];
+      
+      for (const f of framesToTry) {
+        if (jumped) break;
+        try {
+          // Abrir popup de paginación al pie
+          const trigger = f.locator('a:has-text("Página"), span:has-text("Página"), a:has-text("Pág"), [id*="PAGING"] a').first();
+          if (await trigger.isVisible({ timeout: 1500 }).catch(() => false)) {
+            await trigger.click();
+            await page.waitForTimeout(800);
+            
+            // Buscar input "Ir a página:"
+            const pageInput = f.locator('input[id*="PAGING_PAGE"], input[name*="PAGING_PAGE"], input[id*="PAGE"], input[type="number"], input.gx-pagination-input').first();
+            if (await pageInput.isVisible({ timeout: 1500 }).catch(() => false)) {
+              await pageInput.fill(String(startPageParam));
+              await pageInput.press('Enter');
+              await page.waitForTimeout(4000);
+              jumped = true;
+              console.log(`[Ext-${extractionId}] Salto directo a página ${startPageParam} ejecutado con éxito.`);
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Fallback: si no se pudo usar el popup, avanzar con clics rápidos si son pocas páginas
+      if (!jumped) {
+        console.log(`[Ext-${extractionId}] Fallback: avanzando a página ${startPageParam} mediante navegación rápida...`);
+        for (let skip = 1; skip < startPageParam; skip++) {
+          dataFrame = await findDataFrame(page);
+          const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
+          const nextBtn = dataFrame.locator(nextSelector).first();
+          if (await nextBtn.isVisible().catch(() => false)) {
+            await nextBtn.click();
+            await page.waitForTimeout(2000);
+          } else {
+            await dataFrame.click('a[id*="NEXT"]').catch(() => {});
+            await page.waitForTimeout(2000);
+          }
         }
       }
     }
+
 
     for (let p = startPageParam; p <= endPageParam; p++) {
       dataFrame = await findDataFrame(page);
