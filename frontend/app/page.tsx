@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Activity, Clock, Database, Download, FileText } from 'lucide-react'
+import { Activity, Clock, Database, Download, FileText, CalendarRange } from 'lucide-react'
 import { API_URL } from '@/lib/api'
 
 export default function Dashboard() {
@@ -67,27 +67,34 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="glass-card p-6 flex flex-col gap-4">
           <h3 className="text-xl font-semibold text-white">Acciones Rápidas</h3>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <button 
               className="btn-primary h-24 flex-col gap-2"
               onClick={() => window.location.href = '/extract'}
             >
               <Download size={24} />
-              <span>Nueva Extracción</span>
+              <span>Extracción</span>
+            </button>
+            <button 
+              className="btn-secondary h-24 flex-col gap-2 border-indigo-500/30 text-indigo-400"
+              onClick={() => window.location.href = '/extract-monthly'}
+            >
+              <CalendarRange size={24} />
+              <span>Extr. Mensual</span>
             </button>
             <button 
               className="btn-secondary h-24 flex-col gap-2"
               onClick={() => window.location.href = '/data'}
             >
               <Database size={24} />
-              <span>Ver Historial</span>
+              <span>Historial</span>
             </button>
             <button 
               className="btn-secondary h-24 flex-col gap-2 border-red-500/30 text-red-400"
               onClick={() => window.location.href = '/data'}
             >
               <FileText size={24} />
-              <span>Generar Carteles</span>
+              <span>Carteles</span>
             </button>
           </div>
         </div>

@@ -6,6 +6,7 @@ import './globals.css'
 import { 
   LayoutDashboard, 
   Download, 
+  CalendarRange,
   Database, 
   Settings, 
   FileText, 
@@ -32,12 +33,13 @@ export default function RootLayout({
   }, [])
 
   const navItems = [
-    { name: 'Dashboard',      href: '/',        icon: <LayoutDashboard size={20} /> },
-    { name: 'Extracción',     href: '/extract', icon: <Download size={20} /> },
-    { name: 'Datos',          href: '/data',    icon: <Database size={20} /> },
-    { name: 'Cartelería',     href: '/data',    icon: <FileText size={20} />, highlight: true },
-    { name: 'MOT Bot',        href: '/mot-bot', icon: <Bot size={20} />,     bot: true },
-    { name: 'Configuración',  href: '/settings', icon: <Settings size={20} /> },
+    { name: 'Dashboard',           href: '/',                icon: <LayoutDashboard size={20} /> },
+    { name: 'Extracción',          href: '/extract',         icon: <Download size={20} /> },
+    { name: 'Extracción Mensual',  href: '/extract-monthly', icon: <CalendarRange size={20} /> },
+    { name: 'Datos',               href: '/data',            icon: <Database size={20} /> },
+    { name: 'Cartelería',          href: '/data',            icon: <FileText size={20} />, highlight: true },
+    { name: 'MOT Bot',             href: '/mot-bot',         icon: <Bot size={20} />,     bot: true },
+    { name: 'Configuración',       href: '/settings',        icon: <Settings size={20} /> },
   ]
 
   return (
