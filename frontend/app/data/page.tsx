@@ -23,11 +23,58 @@ const DAYS = ['Todos', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'S�
 export default function DataPage() {
   const [history, setHistory] = useState<any[]>([])
   const [selectedExtraction, setSelectedExtraction] = useState<number | null>(null)
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<number>>(new Set())
   const [data, setData] = useState<any[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [showOutOfStock, setShowOutOfStock] = useState(false)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+
+  const toggleHistorySelection = (e: React.MouseEvent, id: number) => {
+    e.stopPropagation()
+    const next = new Set(selectedHistoryIds)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    setSelectedHistoryIds(next)
+  }
+
+  const handleUnifyExtractions = async () => {
+    if (selectedHistoryIds.size === 0) return
+    const ids = Array.from(selectedHistoryIds)
+    try {
+      const results = await Promise.all(ids.map(id => 
+        fetch(API_URL(`/api/data/${id}`)).then(res => res.json())
+      ))
+      
+      const allRows = results.flat().filter(Boolean)
+      const map = new Map<string, any>()
+      for (const item of allRows) {
+        if (!item.codigo) continue
+        if (!map.has(item.codigo)) {
+          map.set(item.codigo, item)
+        } else {
+          const existing = map.get(item.codigo)
+          map.set(item.codigo, {
+            ...existing,
+            articulo: item.articulo && item.articulo !== item.codigo ? item.articulo : existing.articulo,
+            precio_fidelizado: item.precio_fidelizado !== '0,00' ? item.precio_fidelizado : existing.precio_fidelizado,
+            stock: Math.max(existing.stock || 0, item.stock || 0)
+          })
+        }
+      }
+      const unifiedList = Array.from(map.values())
+      setData(unifiedList)
+      setSelectedExtraction(null)
+      setSelectedIds(new Set())
+      alert(`🎉 ¡Extracciones unificadas con éxito! Se combinaron ${unifiedList.length} artículos de ${ids.length} etapas.`)
+    } catch (e: any) {
+      alert(`Error unificando extracciones: ${e.message}`)
+    }
+  }
+
   
   const [selectedDay, setSelectedDay] = useState('Todos')
   const [selectedPromoId, setSelectedPromoId] = useState<string | null>(null)
@@ -470,33 +517,57 @@ export default function DataPage() {
                   <Trash2 size={12} /> REINICIAR
                 </button>
               </div>
+
+              {selectedHistoryIds.size > 0 && (
+                <button 
+                  onClick={handleUnifyExtractions}
+                  className="w-full py-2 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-indigo-900/40 flex items-center justify-center gap-2 transition-all animate-pulse"
+                >
+                  <Package size={14} />
+                  Unificar Seleccionadas ({selectedHistoryIds.size})
+                </button>
+              )}
+
               <div className="flex flex-row lg:flex-col gap-2 overflow-x-auto lg:overflow-y-auto lg:max-h-[500px] pb-2 lg:pb-0 scrollbar-hide">
                 {history.map((run) => (
-                  <button
+                  <div
                     key={run.id}
                     onClick={() => setSelectedExtraction(run.id)}
-                    className={`group relative p-3 rounded-xl text-left transition-all border min-w-[180px] lg:min-w-0 ${
+                    className={`group relative p-3 rounded-xl text-left transition-all border min-w-[180px] lg:min-w-0 cursor-pointer flex items-center gap-2.5 ${
                       selectedExtraction === run.id 
                       ? 'bg-red-600/20 border-red-500/40 text-white shadow-inner' 
-                      : 'bg-slate-900/30 border-slate-800/50 text-slate-400 hover:border-slate-700'
+                      : selectedHistoryIds.has(run.id)
+                        ? 'bg-indigo-600/20 border-indigo-500/40 text-white'
+                        : 'bg-slate-900/30 border-slate-800/50 text-slate-400 hover:border-slate-700'
                     }`}
                   >
-                    <div className="text-xs font-bold truncate pr-6">
-                      {new Date(run.timestamp).toLocaleDateString()} - {new Date(run.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                    </div>
-                    <div className="text-[10px] opacity-50 mt-1 flex justify-between items-center">
-                      <span>{run.items_count} items</span>
-                      <span className="capitalize">{run.status}</span>
+                    <input 
+                      type="checkbox"
+                      checked={selectedHistoryIds.has(run.id)}
+                      onChange={(e) => toggleHistorySelection(e as any, run.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-0 shrink-0 cursor-pointer"
+                      title="Seleccionar para unificar"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-bold truncate pr-4">
+                        {new Date(run.timestamp).toLocaleDateString()} - {new Date(run.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      </div>
+                      <div className="text-[10px] opacity-50 mt-1 flex justify-between items-center">
+                        <span>{run.items_count} items</span>
+                        <span className="capitalize">{run.status}</span>
+                      </div>
                     </div>
                     <div 
                       onClick={(e) => handleDeleteExtraction(e, run.id)}
-                      className="absolute top-3 right-3 p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-red-600 hover:text-white transition-all text-slate-500"
+                      className="p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-red-600 hover:text-white transition-all text-slate-500 shrink-0"
                     >
                       <Trash2 size={12} />
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
+
             </div>
 
             {/* NEW: PROMOTION PANEL */}

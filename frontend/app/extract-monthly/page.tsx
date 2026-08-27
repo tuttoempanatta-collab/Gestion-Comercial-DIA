@@ -40,88 +40,114 @@ export default function ExtractMonthlyPage() {
     }
   }
 
+  const [currentStage, setCurrentStage] = useState(1)
+  const [totalStagesCount, setTotalStagesCount] = useState(1)
+
   useEffect(() => {
     scrollToBottom()
   }, [logs])
 
-  useEffect(() => {
-    let interval: any
-    if (isExtracting) {
-      interval = setInterval(() => {
-        if (extractionId) {
-          fetch(API_URL(`/api/logs/${extractionId}`))
-            .then(res => res.json())
-            .then(data => {
-              if (data.logs && data.logs.length > 0) {
-                setLogs(data.logs)
-              }
-              if (data.progress && data.progress.percentage !== undefined) {
-                setProgress(data.progress)
-              }
-              
-              const lastLog = data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : null
-              if (lastLog?.message?.includes('finalizada') || lastLog?.message?.includes('completada')) {
-                setIsExtracting(false);
-                setStatus('completed');
-                localStorage.removeItem('activeExtraction')
-                localStorage.removeItem('activeExtractionId')
-              } else if (lastLog?.message?.includes('Error')) {
-                setIsExtracting(false);
-                setStatus('failed');
-                localStorage.removeItem('activeExtraction')
-                localStorage.removeItem('activeExtractionId')
-              }
-            })
-            .catch(err => {
-              console.error('[Polling Logs Error]:', err);
-            })
-        }
-      }, 2000)
+
+  const runStageCall = async (startP: number, maxP: number, stageNum: number) => {
+    const stageName = `Extracción Mensual - Etapa ${stageNum} (Págs ${startP}-${startP + maxP - 1})`;
+    
+    setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `🚀 Iniciando ${stageName}...` }])
+    setProgress({ percentage: 0, message: `Iniciando ${stageName}...` })
+    
+    const res = await fetch(API_URL('/api/extract'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        startDate, 
+        endDate, 
+        pageSize, 
+        startPage: startP, 
+        maxPages: maxP, 
+        stageName 
+      })
+    })
+    const data = await res.json()
+    if (!res.ok || data.extractionId == null) {
+      throw new Error(data.error || `Error del servidor (${res.status}) en Etapa ${stageNum}`)
     }
-    return () => clearInterval(interval)
-  }, [isExtracting, extractionId])
+    return data.extractionId
+  }
+
+  const pollStageCompletion = (id: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const pollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(API_URL(`/api/logs/${id}`))
+          const data = await res.json()
+          if (data.logs && data.logs.length > 0) {
+            setLogs(prev => {
+              const combined = [...prev, ...data.logs]
+              return combined.filter((v, i, a) => a.findIndex(t => t.timestamp === v.timestamp && t.message === v.message) === i)
+            })
+          }
+          if (data.progress) setProgress(data.progress)
+          
+          const lastLog = data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : null
+          if (lastLog?.message?.includes('finalizada') || lastLog?.message?.includes('completada')) {
+            clearInterval(pollTimer)
+            resolve(true)
+          } else if (lastLog?.message?.includes('Error')) {
+            clearInterval(pollTimer)
+            resolve(false)
+          }
+        } catch (e) {}
+      }, 2500)
+    })
+  }
 
   const handleStartExtraction = async () => {
     setIsExtracting(true)
     setStatus('running')
     setLogs([])
     setExtractionId(null)
-    setProgress({ percentage: 0, message: 'Iniciando...' })
+    setProgress({ percentage: 0, message: 'Iniciando Extracción Mensual por Etapas...' })
     
-    localStorage.setItem('activeExtraction', 'true')
-    
-    try {
-      const res = await fetch(API_URL('/api/extract'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startDate, endDate, pageSize })
-      })
-      const data = await res.json()
+    const STAGE_MAX_PAGES = 15;
+    const ESTIMATED_MAX_PAGES = 75; // Soporta mes completo (ej. 75 u 80 páginas)
+    const totalStages = Math.ceil(ESTIMATED_MAX_PAGES / STAGE_MAX_PAGES);
+    setTotalStagesCount(totalStages)
 
-      if (!res.ok || data.extractionId == null) {
-        throw new Error(data.error || `Error del servidor (${res.status}): respuesta inesperada`)
+    try {
+      for (let s = 1; s <= totalStages; s++) {
+        const startP = (s - 1) * STAGE_MAX_PAGES + 1;
+        setCurrentStage(s)
+        
+        setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `--- ETAPA ${s}/${totalStages} (Páginas ${startP} a ${startP + STAGE_MAX_PAGES - 1}) ---` }])
+        
+        const id = await runStageCall(startP, STAGE_MAX_PAGES, s);
+        setExtractionId(id)
+        
+        const success = await pollStageCompletion(id);
+        if (!success) {
+          throw new Error(`La Etapa ${s} falló o se interrumpió.`);
+        }
+        
+        setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `✨ Etapa ${s}/${totalStages} finalizada. Archivo guardado de forma independiente.` }])
+        
+        // Pausa de 3 segundos entre etapas para permitir limpieza completa de RAM en servidor
+        if (s < totalStages) {
+          setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `⏳ Aguardando 3 segundos para liberar memoria RAM antes de la Etapa ${s + 1}...` }])
+          await new Promise(r => setTimeout(r, 3000))
+        }
       }
 
-      setExtractionId(data.extractionId)
-      localStorage.setItem('activeExtractionId', String(data.extractionId))
+      setIsExtracting(false)
+      setStatus('completed')
+      setProgress({ percentage: 100, message: '¡Extracción Mensual completada en todas las etapas!' })
+      setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: `🎉 ¡PROCESO FINALIZADO! Se han extraído y guardado todas las etapas por separado. Podés unificarlas directamente en el módulo de Cartelería.` }])
     } catch (err: any) {
-      console.error('[Extraccion]', err)
+      console.error('[Extracción Mensual por Etapas Error]', err)
       setIsExtracting(false)
       setStatus('failed')
       setProgress({ percentage: 0, message: `❌ ${err.message}` })
-      localStorage.removeItem('activeExtraction')
     }
   }
 
-  useEffect(() => {
-    const active = localStorage.getItem('activeExtraction')
-    const id = localStorage.getItem('activeExtractionId')
-    if (active === 'true' && id) {
-      setIsExtracting(true)
-      setStatus('running')
-      setExtractionId(parseInt(id))
-    }
-  }, [])
 
   return (
     <div className="flex flex-col gap-8 animate-fade-in">
