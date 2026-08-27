@@ -498,9 +498,63 @@ export default function DataPage() {
   }
 
   const handleExport = (type: string) => {
-    if (!selectedExtraction) return
-    window.open(API_URL(`/api/export/${type}/${selectedExtraction}`))
+    const listToExport = sortedAndFilteredData.length > 0 ? sortedAndFilteredData : data;
+    if (listToExport.length === 0) {
+      alert('No hay datos para exportar en esta vista.');
+      return;
+    }
+
+    if (type === 'excel' || type === 'csv') {
+      const headers = ['Codigo', 'Articulo', 'Combo', 'Precio Fidelizado', 'Precio Final', 'Fecha Desde', 'Fecha Hasta', 'Stock', 'Cantidades'];
+      const rows = listToExport.map(item => {
+        const finalPrice = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
+          ? String(item.precio_final).replace('.', ',')
+          : String(calculateFinalPrice(item.precio_fidelizado, item.combo).toFixed(2)).replace('.', ',');
+        return [
+          `"${item.codigo || ''}"`,
+          `"${(item.articulo || '').replace(/"/g, '""')}"`,
+          `"${item.combo || ''}"`,
+          `"${item.precio_fidelizado || '0,00'}"`,
+          `"${finalPrice}"`,
+          `"${item.fecha_desde || ''}"`,
+          `"${item.fecha_hasta || ''}"`,
+          `"${item.stock || 0}"`,
+          `"${item.cantidades || 1}"`
+        ].join(';');
+      });
+
+      const csvContent = '\uFEFF' + [headers.join(';'), ...rows].join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const fileName = selectedExtraction 
+        ? `extraccion_${selectedExtraction}_export.csv`
+        : `extraccion_unificada_${dateStr}.csv`;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } else if (type === 'json') {
+      const jsonStr = JSON.stringify(listToExport, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const fileName = selectedExtraction 
+        ? `extraccion_${selectedExtraction}_export.json`
+        : `extraccion_unificada_${dateStr}.json`;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
   }
+
 
   const presetCombos = ['15%', '20%', '25%', '30%', '35%', '40%', '50%', '2DO AL 30%', '2DO AL 40%', '2DO AL 50%', '2DO AL 60%', '2DO AL 70%', '2DO AL 80%', '2X1', '3X2', '4X3', 'LLEVANDO'];
   const uniqueCombos = Array.from(new Set(data.map(item => item.combo))).filter(Boolean)
