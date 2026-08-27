@@ -40,9 +40,12 @@ module.exports = {
       );
       if (res.rows.length > 0) {
         const row = res.rows[0];
-        if (row.price_amount !== null && row.price_amount !== undefined) {
+        const hasPortalPrice = item.precio_fidelizado && item.precio_fidelizado !== '0,00' && item.precio_fidelizado !== '0';
+        if (!hasPortalPrice && row.price_amount !== null && row.price_amount !== undefined) {
           const numPrice = parseFloat(row.price_amount);
-          item.precio_fidelizado = isNaN(numPrice) ? '0,00' : String(numPrice.toFixed(2)).replace('.', ',');
+          if (!isNaN(numPrice) && numPrice > 0) {
+            item.precio_fidelizado = String(numPrice.toFixed(2)).replace('.', ',');
+          }
         }
         item.stock = row.current_quantity || 0;
         return item;
@@ -62,9 +65,12 @@ module.exports = {
       const stmt = db.prepare('SELECT LoyaltyDescription, PriceAmount, CurrentQuantityInUnits FROM Item WHERE ItemID = ?');
       const result = stmt.get(String(item.codigo));
       if (result) {
-        if (result.PriceAmount !== null && result.PriceAmount !== undefined) {
+        const hasPortalPrice = item.precio_fidelizado && item.precio_fidelizado !== '0,00' && item.precio_fidelizado !== '0';
+        if (!hasPortalPrice && result.PriceAmount !== null && result.PriceAmount !== undefined) {
           const numPrice = parseFloat(result.PriceAmount);
-          item.precio_fidelizado = isNaN(numPrice) ? '0,00' : String(numPrice.toFixed(2)).replace('.', ',');
+          if (!isNaN(numPrice) && numPrice > 0) {
+            item.precio_fidelizado = String(numPrice.toFixed(2)).replace('.', ',');
+          }
         }
         item.stock = result.CurrentQuantityInUnits || 0;
       } else {
@@ -74,6 +80,7 @@ module.exports = {
       console.error(`Error querying local catalog for item ${item.codigo}:`, e.message);
       item.stock = 0;
     }
+
 
     return item;
   }

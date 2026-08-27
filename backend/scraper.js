@@ -401,11 +401,12 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               codigo: tds[0]?.innerText.trim() || '',
               articulo: tds[1]?.innerText.trim() || '',
               combo: tds[2]?.innerText.trim() || '',
-              precio_fidelizado: '0,00',
+              precio_fidelizado: tds[3]?.innerText.trim() || '0,00',
               fecha_desde: tds[4]?.innerText.trim() || '',
               fecha_hasta: tds[5]?.innerText.trim() || '',
-              cantidades: tds[6]?.innerText.trim() || ''
+              cantidades: tds[6]?.innerText.trim() || '1'
             };
+
             if (data.codigo && !isNaN(parseInt(data.codigo))) {
               await window.saveRowToDb(data);
               count++;
