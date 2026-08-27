@@ -106,10 +106,11 @@ export default function ExtractMonthlyPage() {
     setLogs([])
     setExtractionId(null)
 
-    const STAGE_MAX_PAGES = 15;
-    const ESTIMATED_MAX_PAGES = 75; // Cubre las 73 páginas del mes entero de DIA
-    const totalStages = Math.ceil(ESTIMATED_MAX_PAGES / STAGE_MAX_PAGES); // 5 etapas
+    const STAGE_MAX_PAGES = 12;
+    const ESTIMATED_MAX_PAGES = 24; // A 50 filas por página, el mes entero son 24 páginas totales
+    const totalStages = Math.ceil(ESTIMATED_MAX_PAGES / STAGE_MAX_PAGES); // 2 etapas
     setTotalStagesCount(totalStages)
+
 
     try {
       for (let s = 1; s <= totalStages; s++) {

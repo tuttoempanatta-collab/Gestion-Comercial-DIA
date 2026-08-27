@@ -276,13 +276,16 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         
         if (foundPagination) {
           console.log(`[Ext-${extractionId}] Total páginas detectadas: ${totalPages} (intento ${attempt})`);
-          // Si hay filtros y el total es muy alto (> 300), probablemente aún no se aplicó el filtro
-          if ((startDate || endDate) && totalPages > 300 && attempt < 5) {
-            console.log(`[Ext-${extractionId}] El total parece no estar filtrado (${totalPages} > 300). Reintentando...`);
+          // Si el tamaño de página es 50 y el total > 35, la grilla todavía está mostrando 10 filas (73 págs). Reintentar lectura.
+          if (pageSize === '50' && totalPages > 35 && attempt < 5) {
+            console.log(`[Ext-${extractionId}] La grilla aún no terminó de cambiar a 50 filas (total=${totalPages} > 35). Aguardando recarga...`);
+            await page.waitForTimeout(5000);
+            continue;
           } else {
             break; 
           }
         }
+
         
         await page.waitForTimeout(5000);
       } catch (e) {
