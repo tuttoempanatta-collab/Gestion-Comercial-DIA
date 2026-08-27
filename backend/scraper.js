@@ -339,16 +339,25 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         try {
           // Abrir popup de paginación al pie
           const trigger = f.locator('a:has-text("Página"), span:has-text("Página"), a:has-text("Pág"), [id*="PAGING"] a').first();
-          if (await trigger.isVisible({ timeout: 1500 }).catch(() => false)) {
+          if (await trigger.isVisible({ timeout: 2000 }).catch(() => false)) {
             await trigger.click();
-            await page.waitForTimeout(800);
+            await page.waitForTimeout(1000);
             
             // Buscar input "Ir a página:"
             const pageInput = f.locator('input[id*="PAGING_PAGE"], input[name*="PAGING_PAGE"], input[id*="PAGE"], input[type="number"], input.gx-pagination-input').first();
-            if (await pageInput.isVisible({ timeout: 1500 }).catch(() => false)) {
+            if (await pageInput.isVisible({ timeout: 2000 }).catch(() => false)) {
               await pageInput.fill(String(startPageParam));
               await pageInput.press('Enter');
-              await page.waitForTimeout(4000);
+
+              // Clic en la flecha de recarga ⟳ si existe
+              const refreshBtn = f.locator('a[id*="REFRESH"], button:has-text("⟳"), a:has-text("⟳")').first();
+              if (await refreshBtn.isVisible().catch(() => false)) {
+                await refreshBtn.click().catch(() => {});
+              }
+
+              console.log(`[Ext-${extractionId}] Esperando a que el portal DIA cargue la página ${startPageParam}...`);
+              await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
+              await page.waitForTimeout(7000);
               jumped = true;
               console.log(`[Ext-${extractionId}] Salto directo a página ${startPageParam} ejecutado con éxito.`);
               break;
@@ -357,19 +366,21 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         } catch (e) {}
       }
 
-      // Fallback: si no se pudo usar el popup, avanzar con clics rápidos si son pocas páginas
+      // Fallback: si no se pudo usar el popup, avanzar con clics de navegación
       if (!jumped) {
-        console.log(`[Ext-${extractionId}] Fallback: avanzando a página ${startPageParam} mediante navegación rápida...`);
+        console.log(`[Ext-${extractionId}] Fallback: avanzando a página ${startPageParam} mediante navegación directa...`);
         for (let skip = 1; skip < startPageParam; skip++) {
           dataFrame = await findDataFrame(page);
           const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
           const nextBtn = dataFrame.locator(nextSelector).first();
           if (await nextBtn.isVisible().catch(() => false)) {
-            await nextBtn.click();
-            await page.waitForTimeout(2000);
+            await nextBtn.click({ timeout: 5000 }).catch(() => {});
+            await page.waitForSelector('.gx-mask, .Loading', { state: 'hidden', timeout: 15000 }).catch(() => {});
+            await page.waitForTimeout(4000);
           } else {
             await dataFrame.click('a[id*="NEXT"]').catch(() => {});
-            await page.waitForTimeout(2000);
+            await page.waitForSelector('.gx-mask, .Loading', { state: 'hidden', timeout: 15000 }).catch(() => {});
+            await page.waitForTimeout(4000);
           }
         }
       }
@@ -391,7 +402,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         percentage: 15 + Math.floor(((p - startPageParam + 1) / (endPageParam - startPageParam + 1)) * 80)
       });
 
-      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 15000 }).catch(() => {});
+      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(2500);
       
       // Process rows INSIDE the browser to avoid moving large objects to Node.js
       const pageResults = await dataFrame.evaluate(async () => {
@@ -424,18 +436,22 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       // Click Next Page if needed
       if (p < endPageParam && p < totalPages) {
+        dataFrame = await findDataFrame(page);
         const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
         const nextButton = dataFrame.locator(nextSelector).first();
         
-        if (await nextButton.isVisible()) {
-          await nextButton.click();
-          await dataFrame.waitForTimeout(4000);
+        if (await nextButton.isVisible().catch(() => false)) {
+          await nextButton.click().catch(() => {});
+          await page.waitForSelector('.gx-mask, .Loading', { state: 'hidden', timeout: 20000 }).catch(() => {});
+          await dataFrame.waitForTimeout(5000);
         } else {
           await dataFrame.click('a[id*="NEXT"]').catch(() => {});
-          await dataFrame.waitForTimeout(4000);
+          await page.waitForSelector('.gx-mask, .Loading', { state: 'hidden', timeout: 20000 }).catch(() => {});
+          await dataFrame.waitForTimeout(5000);
         }
       }
     }
+
 
 
 
