@@ -43,6 +43,8 @@ export default function DataPage() {
   const [selectedCombo, setSelectedCombo] = useState('')
   const [dateFilterStart, setDateFilterStart] = useState('')
   const [dateFilterEnd, setDateFilterEnd] = useState('')
+  const [exactStartMatch, setExactStartMatch] = useState(false)
+  const [exactEndMatch, setExactEndMatch] = useState(false)
 
   const handleUpdateRecord = (id: number) => {
     const oldData = [...data];
@@ -216,12 +218,25 @@ export default function DataPage() {
       const itemEnd = parseDate(item.fecha_hasta);
       
       if (dateFilterStart) {
-        const filterStart = new Date(dateFilterStart + 'T00:00:00');
-        if (itemEnd && itemEnd < filterStart) matchesDate = false;
+        if (exactStartMatch) {
+          const [fYear, fMonth, fDay] = dateFilterStart.split('-');
+          const formattedFilterStart = `${fDay}/${fMonth}/${fYear}`;
+          if (item.fecha_desde !== formattedFilterStart) matchesDate = false;
+        } else {
+          const filterStart = new Date(dateFilterStart + 'T00:00:00');
+          if (itemEnd && itemEnd < filterStart) matchesDate = false;
+        }
       }
+
       if (dateFilterEnd) {
-        const filterEnd = new Date(dateFilterEnd + 'T23:59:59');
-        if (itemStart && itemStart > filterEnd) matchesDate = false;
+        if (exactEndMatch) {
+          const [fYear, fMonth, fDay] = dateFilterEnd.split('-');
+          const formattedFilterEnd = `${fDay}/${fMonth}/${fYear}`;
+          if (item.fecha_hasta !== formattedFilterEnd) matchesDate = false;
+        } else {
+          const filterEnd = new Date(dateFilterEnd + 'T23:59:59');
+          if (itemStart && itemStart > filterEnd) matchesDate = false;
+        }
       }
     }
 
@@ -230,6 +245,7 @@ export default function DataPage() {
     if (showOutOfStock) return baseFilter;
     return baseFilter && hasStock;
   })
+
 
   const toggleSelectAll = () => {
     if (selectedIds.size === filteredData.length) {
@@ -635,35 +651,66 @@ export default function DataPage() {
                 />
               </div>
 
-              <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1">
-                <div className="flex flex-col">
-                  <label className="text-[8px] text-slate-500 uppercase font-bold px-1">Desde</label>
-                  <input 
-                    type="date" 
-                    className="bg-transparent text-[10px] text-white focus:outline-none cursor-pointer"
-                    value={dateFilterStart}
-                    onChange={(e) => setDateFilterStart(e.target.value)}
-                  />
+              <div className="flex flex-wrap items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5">
+                <div className="flex items-center gap-1.5">
+                  <div className="flex flex-col">
+                    <label className="text-[8px] text-slate-500 uppercase font-bold px-1">Fecha Desde</label>
+                    <input 
+                      type="date" 
+                      className="bg-transparent text-[10px] text-white focus:outline-none cursor-pointer"
+                      value={dateFilterStart}
+                      onChange={(e) => setDateFilterStart(e.target.value)}
+                    />
+                  </div>
+                  {dateFilterStart && (
+                    <label className="flex items-center gap-1 text-[9px] text-slate-400 cursor-pointer bg-slate-800/60 px-1.5 py-0.5 rounded border border-slate-700">
+                      <input 
+                        type="checkbox" 
+                        checked={exactStartMatch} 
+                        onChange={(e) => setExactStartMatch(e.target.checked)}
+                        className="rounded border-slate-700 bg-slate-900 text-red-500 focus:ring-0"
+                      />
+                      <span>Exacto</span>
+                    </label>
+                  )}
                 </div>
-                <div className="w-[1px] h-6 bg-slate-800"></div>
-                <div className="flex flex-col">
-                  <label className="text-[8px] text-slate-500 uppercase font-bold px-1">Hasta</label>
-                  <input 
-                    type="date" 
-                    className="bg-transparent text-[10px] text-white focus:outline-none cursor-pointer"
-                    value={dateFilterEnd}
-                    onChange={(e) => setDateFilterEnd(e.target.value)}
-                  />
+
+                <div className="w-[1px] h-6 bg-slate-800 hidden sm:block"></div>
+
+                <div className="flex items-center gap-1.5">
+                  <div className="flex flex-col">
+                    <label className="text-[8px] text-slate-500 uppercase font-bold px-1">Fecha Hasta</label>
+                    <input 
+                      type="date" 
+                      className="bg-transparent text-[10px] text-white focus:outline-none cursor-pointer"
+                      value={dateFilterEnd}
+                      onChange={(e) => setDateFilterEnd(e.target.value)}
+                    />
+                  </div>
+                  {dateFilterEnd && (
+                    <label className="flex items-center gap-1 text-[9px] text-slate-400 cursor-pointer bg-slate-800/60 px-1.5 py-0.5 rounded border border-slate-700">
+                      <input 
+                        type="checkbox" 
+                        checked={exactEndMatch} 
+                        onChange={(e) => setExactEndMatch(e.target.checked)}
+                        className="rounded border-slate-700 bg-slate-900 text-red-500 focus:ring-0"
+                      />
+                      <span>Exacto</span>
+                    </label>
+                  )}
                 </div>
+
                 {(dateFilterStart || dateFilterEnd) && (
                   <button 
-                    onClick={() => { setDateFilterStart(''); setDateFilterEnd(''); }}
+                    onClick={() => { setDateFilterStart(''); setDateFilterEnd(''); setExactStartMatch(false); setExactEndMatch(false); }}
                     className="p-1 hover:bg-slate-800 rounded text-red-400"
+                    title="Limpiar filtros de fecha"
                   >
                     <X size={12} />
                   </button>
                 )}
               </div>
+
               
               <div className="flex items-center gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 scrollbar-hide">
                 {uniqueCombos.length > 0 && (

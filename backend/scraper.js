@@ -313,67 +313,99 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       await saveCommercialAction(extractionId, row);
     });
 
+    // 5. Procesamiento fraccionado por etapas (Lotes de máximo 20 páginas para optimizar memoria RAM)
+    const CHUNK_SIZE = 20;
+    const totalChunks = Math.ceil(totalPages / CHUNK_SIZE);
     let totalItems = 0;
-    for (let p = 1; p <= totalPages; p++) {
-      dataFrame = await findDataFrame(page);
-      
-      if (global.cancelledExtractions?.has(extractionId)) {
-        onProgress({ message: 'Cancelado.', current: p, total: totalPages, percentage: 100 });
-        break;
+
+    console.log(`[Ext-${extractionId}] Procesando ${totalPages} páginas en ${totalChunks} etapa(s) de máximo ${CHUNK_SIZE} páginas c/u.`);
+
+    for (let chunk = 0; chunk < totalChunks; chunk++) {
+      const startPage = chunk * CHUNK_SIZE + 1;
+      const endPage = Math.min((chunk + 1) * CHUNK_SIZE, totalPages);
+
+      if (totalChunks > 1) {
+        console.log(`[Ext-${extractionId}] --- INICIANDO ETAPA ${chunk + 1}/${totalChunks} (Páginas ${startPage} a ${endPage}) ---`);
+        onProgress({ 
+          message: `Iniciando Etapa ${chunk + 1}/${totalChunks} (Págs. ${startPage} a ${endPage})...`, 
+          current: startPage - 1, 
+          total: totalPages, 
+          percentage: 15 + Math.floor(((startPage - 1) / totalPages) * 75) 
+        });
       }
 
-      onProgress({ 
-        message: `Extrayendo página ${p} de ${totalPages}...`, 
-        current: p, total: totalPages,
-        percentage: 15 + Math.floor((p / totalPages) * 75)
-      });
+      for (let p = startPage; p <= endPage; p++) {
+        dataFrame = await findDataFrame(page);
+        
+        if (global.cancelledExtractions?.has(extractionId)) {
+          onProgress({ message: 'Cancelado por el usuario.', current: p, total: totalPages, percentage: 100 });
+          break;
+        }
 
-      await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 15000 }).catch(() => {});
-      
-      // Process rows INSIDE the browser to avoid moving large objects to Node.js
-      const pageResults = await dataFrame.evaluate(async () => {
-        const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
-        let count = 0;
-        for (const row of trs) {
-          const tds = row.querySelectorAll('td');
-          if (tds.length >= 7 && !row.querySelector('th') && !row.classList.contains('Grid_WorkWithHeader')) {
-            const data = {
-              codigo: tds[0]?.innerText.trim() || '',
-              articulo: tds[1]?.innerText.trim() || '',
-              combo: tds[2]?.innerText.trim() || '',
-              precio_fidelizado: '0,00',
-              fecha_desde: tds[4]?.innerText.trim() || '',
-              fecha_hasta: tds[5]?.innerText.trim() || '',
-              cantidades: tds[6]?.innerText.trim() || ''
-            };
-            if (data.codigo && !isNaN(parseInt(data.codigo))) {
-              await window.saveRowToDb(data);
-              count++;
+        const stageLabel = totalChunks > 1 ? ` [Etapa ${chunk + 1}/${totalChunks}]` : '';
+        onProgress({ 
+          message: `Extrayendo página ${p} de ${totalPages}${stageLabel} (${totalItems} guardados acumulados)...`, 
+          current: p, total: totalPages,
+          percentage: 15 + Math.floor((p / totalPages) * 75)
+        });
+
+        await dataFrame.waitForSelector('#GridContainerTbl, .Grid_WorkWith', { timeout: 15000 }).catch(() => {});
+        
+        // Process rows INSIDE the browser to avoid moving large objects to Node.js
+        const pageResults = await dataFrame.evaluate(async () => {
+          const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
+          let count = 0;
+          for (const row of trs) {
+            const tds = row.querySelectorAll('td');
+            if (tds.length >= 7 && !row.querySelector('th') && !row.classList.contains('Grid_WorkWithHeader')) {
+              const data = {
+                codigo: tds[0]?.innerText.trim() || '',
+                articulo: tds[1]?.innerText.trim() || '',
+                combo: tds[2]?.innerText.trim() || '',
+                precio_fidelizado: '0,00',
+                fecha_desde: tds[4]?.innerText.trim() || '',
+                fecha_hasta: tds[5]?.innerText.trim() || '',
+                cantidades: tds[6]?.innerText.trim() || ''
+              };
+              if (data.codigo && !isNaN(parseInt(data.codigo))) {
+                await window.saveRowToDb(data);
+                count++;
+              }
             }
           }
-        }
-        return count;
-      });
+          return count;
+        });
 
-      totalItems += pageResults;
-      console.log(`[DEBUG] Page ${p}: Saved ${pageResults} rows`);
+        totalItems += pageResults;
+        console.log(`[DEBUG] Page ${p}: Saved ${pageResults} rows (acumulado: ${totalItems})`);
 
-      // 5. Click Next Page if needed
-      if (p < totalPages) {
-        const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
-        const nextButton = dataFrame.locator(nextSelector).first();
-        
-        if (await nextButton.isVisible()) {
-          await nextButton.click();
-          // Wait for the table to change/reload
-          await dataFrame.waitForTimeout(6000);
-        } else {
-          console.log('[DEBUG] Next button not visible, but totalPages > current page. Attempting click by ID...');
-          await dataFrame.click('a[id*="NEXT"]').catch(() => {});
-          await dataFrame.waitForTimeout(6000);
+        // Click Next Page if needed
+        if (p < totalPages) {
+          const nextSelector = 'li.next a, a:has-text("Sig"), a:has-text("Next"), a:has-text("Siguiente"), a[id*="NEXT"]';
+          const nextButton = dataFrame.locator(nextSelector).first();
+          
+          if (await nextButton.isVisible()) {
+            await nextButton.click();
+            await dataFrame.waitForTimeout(5000);
+          } else {
+            console.log('[DEBUG] Next button not visible, but totalPages > current page. Attempting click by ID...');
+            await dataFrame.click('a[id*="NEXT"]').catch(() => {});
+            await dataFrame.waitForTimeout(5000);
+          }
         }
       }
+
+      if (totalChunks > 1) {
+        console.log(`[Ext-${extractionId}] Etapa ${chunk + 1}/${totalChunks} finalizada. ${totalItems} ítems guardados en base de datos.`);
+        onProgress({ 
+          message: `Etapa ${chunk + 1}/${totalChunks} completada (págs. ${startPage}-${endPage} de ${totalPages}, ${totalItems} guardados).`, 
+          current: endPage, 
+          total: totalPages, 
+          percentage: 15 + Math.floor((endPage / totalPages) * 75) 
+        });
+      }
     }
+
 
     onProgress({ 
       message: `Extracción completada. ${totalItems} items guardados.`, 
