@@ -100,94 +100,65 @@ export default function ExtractMonthlyPage() {
     })
   }
 
-  const calculateWeeklySubRanges = (startStr: string, endStr: string) => {
-    if (!startStr || !endStr) return [{ start: startStr, end: endStr, label: 'Mes Completo' }]
-
-    const start = new Date(startStr + 'T00:00:00')
-    const end = new Date(endStr + 'T00:00:00')
-    
-    const diffDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 3600 * 24))
-    if (diffDays <= 10) {
-      return [{ start: startStr, end: endStr, label: `Período (${startStr} a ${endStr})` }]
-    }
-
-    const year = start.getFullYear()
-    const month = start.getMonth()
-    const lastDayOfMonth = new Date(year, month + 1, 0).getDate()
-
-    const pad = (n: number) => String(n).padStart(2, '0')
-    const format = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`
-
-    const w1End = Math.min(7, lastDayOfMonth)
-    const w2Start = 8
-    const w2End = Math.min(15, lastDayOfMonth)
-    const w3Start = 16
-    const w3End = Math.min(22, lastDayOfMonth)
-    const w4Start = 23
-    const w4End = lastDayOfMonth
-
-    return [
-      { start: format(year, month, 1),       end: format(year, month, w1End), label: `Semana 1 (${format(year, month, 1)} al ${format(year, month, w1End)})` },
-      { start: format(year, month, w2Start), end: format(year, month, w2End), label: `Semana 2 (${format(year, month, w2Start)} al ${format(year, month, w2End)})` },
-      { start: format(year, month, w3Start), end: format(year, month, w3End), label: `Semana 3 (${format(year, month, w3Start)} al ${format(year, month, w3End)})` },
-      { start: format(year, month, w4Start), end: format(year, month, w4End), label: `Semana 4 (${format(year, month, w4Start)} al ${format(year, month, w4End)})` },
-    ]
-  }
-
   const handleStartExtraction = async () => {
     setIsExtracting(true)
     setStatus('running')
     setLogs([])
     setExtractionId(null)
 
-    const subRanges = calculateWeeklySubRanges(startDate, endDate)
-    setTotalStagesCount(subRanges.length)
+    const STAGE_MAX_PAGES = 15;
+    const ESTIMATED_MAX_PAGES = 75; // Cubre las 73 páginas del mes entero de DIA
+    const totalStages = Math.ceil(ESTIMATED_MAX_PAGES / STAGE_MAX_PAGES); // 5 etapas
+    setTotalStagesCount(totalStages)
 
     try {
-      for (let i = 0; i < subRanges.length; i++) {
-        const stage = subRanges[i]
-        setCurrentStage(i + 1)
+      for (let s = 1; s <= totalStages; s++) {
+        const startP = (s - 1) * STAGE_MAX_PAGES + 1;
+        const endP = startP + STAGE_MAX_PAGES - 1;
+        setCurrentStage(s)
+
+        const stageLabel = `Etapa ${s}/${totalStages} (Páginas ${startP} a ${endP})`;
 
         setLogs(prev => [...prev, { 
           timestamp: new Date().toISOString(), 
-          message: `--- LOTE SEMANAL ${i + 1}/${subRanges.length}: ${stage.label} ---` 
+          message: `--- ${stageLabel.toUpperCase()} ---` 
         }])
         
-        setProgress({ percentage: 0, message: `Iniciando ${stage.label}...` })
+        setProgress({ percentage: 0, message: `Iniciando ${stageLabel}...` })
 
         const res = await fetch(API_URL('/api/extract'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            startDate: stage.start, 
-            endDate: stage.end, 
+            startDate, 
+            endDate, 
             pageSize, 
-            startPage: 1, 
-            maxPages: 30, 
-            stageName: `Extracción Mensual - ${stage.label}` 
+            startPage: startP, 
+            maxPages: STAGE_MAX_PAGES, 
+            stageName: `Extracción Mensual - ${stageLabel}` 
           })
         })
         const data = await res.json()
         if (!res.ok || data.extractionId == null) {
-          throw new Error(data.error || `Error en Lote ${i + 1}`)
+          throw new Error(data.error || `Error en ${stageLabel}`)
         }
 
         setExtractionId(data.extractionId)
 
         const success = await pollStageCompletion(data.extractionId)
         if (!success) {
-          throw new Error(`El Lote ${i + 1} (${stage.label}) falló o se interrumpió.`)
+          throw new Error(`La ${stageLabel} falló o se interrumpió.`)
         }
 
         setLogs(prev => [...prev, { 
           timestamp: new Date().toISOString(), 
-          message: `✨ Lote ${i + 1}/${subRanges.length} (${stage.label}) completado con éxito. Navegador cerrado y RAM liberada.` 
+          message: `✨ ${stageLabel} completada con éxito. Navegador cerrado y RAM liberada.` 
         }])
 
-        if (i < subRanges.length - 1) {
+        if (s < totalStages) {
           setLogs(prev => [...prev, { 
             timestamp: new Date().toISOString(), 
-            message: `⏳ Aguardando 3 segundos para liberar memoria RAM antes del siguiente lote...` 
+            message: `⏳ Aguardando 3 segundos para liberar memoria RAM antes de la siguiente etapa...` 
           }])
           await new Promise(r => setTimeout(r, 3000))
         }
@@ -195,18 +166,19 @@ export default function ExtractMonthlyPage() {
 
       setIsExtracting(false)
       setStatus('completed')
-      setProgress({ percentage: 100, message: '¡Extracción Mensual completada en todos los lotes semanales!' })
+      setProgress({ percentage: 100, message: '¡Extracción Mensual completada en todas las etapas!' })
       setLogs(prev => [...prev, { 
         timestamp: new Date().toISOString(), 
-        message: `🎉 ¡PROCESO FINALIZADO! Se han extraído las 4 semanas del mes en lotes limpios e independientes. Podés unificarlos directamente en el módulo de Cartelería.` 
+        message: `🎉 ¡PROCESO FINALIZADO! Se han extraído todas las páginas del mes (incluyendo códigos de vigencia mensual) en 5 etapas limpias e independientes. Podés unificarlas directamente en el módulo de Cartelería.` 
       }])
     } catch (err: any) {
-      console.error('[Extracción Mensual por Semanas Error]', err)
+      console.error('[Extracción Mensual por Páginas Error]', err)
       setIsExtracting(false)
       setStatus('failed')
       setProgress({ percentage: 0, message: `❌ ${err.message}` })
     }
   }
+
 
 
 
