@@ -274,9 +274,10 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     doc.text(splitTitle, PAGE_CENTER, 205, { align: 'center' });
 
     // --- BOTTOM SECTION ---
-    const bottomY = 230;
+    const bottomY = 235;
     doc.setDrawColor(0);
     doc.setLineWidth(0.4);
+
 
 
     if (hasCashback) {
@@ -398,8 +399,9 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(14);
     let validityText = `VIGENCIA: ${item.desde} AL ${item.hasta}`;
-    doc.text(validityText, 15, 275);
-    doc.text(`cod.${item.codigo}`, 190, 275, { align: 'right' });
+    doc.text(validityText, 15, 280);
+    doc.text(`cod.${item.codigo}`, 190, 280, { align: 'right' });
+
 
   });
 
