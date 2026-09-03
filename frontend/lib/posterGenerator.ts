@@ -96,7 +96,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     const totalHeaderWidth = smallBoxWidth + boxGap + largeBoxWidth;
     const headerStartX = PAGE_CENTER - (totalHeaderWidth / 2);
 
-    doc.rect(headerStartX, 45, smallBoxWidth, 28); 
+    doc.rect(headerStartX, 65, smallBoxWidth, 28); 
     doc.setFont('helvetica', 'bold');
     
     let numSize = 66; 
@@ -125,11 +125,11 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       const unitText = numVal === 1 ? 'UNIDAD' : 'UNIDADES';
       
       doc.setFontSize(14);
-      doc.text('LLEVANDO', smallBoxCenterX, 54, { align: 'center' });
+      doc.text('LLEVANDO', smallBoxCenterX, 74, { align: 'center' });
       doc.setFontSize(50);
-      doc.text(numVal.toString(), smallBoxCenterX, 66, { align: 'center' });
+      doc.text(numVal.toString(), smallBoxCenterX, 86, { align: 'center' });
       doc.setFontSize(12);
-      doc.text(unitText, smallBoxCenterX, 71, { align: 'center' });
+      doc.text(unitText, smallBoxCenterX, 91, { align: 'center' });
     } else {
       // Standard layout
       let numSize = 66; 
@@ -161,14 +161,14 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       const comboStartX = smallBoxCenterX - (totalComboWidth / 2);
       
       doc.setFontSize(numSize);
-      doc.text(comboNumber, comboStartX, 65); 
+      doc.text(comboNumber, comboStartX, 85); 
       if (comboSymbol) {
         doc.setFontSize(symSize);
-        doc.text(comboSymbol, comboStartX + numWidth + 1, 65);
+        doc.text(comboSymbol, comboStartX + numWidth + 1, 85);
       }
       if (subCombo) {
         doc.setFontSize(16);
-        doc.text(subCombo, smallBoxCenterX, 72, { align: 'center' });
+        doc.text(subCombo, smallBoxCenterX, 92, { align: 'center' });
       }
     }
 
@@ -176,7 +176,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     const largeBoxCenterX = largeBoxStartX + (largeBoxWidth / 2);
     doc.setDrawColor(0);
     doc.setLineWidth(1.4);
-    doc.rect(largeBoxStartX, 45, largeBoxWidth, 28, 'S');
+    doc.rect(largeBoxStartX, 65, largeBoxWidth, 28, 'S');
     doc.setTextColor(0, 0, 0); 
     
     let legend1Size = 30;
@@ -186,7 +186,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       legend1Size -= 1;
       doc.setFontSize(legend1Size);
     }
-    doc.text(legend1Text, largeBoxCenterX, 58, { align: 'center' });
+    doc.text(legend1Text, largeBoxCenterX, 78, { align: 'center' });
     
     let legend2Size = 20;
     const legend2Text = 'PAGÁS CADA UNO';
@@ -195,14 +195,14 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       legend2Size -= 1;
       doc.setFontSize(legend2Size);
     }
-    doc.text(legend2Text, largeBoxCenterX, 68, { align: 'center' });
+    doc.text(legend2Text, largeBoxCenterX, 88, { align: 'center' });
     
     doc.setTextColor(0, 0, 0);
 
     // --- Legal & Title ---
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
-    doc.text('Ver legales de esta promoción en diaonline.com.ar', PAGE_CENTER, 80, { align: 'center' });
+    doc.text('Ver legales de esta promoción en diaonline.com.ar', PAGE_CENTER, 100, { align: 'center' });
     
     const hasCashback = !!item.cashbackPrice;
     
@@ -219,7 +219,7 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       hFontSize -= 1;
       doc.setFontSize(hFontSize);
     }
-    doc.text(headerTitle, PAGE_CENTER, 92, { align: 'center' });
+    doc.text(headerTitle, PAGE_CENTER, 112, { align: 'center' });
     
     if (hasCashback && item.cashbackDay) {
       const dayText = `VÁLIDO: ${item.cashbackDay.toUpperCase()}`;
@@ -228,18 +228,19 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
       const dayH = 8;
       doc.setDrawColor(0);
       doc.setLineWidth(0.8);
-      (doc as any).roundedRect(PAGE_CENTER - (dayW / 2), 95, dayW, dayH, 2.5, 2.5, 'S');
+      (doc as any).roundedRect(PAGE_CENTER - (dayW / 2), 115, dayW, dayH, 2.5, 2.5, 'S');
       doc.setTextColor(0, 0, 0);
       doc.setFont('helvetica', 'bold');
-      doc.text(dayText, PAGE_CENTER, 101, { align: 'center' });
+      doc.text(dayText, PAGE_CENTER, 121, { align: 'center' });
     }
 
     if (hasCashback && item.cashbackCondition) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(14);
-      const condY = item.cashbackDay ? 108 : 100;
+      const condY = item.cashbackDay ? 128 : 120;
       doc.text(item.cashbackCondition, PAGE_CENTER, condY, { align: 'center' });
     }
+
 
     // --- MAIN GIGANTIC PRICE ---
     const displayPrice = hasCashback ? (item.cashbackPrice || 0) : item.precioFinal;
