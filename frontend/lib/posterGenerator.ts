@@ -274,9 +274,10 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     doc.text(splitTitle, PAGE_CENTER, 205, { align: 'center' });
 
     // --- BOTTOM SECTION ---
-    const bottomY = 245;
+    const bottomY = 230;
     doc.setDrawColor(0);
     doc.setLineWidth(0.4);
+
 
     if (hasCashback) {
       // MODE PRO
@@ -397,8 +398,9 @@ export const generatePosters = (items: PosterData[], previewOnly: boolean = fals
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(14);
     let validityText = `VIGENCIA: ${item.desde} AL ${item.hasta}`;
-    doc.text(validityText, 15, 290);
-    doc.text(`cod.${item.codigo}`, 190, 290, { align: 'right' });
+    doc.text(validityText, 15, 275);
+    doc.text(`cod.${item.codigo}`, 190, 275, { align: 'right' });
+
   });
 
   if (previewOnly) {
