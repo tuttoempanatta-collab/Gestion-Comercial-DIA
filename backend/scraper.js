@@ -412,11 +412,20 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         for (const row of trs) {
           const tds = row.querySelectorAll('td');
           if (tds.length >= 7 && !row.querySelector('th') && !row.classList.contains('Grid_WorkWithHeader')) {
+            const rawPrice = tds[3]?.innerText.trim() || '0,00';
+            const cleanPriceStr = rawPrice.replace(/\$/g, '').replace(/\./g, '').replace(',', '.').trim();
+            const numericPrice = parseFloat(cleanPriceStr) || 0;
+
+            // Omisión requerida: Si el precio fidelizado en el portal web es mayor a 0, omitir el código para no duplicar carteles ya impresos
+            if (numericPrice > 0) {
+              continue;
+            }
+
             const data = {
               codigo: tds[0]?.innerText.trim() || '',
               articulo: tds[1]?.innerText.trim() || '',
               combo: tds[2]?.innerText.trim() || '',
-              precio_fidelizado: tds[3]?.innerText.trim() || '0,00',
+              precio_fidelizado: rawPrice,
               fecha_desde: tds[4]?.innerText.trim() || '',
               fecha_hasta: tds[5]?.innerText.trim() || '',
               cantidades: tds[6]?.innerText.trim() || '1'
@@ -426,6 +435,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               await window.saveRowToDb(data);
               count++;
             }
+
           }
         }
         return count;
