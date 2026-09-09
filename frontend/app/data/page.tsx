@@ -43,38 +43,32 @@ export default function DataPage() {
   }
 
   const handleUnifyExtractions = async () => {
-    if (selectedHistoryIds.size === 0) return
+    if (selectedHistoryIds.size < 2) {
+      alert('Por favor selecciona al menos 2 extracciones para unificar.')
+      return
+    }
     const ids = Array.from(selectedHistoryIds)
     try {
-      const results = await Promise.all(ids.map(id => 
-        fetch(API_URL(`/api/data/${id}`)).then(res => res.json())
-      ))
-      
-      const allRows = results.flat().filter(Boolean)
-      const map = new Map<string, any>()
-      for (const item of allRows) {
-        if (!item.codigo) continue
-        if (!map.has(item.codigo)) {
-          map.set(item.codigo, item)
-        } else {
-          const existing = map.get(item.codigo)
-          map.set(item.codigo, {
-            ...existing,
-            articulo: item.articulo && item.articulo !== item.codigo ? item.articulo : existing.articulo,
-            precio_fidelizado: item.precio_fidelizado !== '0,00' ? item.precio_fidelizado : existing.precio_fidelizado,
-            stock: Math.max(existing.stock || 0, item.stock || 0)
-          })
-        }
+      const res = await fetch(API_URL('/api/extractions/merge'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extractionIds: ids })
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        throw new Error(result.error || 'Error fusionando extracciones')
       }
-      const unifiedList = Array.from(map.values())
-      setData(unifiedList)
-      setSelectedExtraction(null)
-      setSelectedIds(new Set())
-      alert(`🎉 ¡Extracciones unificadas con éxito! Se combinaron ${unifiedList.length} artículos de ${ids.length} etapas.`)
+
+      const newId = result.mergedExtractionId
+      setSelectedHistoryIds(new Set())
+      await loadHistory()
+      setSelectedExtraction(newId)
+      alert(`🎉 ¡Extracciones fusionadas en un solo archivo! Se combinaron ${result.itemsCount} artículos en la Extracción Única #${newId}.`)
     } catch (e: any) {
       alert(`Error unificando extracciones: ${e.message}`)
     }
   }
+
 
   
   const [selectedDay, setSelectedDay] = useState('Todos')

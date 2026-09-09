@@ -112,6 +112,8 @@ export default function ExtractMonthlyPage() {
     setTotalStagesCount(totalStages)
 
 
+    const stageExtractionIds: number[] = [];
+
     try {
       for (let s = 1; s <= totalStages; s++) {
         const startP = (s - 1) * STAGE_MAX_PAGES + 1;
@@ -144,6 +146,7 @@ export default function ExtractMonthlyPage() {
           throw new Error(data.error || `Error en ${stageLabel}`)
         }
 
+        stageExtractionIds.push(data.extractionId)
         setExtractionId(data.extractionId)
 
         const success = await pollStageCompletion(data.extractionId)
@@ -165,14 +168,40 @@ export default function ExtractMonthlyPage() {
         }
       }
 
+      // Auto-fusionar las etapas procesadas en un único archivo unificado
+      if (stageExtractionIds.length >= 2) {
+        setLogs(prev => [...prev, { 
+          timestamp: new Date().toISOString(), 
+          message: `🔄 Fusionando automáticamente las ${stageExtractionIds.length} etapas en 1 solo archivo unificado...` 
+        }])
+        try {
+          const mergeRes = await fetch(API_URL('/api/extractions/merge'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ extractionIds: stageExtractionIds })
+          })
+          const mergeData = await mergeRes.json()
+          if (mergeRes.ok && mergeData.mergedExtractionId) {
+            setExtractionId(mergeData.mergedExtractionId)
+            setLogs(prev => [...prev, { 
+              timestamp: new Date().toISOString(), 
+              message: `🎉 ¡FUSIÓN AUTOMÁTICA COMPLETADA! Se consolidaron ${mergeData.itemsCount} artículos en la Extracción Única #${mergeData.mergedExtractionId}.` 
+            }])
+          }
+        } catch (e: any) {
+          console.error('[Error auto-fusionando etapas mensuales]:', e.message)
+        }
+      }
+
       setIsExtracting(false)
       setStatus('completed')
-      setProgress({ percentage: 100, message: '¡Extracción Mensual completada en todas las etapas!' })
+      setProgress({ percentage: 100, message: '¡Extracción Mensual completada en un solo archivo unificado!' })
       setLogs(prev => [...prev, { 
         timestamp: new Date().toISOString(), 
-        message: `🎉 ¡PROCESO FINALIZADO! Se han extraído todas las páginas del mes (incluyendo códigos de vigencia mensual) en 5 etapas limpias e independientes. Podés unificarlas directamente en el módulo de Cartelería.` 
+        message: `🎉 ¡PROCESO FINALIZADO! Todas las etapas del mes fueron consolidadas en 1 solo archivo único en el Historial.` 
       }])
     } catch (err: any) {
+
       console.error('[Extracción Mensual por Páginas Error]', err)
       setIsExtracting(false)
       setStatus('failed')

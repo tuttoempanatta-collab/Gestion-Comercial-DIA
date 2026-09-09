@@ -132,13 +132,19 @@ app.post('/api/extract', async (req, res) => {
     });
 
     res.json({ extractionId, message: 'Extraction started' });
+app.post('/api/extractions/merge', async (req, res) => {
+  const { mergeExtractions } = require('./db');
+  const { extractionIds } = req.body;
+  try {
+    const result = await mergeExtractions(extractionIds);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
 app.post('/api/system/reset', async (req, res) => {
+
   const { clearAll } = require('./db');
   const { clearDescriptions } = require('./description_db');
   try {
