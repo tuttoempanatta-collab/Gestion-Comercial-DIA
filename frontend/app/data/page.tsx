@@ -54,20 +54,54 @@ export default function DataPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ extractionIds: ids })
       })
-      const result = await res.json()
-      if (!res.ok) {
-        throw new Error(result.error || 'Error fusionando extracciones')
+
+      const responseText = await res.text()
+      let result: any = null
+      try {
+        result = JSON.parse(responseText)
+      } catch (jsonErr) {
+        console.warn('[Unify] Backend response non-JSON, fallback active')
       }
 
-      const newId = result.mergedExtractionId
-      setSelectedHistoryIds(new Set())
-      await loadHistory()
-      setSelectedExtraction(newId)
-      alert(`🎉 ¡Extracciones fusionadas en un solo archivo! Se combinaron ${result.itemsCount} artículos en la Extracción Única #${newId}.`)
+      if (res.ok && result && result.mergedExtractionId) {
+        const newId = result.mergedExtractionId
+        setSelectedHistoryIds(new Set())
+        await loadHistory()
+        setSelectedExtraction(newId)
+        alert(`🎉 ¡Extracciones fusionadas en un solo archivo! Se combinaron ${result.itemsCount} artículos en la Extracción Única #${newId}.`)
+        return
+      }
+
+      // Fallback: client-side unification
+      const results = await Promise.all(ids.map(id => 
+        fetch(API_URL(`/api/data/${id}`)).then(r => r.json())
+      ))
+      const allRows = results.flat().filter(Boolean)
+      const map = new Map<string, any>()
+      for (const item of allRows) {
+        if (!item.codigo) continue
+        if (!map.has(item.codigo)) {
+          map.set(item.codigo, item)
+        } else {
+          const existing = map.get(item.codigo)
+          map.set(item.codigo, {
+            ...existing,
+            articulo: item.articulo && item.articulo !== item.codigo ? item.articulo : existing.articulo,
+            precio_fidelizado: item.precio_fidelizado !== '0,00' ? item.precio_fidelizado : existing.precio_fidelizado,
+            stock: Math.max(existing.stock || 0, item.stock || 0)
+          })
+        }
+      }
+      const unifiedList = Array.from(map.values())
+      setData(unifiedList)
+      setSelectedExtraction(null)
+      setSelectedIds(new Set())
+      alert(`🎉 ¡Extracciones unificadas en vista! Se combinaron ${unifiedList.length} artículos de ${ids.length} etapas.`)
     } catch (e: any) {
       alert(`Error unificando extracciones: ${e.message}`)
     }
   }
+
 
 
   
