@@ -5,7 +5,8 @@ const { db, saveCommercialAction } = require('./db');
 
 async function runScraper(extractionId, startDate, endDate, settings, pageSize = 50, onProgress, options = {}) {
   const startPageParam = parseInt(options.startPage || 1);
-  const maxPagesParam = parseInt(options.maxPages || 15);
+  const maxPagesParam = options.maxPages ? parseInt(options.maxPages) : 999;
+
 
   console.log(`[DEBUG] runScraper started for ID: ${extractionId} (startPage: ${startPageParam}, maxPages: ${maxPagesParam})`);
 
