@@ -74,8 +74,11 @@ export default function ExtractMonthlyPage() {
     return data.extractionId
   }
 
-  const pollStageCompletion = (id: number): Promise<boolean> => {
+  const pollStageCompletion = (id: number): Promise<{ success: boolean; totalPagesDetected?: number; itemsCount?: number }> => {
     return new Promise((resolve) => {
+      let detectedTotal: number | undefined;
+      let count: number | undefined;
+
       const pollTimer = setInterval(async () => {
         try {
           const res = await fetch(API_URL(`/api/logs/${id}`))
@@ -85,16 +88,27 @@ export default function ExtractMonthlyPage() {
               const combined = [...prev, ...data.logs]
               return combined.filter((v, i, a) => a.findIndex(t => t.timestamp === v.timestamp && t.message === v.message) === i)
             })
+
+            for (const log of data.logs) {
+              const match = log.message?.match(/extracción de (\d+) páginas/i) || log.message?.match(/páginas detectadas:\s*(\d+)/i) || log.message?.match(/total de páginas:\s*(\d+)/i);
+              if (match) {
+                detectedTotal = parseInt(match[1]);
+              }
+              const countMatch = log.message?.match(/(\d+) items guardados/i) || log.message?.match(/(\d+) artículos procesados/i);
+              if (countMatch) {
+                count = parseInt(countMatch[1]);
+              }
+            }
           }
           if (data.progress) setProgress(data.progress)
           
           const lastLog = data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : null
           if (lastLog?.message?.includes('finalizada') || lastLog?.message?.includes('completada')) {
             clearInterval(pollTimer)
-            resolve(true)
+            resolve({ success: true, totalPagesDetected: detectedTotal, itemsCount: count })
           } else if (lastLog?.message?.includes('Error')) {
             clearInterval(pollTimer)
-            resolve(false)
+            resolve({ success: false })
           }
         } catch (e) {}
       }, 2500)
@@ -107,23 +121,24 @@ export default function ExtractMonthlyPage() {
     setLogs([])
     setExtractionId(null)
 
-    const STAGE_MAX_PAGES = 12;
+    const STAGE_MAX_PAGES = 6;
     const initialPage = Math.max(1, startPageInput);
-    // Asumiendo un maximo proyectado de 73 paginas a 50 filas
-    const MAX_PROJECTED_PAGES = 73;
-    const remainingPages = Math.max(1, MAX_PROJECTED_PAGES - initialPage + 1);
-    const totalStages = Math.ceil(remainingPages / STAGE_MAX_PAGES);
+    let maxProjectedPages = 73;
+    let totalStages = Math.ceil((maxProjectedPages - initialPage + 1) / STAGE_MAX_PAGES);
     setTotalStagesCount(totalStages)
 
     const stageExtractionIds: number[] = [];
 
     try {
-      for (let s = 1; s <= totalStages; s++) {
-        const startP = initialPage + (s - 1) * STAGE_MAX_PAGES;
-        const endP = startP + STAGE_MAX_PAGES - 1;
-        setCurrentStage(s)
+      let stageIndex = 1;
+      let currentStartP = initialPage;
 
-        const stageLabel = `Etapa ${s}/${totalStages} (Páginas ${startP} a ${endP})`;
+      while (currentStartP <= maxProjectedPages) {
+        const startP = currentStartP;
+        const endP = startP + STAGE_MAX_PAGES - 1;
+        setCurrentStage(stageIndex)
+
+        const stageLabel = `Etapa ${stageIndex} (Páginas ${startP} a ${endP})`;
 
         setLogs(prev => [...prev, { 
           timestamp: new Date().toISOString(), 
@@ -149,13 +164,18 @@ export default function ExtractMonthlyPage() {
           throw new Error(data.error || `Error en ${stageLabel}`)
         }
 
-
         stageExtractionIds.push(data.extractionId)
         setExtractionId(data.extractionId)
 
-        const success = await pollStageCompletion(data.extractionId)
-        if (!success) {
+        const stageRes = await pollStageCompletion(data.extractionId)
+        if (!stageRes.success) {
           throw new Error(`La ${stageLabel} falló o se interrumpió.`)
+        }
+
+        if (stageRes.totalPagesDetected && stageRes.totalPagesDetected > 0) {
+          maxProjectedPages = stageRes.totalPagesDetected;
+          const recalculatedStages = Math.ceil((maxProjectedPages - initialPage + 1) / STAGE_MAX_PAGES);
+          setTotalStagesCount(recalculatedStages);
         }
 
         setLogs(prev => [...prev, { 
@@ -163,16 +183,23 @@ export default function ExtractMonthlyPage() {
           message: `✨ ${stageLabel} completada con éxito. Navegador cerrado y RAM liberada.` 
         }])
 
-        if (s < totalStages) {
-          setLogs(prev => [...prev, { 
-            timestamp: new Date().toISOString(), 
-            message: `⏳ Aguardando 3 segundos para liberar memoria RAM antes de la siguiente etapa...` 
-          }])
-          await new Promise(r => setTimeout(r, 3000))
+        if (startP + STAGE_MAX_PAGES > maxProjectedPages) {
+          console.log(`[Extracción Mensual] Se alcanzó la última página detectada (${maxProjectedPages}). Finalizando etapas.`);
+          break;
         }
+
+        setLogs(prev => [...prev, { 
+          timestamp: new Date().toISOString(), 
+          message: `⏳ Aguardando 3 segundos para liberar memoria RAM antes de la siguiente etapa...` 
+        }])
+        await new Promise(r => setTimeout(r, 3000));
+        
+        currentStartP += STAGE_MAX_PAGES;
+        stageIndex++;
       }
 
       // Auto-fusionar las etapas procesadas en un único archivo unificado
+
       if (stageExtractionIds.length >= 2) {
         setLogs(prev => [...prev, { 
           timestamp: new Date().toISOString(), 
