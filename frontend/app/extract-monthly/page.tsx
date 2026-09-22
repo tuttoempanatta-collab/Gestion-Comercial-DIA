@@ -27,6 +27,7 @@ export default function ExtractMonthlyPage() {
   const [startDate, setStartDate] = useState(defaultDates.start)
   const [endDate, setEndDate] = useState(defaultDates.end)
   const [pageSize, setPageSize] = useState('50')
+  const [startPageInput, setStartPageInput] = useState<number>(1)
   const [isExtracting, setIsExtracting] = useState(false)
   const [logs, setLogs] = useState<any[]>([])
   const [progress, setProgress] = useState({ percentage: 0, message: '' })
@@ -107,16 +108,18 @@ export default function ExtractMonthlyPage() {
     setExtractionId(null)
 
     const STAGE_MAX_PAGES = 12;
-    const ESTIMATED_MAX_PAGES = 24; // A 50 filas por página, el mes entero son 24 páginas totales
-    const totalStages = Math.ceil(ESTIMATED_MAX_PAGES / STAGE_MAX_PAGES); // 2 etapas
+    const initialPage = Math.max(1, startPageInput);
+    // Asumiendo un maximo proyectado de 73 paginas a 50 filas
+    const MAX_PROJECTED_PAGES = 73;
+    const remainingPages = Math.max(1, MAX_PROJECTED_PAGES - initialPage + 1);
+    const totalStages = Math.ceil(remainingPages / STAGE_MAX_PAGES);
     setTotalStagesCount(totalStages)
-
 
     const stageExtractionIds: number[] = [];
 
     try {
       for (let s = 1; s <= totalStages; s++) {
-        const startP = (s - 1) * STAGE_MAX_PAGES + 1;
+        const startP = initialPage + (s - 1) * STAGE_MAX_PAGES;
         const endP = startP + STAGE_MAX_PAGES - 1;
         setCurrentStage(s)
 
@@ -145,6 +148,7 @@ export default function ExtractMonthlyPage() {
         if (!res.ok || data.extractionId == null) {
           throw new Error(data.error || `Error en ${stageLabel}`)
         }
+
 
         stageExtractionIds.push(data.extractionId)
         setExtractionId(data.extractionId)
@@ -268,7 +272,24 @@ export default function ExtractMonthlyPage() {
                 <option value="5">5 registros por página</option>
               </select>
             </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium text-slate-400">Página Inicial (Salto Directo)</label>
+              <input 
+                type="number" 
+                min="1"
+                max="100"
+                value={startPageInput}
+                onChange={(e) => setStartPageInput(Math.max(1, parseInt(e.target.value) || 1))}
+                className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 transition-colors"
+                placeholder="1"
+              />
+              <p className="text-[11px] text-slate-500">
+                Por defecto es 1. Si indicás una página mayor (ej: 13), el robot saltará directamente a esa página inicial y extraerá las páginas siguientes hasta el final.
+              </p>
+            </div>
           </div>
+
 
           <button 
             className="btn-primary w-full py-3 mt-4 bg-indigo-600 hover:bg-indigo-500 shadow-indigo-900/20 disabled:opacity-50 disabled:cursor-not-allowed" 
