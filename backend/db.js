@@ -23,6 +23,16 @@ module.exports = {
     const enrichedData = await enrichWithCatalog(data);
 
     try {
+      // 1. Resilient Safeguard: Ensure parent extraction entry exists in extractions table to satisfy FK
+      const extCheck = await pool.query('SELECT id FROM extractions WHERE id = $1', [extractionId]);
+      if (!extCheck.rows || extCheck.rows.length === 0) {
+        console.warn(`[DB Safeguard] Extraction ID ${extractionId} not found in extractions table. Auto-creating entry to preserve foreign key integrity.`);
+        await pool.query(
+          'INSERT INTO extractions (id, status, start_date, end_date) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING',
+          [extractionId, 'running', enrichedData.fecha_desde || '', enrichedData.fecha_hasta || '']
+        );
+      }
+
       // Deduplication check: prevent multiple rows for the same product code in the same extraction
       const existing = await pool.query(
         'SELECT id, cantidades, precio_fidelizado, stock FROM commercial_actions WHERE extraction_id = $1 AND codigo = $2',
@@ -103,7 +113,8 @@ module.exports = {
   },
 
   deleteExtraction: async (id) => {
-    // Foreign key with ON DELETE CASCADE handles commercial_actions
+    // Delete child rows first then parent extraction
+    await pool.query('DELETE FROM commercial_actions WHERE extraction_id = $1', [id]);
     await pool.query('DELETE FROM extractions WHERE id = $1', [id]);
   },
 
@@ -113,16 +124,11 @@ module.exports = {
   },
 
   clearAll: async () => {
-    await pool.query('BEGIN');
-    try {
-      await pool.query('DELETE FROM commercial_actions');
-      await pool.query('DELETE FROM extractions');
-      await pool.query('COMMIT');
-      console.log('Database extractions and actions cleared atomically');
-    } catch (e) {
-      await pool.query('ROLLBACK');
-      throw e;
-    }
+    await pool.withTransaction(async (client) => {
+      await client.query('DELETE FROM commercial_actions');
+      await client.query('DELETE FROM extractions');
+    });
+    console.log('Database extractions and actions cleared atomically');
   },
 
   mergeExtractions: async (extractionIds) => {
@@ -130,10 +136,9 @@ module.exports = {
       throw new Error('Debe seleccionar al menos 2 extracciones para fusionar.');
     }
 
-    await pool.query('BEGIN');
-    try {
+    return await pool.withTransaction(async (client) => {
       // 1. Get metadata of extractions to be merged
-      const extRes = await pool.query(
+      const extRes = await client.query(
         'SELECT * FROM extractions WHERE id = ANY($1::int[]) ORDER BY timestamp ASC',
         [extractionIds]
       );
@@ -147,7 +152,7 @@ module.exports = {
       const endDate = lastExt.end_date;
 
       // 2. Fetch all commercial actions for these extractions
-      const actionsRes = await pool.query(
+      const actionsRes = await client.query(
         'SELECT * FROM commercial_actions WHERE extraction_id = ANY($1::int[]) ORDER BY id ASC',
         [extractionIds]
       );
@@ -192,7 +197,7 @@ module.exports = {
         VALUES ($1, $2, $3, $4) 
         RETURNING id
       `;
-      const newExtRes = await pool.query(insertExtQuery, ['completed', startDate, endDate, deduplicatedItems.length]);
+      const newExtRes = await client.query(insertExtQuery, ['completed', startDate, endDate, deduplicatedItems.length]);
       const newId = newExtRes.rows[0].id;
 
       // 5. Insert deduplicated items into commercial_actions under newId
@@ -202,7 +207,7 @@ module.exports = {
           (extraction_id, codigo, articulo, combo, precio_fidelizado, fecha_desde, fecha_hasta, cantidades, stock) 
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         `;
-        await pool.query(insertActionQuery, [
+        await client.query(insertActionQuery, [
           newId,
           item.codigo,
           item.articulo,
@@ -215,17 +220,13 @@ module.exports = {
         ]);
       }
 
-      // 6. Delete old extractions (CASCADE deletes old commercial_actions rows)
-      await pool.query('DELETE FROM extractions WHERE id = ANY($1::int[])', [extractionIds]);
+      // 6. Delete old commercial actions and old extractions
+      await client.query('DELETE FROM commercial_actions WHERE extraction_id = ANY($1::int[])', [extractionIds]);
+      await client.query('DELETE FROM extractions WHERE id = ANY($1::int[])', [extractionIds]);
 
-      await pool.query('COMMIT');
       console.log(`[DB] Extracciones ${extractionIds.join(', ')} fusionadas exitosamente en la nueva Extracción #${newId} con ${deduplicatedItems.length} ítems.`);
       return { mergedExtractionId: newId, itemsCount: deduplicatedItems.length };
-    } catch (e) {
-      await pool.query('ROLLBACK');
-      console.error('[DB Error] Error al fusionar extracciones:', e.message);
-      throw e;
-    }
+    });
   }
 };
 

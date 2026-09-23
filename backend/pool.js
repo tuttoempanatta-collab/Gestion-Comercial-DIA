@@ -24,8 +24,8 @@ function translatePgToSqlite(sql, params) {
     sqliteSql = sqliteSql.replace(/\bRETURNING\s+\w+/i, '');
   }
   
-  // Parse placeholders
-  const regex = /\$(\d+)/g;
+  // Parse placeholders including optional PostgreSQL type casts like $1::int, $1::int[]
+  const regex = /\$(\d+)(?:::[\w\[\]]+)?/g;
   let lastIndex = 0;
   let resultSql = '';
   let match;
@@ -96,9 +96,71 @@ async function getActivePool() {
       await pgPool.query('SELECT 1');
       console.log('[Database] PostgreSQL connection test successful.');
 
-      // Safely ensure table column exists in PostgreSQL
-      await pgPool.query('ALTER TABLE commercial_actions ADD COLUMN IF NOT EXISTS precio_final TEXT;');
-      console.log('[Database] PostgreSQL: Verified column precio_final exists in commercial_actions');
+      // Safely ensure tables and columns exist in PostgreSQL
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS extractions (
+          id SERIAL PRIMARY KEY,
+          timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+          status TEXT,
+          start_date TEXT,
+          end_date TEXT,
+          items_count INTEGER DEFAULT 0,
+          error_message TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS commercial_actions (
+          id SERIAL PRIMARY KEY,
+          extraction_id INTEGER REFERENCES extractions(id) ON DELETE CASCADE,
+          codigo TEXT,
+          articulo TEXT,
+          combo TEXT,
+          precio_fidelizado TEXT,
+          fecha_desde TEXT,
+          fecha_hasta TEXT,
+          cantidades TEXT,
+          stock INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS product_descriptions (
+          codigo TEXT PRIMARY KEY,
+          description TEXT,
+          last_updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS catalog_items (
+          item_id TEXT PRIMARY KEY,
+          loyalty_description TEXT,
+          price_amount REAL,
+          current_quantity REAL,
+          updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+
+        ALTER TABLE commercial_actions ADD COLUMN IF NOT EXISTS precio_final TEXT;
+      `);
+      console.log('[Database] PostgreSQL: Verified schema and tables.');
+
+      // Resync sequences to avoid any primary key collision or out-of-sync sequence errors
+      try {
+        await pgPool.query(`
+          DO $$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'extractions_id_seq') THEN
+              PERFORM setval('extractions_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM extractions), 1), 1));
+            END IF;
+            IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'commercial_actions_id_seq') THEN
+              PERFORM setval('commercial_actions_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM commercial_actions), 1), 1));
+            END IF;
+          END $$;
+        `);
+        console.log('[Database] PostgreSQL: Synchronized sequences.');
+      } catch (seqErr) {
+        console.warn('[Database] Sequence sync warning:', seqErr.message);
+      }
 
       activePool = pgPool;
       return activePool;
@@ -219,11 +281,49 @@ async function getActivePool() {
   return activePool;
 }
 
+async function withTransaction(callback) {
+  const active = await getActivePool();
+  if (active.isSqlite) {
+    await active.query('BEGIN');
+    try {
+      const result = await callback(active);
+      await active.query('COMMIT');
+      return result;
+    } catch (e) {
+      try {
+        await active.query('ROLLBACK');
+      } catch (rbErr) {}
+      throw e;
+    }
+  } else {
+    // Dedicated client checkout from PostgreSQL Pool
+    const client = await active.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await callback(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rbErr) {
+        console.error('[Database Transaction Rollback Error]:', rbErr.message);
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+}
+
 // Proxy pool object that delegates requests asynchronously
 const pool = {
   query: async (text, params) => {
     const active = await getActivePool();
     return active.query(text, params);
+  },
+  withTransaction: async (callback) => {
+    return withTransaction(callback);
   },
   end: async () => {
     if (activePool) {
@@ -234,3 +334,4 @@ const pool = {
 };
 
 module.exports = { pool };
+

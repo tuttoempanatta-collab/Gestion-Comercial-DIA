@@ -318,7 +318,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     // Expose the save function to the browser to save RAM
     await page.exposeFunction('saveRowToDb', async (row) => {
-      await saveCommercialAction(extractionId, row);
+      try {
+        await saveCommercialAction(extractionId, row);
+        return true;
+      } catch (err) {
+        console.error(`[Scraper Warning] Falló inserción de artículo (${row?.codigo}):`, err.message);
+        return false;
+      }
     });
 
     // 5. Procesamiento por sub-etapa independiente de páginas (startPageParam a endPageParam)
@@ -433,8 +439,12 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             };
 
             if (data.codigo && !isNaN(parseInt(data.codigo))) {
-              await window.saveRowToDb(data);
-              count++;
+              try {
+                const saved = await window.saveRowToDb(data);
+                if (saved) count++;
+              } catch (saveErr) {
+                console.warn('Error en saveRowToDb:', saveErr);
+              }
             }
 
           }
