@@ -41,43 +41,56 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
   });
 
-  // Bloquear inmediatamente imágenes, fuentes, media y assets pesados para ahorrar hasta 70% de memoria RAM en Render
-  await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico,woff,woff2,ttf,eot,mp4,mp3}', route => route.abort());
+  // Bloquear imágenes pesadas y multimedia para ahorrar RAM sin romper estilos ni iconos GeneXus
+  await context.route('**/*.{png,jpg,jpeg,gif,webp,mp4,mp3}', route => route.abort());
 
   const page = await context.newPage();
 
   try {
-    // ... (Login and Navigate to table logic same as before)
     console.log(`[Ext-${extractionId}] Iniciando scraper...`);
     onProgress({ message: 'Preparando navegador...', current: 0, total: 100, percentage: 2 });
     
-    await page.goto(settings.portal_url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(settings.portal_url, { waitUntil: 'load', timeout: 60000 });
     onProgress({ message: 'Portal cargado. Identificándose...', current: 0, total: 100, percentage: 5 });
 
     const loginSelector = '#vSECUSERNAME, #vUSERSEGLGN';
     const passSelector = '#vSECUSERPASSWORD, #vUSERSEGPWR';
-    if (await page.isVisible(loginSelector)) {
-      await page.fill(loginSelector, settings.username);
-      await page.fill(passSelector, settings.password);
-      await page.click('#BTNENTER');
-      await page.waitForTimeout(5000);
+
+    let needsLogin = false;
+    try {
+      const loginInput = page.locator(loginSelector).first();
+      await loginInput.waitFor({ state: 'visible', timeout: 15000 });
+      needsLogin = true;
+    } catch (e) {
+      console.log(`[Ext-${extractionId}] Formulario de login no visible en 15s. Comprobando sesión activa...`);
     }
 
-    await page.waitForLoadState('domcontentloaded');
+    if (needsLogin) {
+      console.log(`[Ext-${extractionId}] Ingresando credenciales de acceso...`);
+      await page.fill(loginSelector, settings.username);
+      await page.fill(passSelector, settings.password);
+      
+      const enterBtn = page.locator('#BTNENTER, input[name="BTNENTER"], input[value="Ingresar"], button:has-text("Ingresar")').first();
+      await enterBtn.waitFor({ state: 'visible', timeout: 10000 });
+      await enterBtn.click();
+      console.log(`[Ext-${extractionId}] Clic en Ingresar. Esperando validación de sesión...`);
+      await page.waitForTimeout(4000);
+      await page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {});
+    }
+
     onProgress({ message: 'Sesión iniciada. Navegando a la tabla...', current: 5, total: 100, percentage: 5 });
 
     let isTableLoaded = false;
     try {
       console.log(`[Ext-${extractionId}] Intentando navegar directamente a la tabla...`);
       await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview', { 
-        waitUntil: 'commit',
-        timeout: 25000 
+        waitUntil: 'load',
+        timeout: 30000 
       });
-      await page.waitForLoadState('load');
       // Verificar si cargó el filtro
-      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 8000 });
+      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 15000 });
       isTableLoaded = true;
-      console.log(`[Ext-${extractionId}] Tabla de acciones comerciales cargada directamente.`);
+      console.log(`[Ext-${extractionId}] Tabla de acciones comerciales cargada directamente (#vDESDE visible).`);
     } catch (e) {
       console.log(`[Ext-${extractionId}] No se pudo cargar directamente (#vDESDE no visible). Intentando navegación por menú lateral...`);
     }
@@ -86,20 +99,20 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       try {
         if (!page.url().includes('viewhome')) {
           await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.viewhome', { 
-            waitUntil: 'networkidle',
+            waitUntil: 'load',
             timeout: 30000 
           });
         }
         
         console.log(`[Ext-${extractionId}] Buscando menú "Gestion Operativa"...`);
         const gestionOperativaMenu = page.locator('text="Gestion Operativa", :has-text("Gestion Operativa")').first();
-        await gestionOperativaMenu.waitFor({ state: 'visible', timeout: 15000 });
+        await gestionOperativaMenu.waitFor({ state: 'visible', timeout: 20000 });
         await gestionOperativaMenu.click();
         await page.waitForTimeout(3000); // Esperar animación de apertura
 
         console.log(`[Ext-${extractionId}] Buscando item "Acciones comerciales generales"...`);
         const accionesGeneralesItem = page.locator('text="Acciones comerciales generales", a:has-text("Acciones comerciales generales"), span:has-text("Acciones comerciales generales")').first();
-        await accionesGeneralesItem.waitFor({ state: 'visible', timeout: 15000 });
+        await accionesGeneralesItem.waitFor({ state: 'visible', timeout: 20000 });
         await accionesGeneralesItem.click();
 
         console.log(`[Ext-${extractionId}] Esperando carga de la tabla (#vDESDE)...`);
@@ -115,7 +128,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             waitUntil: 'load',
             timeout: 30000 
           });
-          await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 20000 });
+          await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 25000 });
+          isTableLoaded = true;
         } catch (finalError) {
           console.error(`[Ext-${extractionId}] Fallaron todos los métodos de navegación.`);
         }
@@ -123,17 +137,25 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     }
 
     // 2. Esperar que la página de filtros cargue completamente
-    // Diagnóstico confirmó: no hay iframes, todo está en el frame principal
-    // Selectores exactos: #vDESDE, #vHASTA, #BTNBUSCAR
     onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
     let dataFrame = page;
 
     // Esperar que el campo DESDE aparezca en la página (indica que el panel de filtros cargó)
     try {
-      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 40000 });
-      console.log('[DEBUG] Panel de filtros detectado (#vDESDE visible)');
+      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 35000 });
+      console.log('[DEBUG] Panel de filtros detectado (#vDESDE visible en frame principal)');
     } catch (e) {
-      console.log('[DEBUG] Timeout esperando #vDESDE, continuando...', e.message);
+      console.log('[DEBUG] Timeout esperando #vDESDE en página principal. Buscando en frames secundarios...');
+      for (const f of page.frames()) {
+        try {
+          const el = await f.$('#vDESDE');
+          if (el && await el.isVisible()) {
+            dataFrame = f;
+            console.log('[DEBUG] #vDESDE detectado dentro de frame secundario!');
+            break;
+          }
+        } catch (err) {}
+      }
     }
 
     // 3. Aplicar Filtros de Fecha
@@ -151,7 +173,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         // --- Llenar campo DESDE (#vDESDE) ---
         if (startFormatted) {
           try {
-            const desdeEl = page.locator('#vDESDE').first();
+            const desdeEl = dataFrame.locator('#vDESDE').first();
             await desdeEl.waitFor({ state: 'visible', timeout: 15000 });
             await desdeEl.click({ clickCount: 3 }); // seleccionar todo el texto
             await desdeEl.fill(startFormatted);
@@ -167,9 +189,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         // --- Llenar campo HASTA (#vHASTA) ---
         if (endFormatted) {
           try {
-            const hastaEl = page.locator('#vHASTA').first();
+            const hastaEl = dataFrame.locator('#vHASTA').first();
             await hastaEl.waitFor({ state: 'visible', timeout: 15000 });
-            await hastaEl.click();
+            await hastaEl.click({ clickCount: 3 });
             await hastaEl.fill(endFormatted);
             await hastaEl.dispatchEvent('change');
             await hastaEl.press('Tab');
@@ -184,14 +206,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
         // --- Clickear botón BUSCAR (#BTNBUSCAR) ---
         try {
-          const buscarEl = page.locator('#BTNBUSCAR').first();
+          const buscarEl = dataFrame.locator('#BTNBUSCAR, input[name="BTNBUSCAR"], button:has-text("Buscar"), input[value="Buscar"]').first();
           await buscarEl.waitFor({ state: 'visible', timeout: 10000 });
           console.log(`[Ext-${extractionId}] Clickeando botón #BTNBUSCAR...`);
           await buscarEl.click();
         } catch (e) {
           console.log('[DEBUG] #BTNBUSCAR no encontrado, intentando alternativas...', e.message);
-          // Fallback: intentar otros selectores
-          const fallbackBtn = page.locator('input[value="Buscar"], button:has-text("Buscar")').first();
+          const fallbackBtn = dataFrame.locator('input[value="Buscar"], button:has-text("Buscar")').first();
           if (await fallbackBtn.count() > 0) {
             await fallbackBtn.click();
           } else {
@@ -427,22 +448,16 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       
       // Process rows INSIDE the browser to avoid moving large objects to Node.js
       const pageResults = await dataFrame.evaluate(async () => {
-        const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr'));
+        const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table[id*="Grid"] tr'));
         let count = 0;
         for (const row of trs) {
           const tds = row.querySelectorAll('td');
           if (tds.length >= 7 && !row.querySelector('th') && !row.classList.contains('Grid_WorkWithHeader')) {
             const rawPrice = tds[3]?.innerText.trim() || '0,00';
-            const cleanPriceStr = rawPrice.replace(/\$/g, '').replace(/\./g, '').replace(',', '.').trim();
-            const numericPrice = parseFloat(cleanPriceStr) || 0;
-
-            // Omisión requerida: Si el precio fidelizado en el portal web es mayor a 0, omitir el código para no duplicar carteles ya impresos
-            if (numericPrice > 0) {
-              continue;
-            }
+            const codigoStr = tds[0]?.innerText.trim() || '';
 
             const data = {
-              codigo: tds[0]?.innerText.trim() || '',
+              codigo: codigoStr,
               articulo: tds[1]?.innerText.trim() || '',
               combo: tds[2]?.innerText.trim() || '',
               precio_fidelizado: rawPrice,
