@@ -21,6 +21,65 @@ const PROMOS = [
 
 const DAYS = ['Todos', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
+export function calculateFinalPrice(priceStr: string | number | null | undefined, combo: string | null | undefined): number {
+  if (priceStr === null || priceStr === undefined || priceStr === '') return 0;
+  let price = typeof priceStr === 'number' 
+    ? priceStr 
+    : parseFloat(String(priceStr).replace(/\$/g, '').replace(/\./g, '').replace(',', '.').trim());
+  if (isNaN(price)) return 0;
+  if (!combo) return price;
+  const text = String(combo).toLowerCase();
+  const secMatch = text.match(/2d[oa]\s+al\s+(\d+)/);
+  if (secMatch) {
+    const discount = parseInt(secMatch[1]);
+    return (price + (price * (1 - discount / 100))) / 2;
+  }
+  const nxmMatch = text.match(/(\d+)x(\d+)/);
+  if (nxmMatch) {
+    const n = parseInt(nxmMatch[1]);
+    const m = parseInt(nxmMatch[2]);
+    return (price * m) / n;
+  }
+  const pctMatch = text.match(/(\d+)\s*%/);
+  if (pctMatch) {
+    const discount = parseInt(pctMatch[1]);
+    return price * (1 - discount / 100);
+  }
+  const fixedMatch = text.match(/llevando\s+\d+[:\s]+\$?\s*(\d+)/);
+  if (fixedMatch) {
+    return parseFloat(fixedMatch[1]);
+  }
+  return price;
+}
+
+export function formatCurrency(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '$ 0,00';
+  let num = typeof value === 'number' 
+    ? value 
+    : parseFloat(String(value).replace(/\$/g, '').replace(/\./g, '').replace(',', '.').trim());
+  if (isNaN(num)) return '$ 0,00';
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    minimumFractionDigits: 2
+  }).format(num);
+}
+
+export function isSinOferta(combo: string | null | undefined): boolean {
+  if (!combo) return true;
+  const trimmed = String(combo).trim().toUpperCase();
+  return trimmed === '' || trimmed === 'N/A' || trimmed === '-' || trimmed === 'SIN COMBO';
+}
+
+export function parseDate(str: string | null | undefined): Date | null {
+  if (!str) return null;
+  const parts = String(str).split('/');
+  if (parts.length !== 3) return null;
+  const [d, m, y] = parts.map(Number);
+  if (isNaN(d) || isNaN(m) || isNaN(y)) return null;
+  return new Date(y, m - 1, d);
+}
+
 export default function DataPage() {
   const [history, setHistory] = useState<any[]>([])
   const [selectedExtraction, setSelectedExtraction] = useState<number | null>(null)
@@ -164,12 +223,6 @@ export default function DataPage() {
     dateDesde: '',
     dateHasta: ''
   })
-
-  const isSinOferta = (combo: string | null | undefined) => {
-    if (!combo) return true;
-    const trimmed = combo.trim().toUpperCase();
-    return trimmed === '' || trimmed === 'N/A' || trimmed === '-' || trimmed === 'SIN COMBO';
-  };
 
   const handleClearAllFilters = () => {
     setSearchTerm('');
@@ -376,14 +429,6 @@ export default function DataPage() {
     }
   }
 
-  const parseDate = (str: string) => {
-    if (!str) return null;
-    const parts = str.split('/');
-    if (parts.length !== 3) return null;
-    const [d, m, y] = parts.map(Number);
-    return new Date(y, m - 1, d);
-  };
-
   const comboStats = useMemo(() => {
     let sinOfertaCount = 0;
     const counts = new Map<string, number>();
@@ -570,6 +615,25 @@ export default function DataPage() {
     });
   }, [filteredData, sortColumn, sortDirection]);
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(50);
+
+  // Reset to page 1 whenever filters or sorting change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, promoFilterMode, selectedCombo, dateFilterStart, dateFilterEnd, exactStartMatch, exactEndMatch, columnFilters, sortColumn, sortDirection, selectedExtraction]);
+
+  const totalPages = useMemo(() => {
+    if (pageSize === 'all') return 1;
+    return Math.max(1, Math.ceil(sortedAndFilteredData.length / pageSize));
+  }, [sortedAndFilteredData.length, pageSize]);
+
+  const paginatedData = useMemo(() => {
+    if (pageSize === 'all') return sortedAndFilteredData;
+    const start = (currentPage - 1) * pageSize;
+    return sortedAndFilteredData.slice(start, start + pageSize);
+  }, [sortedAndFilteredData, currentPage, pageSize]);
+
   const handleCopyFilteredCodes = () => {
     let targetItems = sortedAndFilteredData;
     if (selectedIds.size > 0) {
@@ -704,46 +768,6 @@ export default function DataPage() {
     });
     const uniqueItems = deduplicateByCode(selectedItems);
     generatePosters(uniqueItems, false)
-  }
-
-  const formatCurrency = (value: string | number) => {
-    if (typeof value === 'string') {
-      value = parseFloat(value.replace(',', '.'))
-    }
-    if (isNaN(value)) return '$ 0,00'
-    return new Intl.NumberFormat('es-AR', {
-      style: 'currency',
-      currency: 'ARS',
-      minimumFractionDigits: 2
-    }).format(value)
-  }
-
-  const calculateFinalPrice = (priceStr: string, combo: string) => {
-    let price = parseFloat(priceStr.replace(',', '.'))
-    if (isNaN(price)) return 0
-    if (!combo) return price
-    const text = combo.toLowerCase()
-    const secMatch = text.match(/2d[oa]\s+al\s+(\d+)/);
-    if (secMatch) {
-      const discount = parseInt(secMatch[1]);
-      return (price + (price * (1 - discount / 100))) / 2;
-    }
-    const nxmMatch = text.match(/(\d+)x(\d+)/);
-    if (nxmMatch) {
-      const n = parseInt(nxmMatch[1]);
-      const m = parseInt(nxmMatch[2]);
-      return (price * m) / n;
-    }
-    const pctMatch = text.match(/(\d+)\s*%/);
-    if (pctMatch) {
-      const discount = parseInt(pctMatch[1]);
-      return price * (1 - discount / 100);
-    }
-    const fixedMatch = text.match(/llevando\s+\d+[:\s]+\$?\s*(\d+)/);
-    if (fixedMatch) {
-      return parseFloat(fixedMatch[1]);
-    }
-    return price
   }
 
   const handleExport = (type: string) => {
@@ -2063,7 +2087,7 @@ export default function DataPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/50 text-xs">
-                    {sortedAndFilteredData.length > 0 ? sortedAndFilteredData.map((row) => {
+                    {paginatedData.length > 0 ? paginatedData.map((row) => {
 
                       const finalPrice = row.precio_final !== null && row.precio_final !== undefined && row.precio_final !== ''
                         ? parseFloat(String(row.precio_final).replace(',', '.'))
@@ -2257,10 +2281,10 @@ export default function DataPage() {
                       )
                     }) : (
                       <tr>
-                        <td colSpan={6} className="px-6 py-16 text-center text-slate-600">
+                        <td colSpan={9} className="px-6 py-16 text-center text-slate-600">
                           <div className="flex flex-col items-center gap-2">
                             <Search size={40} className="opacity-20" />
-                            <p className="italic">No hay artículos con stock real para mostrar.</p>
+                            <p className="italic">No hay artículos con los filtros aplicados para mostrar.</p>
                           </div>
                         </td>
                       </tr>
@@ -2268,6 +2292,76 @@ export default function DataPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Bar */}
+              {sortedAndFilteredData.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-4 p-3.5 border-t border-slate-800 bg-slate-900/60 text-xs">
+                  <div className="flex items-center gap-3 text-slate-400">
+                    <span>
+                      Mostrando {pageSize === 'all' ? 1 : (currentPage - 1) * pageSize + 1} a{' '}
+                      {pageSize === 'all' ? sortedAndFilteredData.length : Math.min(currentPage * pageSize, sortedAndFilteredData.length)} de{' '}
+                      <strong className="text-white">{sortedAndFilteredData.length}</strong> artículos
+                    </span>
+
+                    <div className="flex items-center gap-1.5 ml-2">
+                      <span className="text-[11px] text-slate-500">Filas:</span>
+                      <select
+                        value={pageSize}
+                        onChange={(e) => {
+                          const val = e.target.value === 'all' ? 'all' : Number(e.target.value);
+                          setPageSize(val);
+                          setCurrentPage(1);
+                        }}
+                        className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-300 text-xs focus:outline-none focus:border-red-500 cursor-pointer"
+                      >
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={200}>200</option>
+                        <option value={500}>500</option>
+                        <option value="all">Todos ({sortedAndFilteredData.length})</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {pageSize !== 'all' && totalPages > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setCurrentPage(1)}
+                        disabled={currentPage === 1}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-xs font-bold"
+                      >
+                        « Primero
+                      </button>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-xs"
+                      >
+                        ‹ Anterior
+                      </button>
+
+                      <span className="px-3 py-1 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono font-bold">
+                        Pág. {currentPage} de {totalPages}
+                      </span>
+
+                      <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-xs"
+                      >
+                        Siguiente ›
+                      </button>
+                      <button
+                        onClick={() => setCurrentPage(totalPages)}
+                        disabled={currentPage === totalPages}
+                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-xs font-bold"
+                      >
+                        Último »
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
