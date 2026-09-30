@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check, Pencil, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
+import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check, Pencil, ArrowUpDown, ArrowUp, ArrowDown, Copy } from 'lucide-react'
 import { generatePosters } from '@/lib/posterGenerator'
 import { Smartphone, CreditCard, Wallet, Info } from 'lucide-react'
 import { API_URL } from '@/lib/api'
@@ -137,6 +137,90 @@ export default function DataPage() {
       setSortDirection('asc')
     }
   }
+
+  const [promoFilterMode, setPromoFilterMode] = useState<'all' | 'with_promo' | 'direct_price'>('all')
+  const [isCopiedCodes, setIsCopiedCodes] = useState(false)
+  const [openPopover, setOpenPopover] = useState<string | null>(null)
+  const [columnFilters, setColumnFilters] = useState<{
+    stockMode: 'all' | 'in_stock' | 'out_of_stock';
+    stockMin: string;
+    stockMax: string;
+    selectedCombos: string[];
+    precioMin: string;
+    precioMax: string;
+    finalMin: string;
+    finalMax: string;
+    dateDesde: string;
+    dateHasta: string;
+  }>({
+    stockMode: 'all',
+    stockMin: '',
+    stockMax: '',
+    selectedCombos: [],
+    precioMin: '',
+    precioMax: '',
+    finalMin: '',
+    finalMax: '',
+    dateDesde: '',
+    dateHasta: ''
+  })
+
+  const isSinOferta = (combo: string | null | undefined) => {
+    if (!combo) return true;
+    const trimmed = combo.trim().toUpperCase();
+    return trimmed === '' || trimmed === 'N/A' || trimmed === '-' || trimmed === 'SIN COMBO';
+  };
+
+  const handleClearAllFilters = () => {
+    setSearchTerm('');
+    setSelectedCombo('');
+    setPromoFilterMode('all');
+    setDateFilterStart('');
+    setDateFilterEnd('');
+    setExactStartMatch(false);
+    setExactEndMatch(false);
+    setShowOutOfStock(false);
+    setColumnFilters({
+      stockMode: 'all',
+      stockMin: '',
+      stockMax: '',
+      selectedCombos: [],
+      precioMin: '',
+      precioMax: '',
+      finalMin: '',
+      finalMax: '',
+      dateDesde: '',
+      dateHasta: ''
+    });
+    setOpenPopover(null);
+  };
+
+  const clearColumnFilter = (colKey: string) => {
+    if (colKey === 'producto') setSearchTerm('');
+    if (colKey === 'combo') {
+      setSelectedCombo('');
+      setColumnFilters(f => ({ ...f, selectedCombos: [] }));
+      if (promoFilterMode !== 'all') setPromoFilterMode('all');
+    }
+    if (colKey === 'stock') {
+      setShowOutOfStock(false);
+      setColumnFilters(f => ({ ...f, stockMode: 'all', stockMin: '', stockMax: '' }));
+    }
+    if (colKey === 'desde') {
+      setDateFilterStart('');
+      setColumnFilters(f => ({ ...f, dateDesde: '' }));
+    }
+    if (colKey === 'hasta') {
+      setDateFilterEnd('');
+      setColumnFilters(f => ({ ...f, dateHasta: '' }));
+    }
+    if (colKey === 'precio') {
+      setColumnFilters(f => ({ ...f, precioMin: '', precioMax: '' }));
+    }
+    if (colKey === 'final') {
+      setColumnFilters(f => ({ ...f, finalMin: '', finalMax: '' }));
+    }
+  };
 
 
   const handleUpdateRecord = (id: number) => {
@@ -300,99 +384,236 @@ export default function DataPage() {
     return new Date(y, m - 1, d);
   };
 
-  const filteredData = data.filter(item => {
-    const matchesSearch = item.articulo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          item.codigo.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCombo = selectedCombo === '' || (item.combo && item.combo.includes(selectedCombo));
-    
-    let matchesDate = true;
-    if (dateFilterStart || dateFilterEnd) {
-      const itemStart = parseDate(item.fecha_desde);
-      const itemEnd = parseDate(item.fecha_hasta);
-      
-      if (dateFilterStart) {
-        if (exactStartMatch) {
-          const [fYear, fMonth, fDay] = dateFilterStart.split('-');
-          const formattedFilterStart = `${fDay}/${fMonth}/${fYear}`;
-          if (item.fecha_desde !== formattedFilterStart) matchesDate = false;
-        } else {
-          const filterStart = new Date(dateFilterStart + 'T00:00:00');
-          if (itemEnd && itemEnd < filterStart) matchesDate = false;
-        }
-      }
-
-      if (dateFilterEnd) {
-        if (exactEndMatch) {
-          const [fYear, fMonth, fDay] = dateFilterEnd.split('-');
-          const formattedFilterEnd = `${fDay}/${fMonth}/${fYear}`;
-          if (item.fecha_hasta !== formattedFilterEnd) matchesDate = false;
-        } else {
-          const filterEnd = new Date(dateFilterEnd + 'T23:59:59');
-          if (itemStart && itemStart > filterEnd) matchesDate = false;
-        }
+  const comboStats = useMemo(() => {
+    let sinOfertaCount = 0;
+    const counts = new Map<string, number>();
+    for (const item of data) {
+      if (isSinOferta(item.combo)) {
+        sinOfertaCount++;
+      } else {
+        const c = String(item.combo).trim();
+        counts.set(c, (counts.get(c) || 0) + 1);
       }
     }
+    return { sinOfertaCount, counts };
+  }, [data]);
 
-    const hasStock = item.stock > 0;
-    const baseFilter = matchesSearch && matchesCombo && matchesDate;
-    if (showOutOfStock) return baseFilter;
-    return baseFilter && hasStock;
-  })
+  const activeFiltersCount = useMemo(() => {
+    let count = 0;
+    if (searchTerm) count++;
+    if (promoFilterMode !== 'all') count++;
+    if (selectedCombo) count++;
+    if (dateFilterStart || columnFilters.dateDesde) count++;
+    if (dateFilterEnd || columnFilters.dateHasta) count++;
+    if (showOutOfStock || columnFilters.stockMode !== 'all' || columnFilters.stockMin || columnFilters.stockMax) count++;
+    if (columnFilters.selectedCombos.length > 0) count++;
+    if (columnFilters.precioMin || columnFilters.precioMax) count++;
+    if (columnFilters.finalMin || columnFilters.finalMax) count++;
+    return count;
+  }, [searchTerm, promoFilterMode, selectedCombo, dateFilterStart, dateFilterEnd, showOutOfStock, columnFilters]);
+
+  const filteredData = useMemo(() => {
+    return data.filter(item => {
+      // 1. Búsqueda por texto (nombre o código)
+      if (searchTerm) {
+        const term = searchTerm.toLowerCase();
+        const matchesName = (item.articulo || '').toLowerCase().includes(term);
+        const matchesCode = String(item.codigo || '').toLowerCase().includes(term);
+        if (!matchesName && !matchesCode) return false;
+      }
+
+      // 2. Modo de Promoción (Todas vs Con Oferta vs Promociones Semanales Directas / N/A)
+      const sinOferta = isSinOferta(item.combo);
+      if (promoFilterMode === 'with_promo' && sinOferta) return false;
+      if (promoFilterMode === 'direct_price' && !sinOferta) return false;
+
+      // 3. Dropdown de combo en toolbar
+      if (selectedCombo) {
+        if (selectedCombo === '__SIN_COMBO__') {
+          if (!sinOferta) return false;
+        } else if (!item.combo || !item.combo.includes(selectedCombo)) {
+          return false;
+        }
+      }
+
+      // 4. Multi-selección de combos desde el popover de columna
+      if (columnFilters.selectedCombos.length > 0) {
+        const matchesSelectedCombos = columnFilters.selectedCombos.some(c => {
+          if (c === '__SIN_COMBO__') return sinOferta;
+          return item.combo && (item.combo === c || item.combo.includes(c));
+        });
+        if (!matchesSelectedCombos) return false;
+      }
+
+      // 5. Filtro de Stock
+      const stockNum = Number(item.stock || 0);
+      if (!showOutOfStock && stockNum <= 0) return false;
+      if (columnFilters.stockMode === 'in_stock' && stockNum <= 0) return false;
+      if (columnFilters.stockMode === 'out_of_stock' && stockNum > 0) return false;
+      if (columnFilters.stockMin !== '' && stockNum < parseFloat(columnFilters.stockMin)) return false;
+      if (columnFilters.stockMax !== '' && stockNum > parseFloat(columnFilters.stockMax)) return false;
+
+      // 6. Filtro de Fechas
+      const effectiveDateStart = columnFilters.dateDesde || dateFilterStart;
+      const effectiveDateEnd = columnFilters.dateHasta || dateFilterEnd;
+      if (effectiveDateStart || effectiveDateEnd) {
+        const itemStart = parseDate(item.fecha_desde);
+        const itemEnd = parseDate(item.fecha_hasta);
+        
+        if (effectiveDateStart) {
+          if (exactStartMatch) {
+            const [fYear, fMonth, fDay] = effectiveDateStart.split('-');
+            const formattedFilterStart = `${fDay}/${fMonth}/${fYear}`;
+            if (item.fecha_desde !== formattedFilterStart) return false;
+          } else {
+            const filterStart = new Date(effectiveDateStart + 'T00:00:00');
+            if (itemEnd && itemEnd < filterStart) return false;
+          }
+        }
+
+        if (effectiveDateEnd) {
+          if (exactEndMatch) {
+            const [fYear, fMonth, fDay] = effectiveDateEnd.split('-');
+            const formattedFilterEnd = `${fDay}/${fMonth}/${fYear}`;
+            if (item.fecha_hasta !== formattedFilterEnd) return false;
+          } else {
+            const filterEnd = new Date(effectiveDateEnd + 'T23:59:59');
+            if (itemStart && itemStart > filterEnd) return false;
+          }
+        }
+      }
+
+      // 7. Filtro de Precio Base
+      const numPrecio = parseFloat(String(item.precio_fidelizado || '0').replace(/\./g, '').replace(',', '.')) || 0;
+      if (columnFilters.precioMin !== '' && numPrecio < parseFloat(columnFilters.precioMin)) return false;
+      if (columnFilters.precioMax !== '' && numPrecio > parseFloat(columnFilters.precioMax)) return false;
+
+      // 8. Filtro de Precio Final
+      const finalPriceVal = item.precio_final !== null && item.precio_final !== undefined && item.precio_final !== ''
+        ? parseFloat(String(item.precio_final).replace(',', '.'))
+        : calculateFinalPrice(item.precio_fidelizado, item.combo);
+      const numFinal = finalPriceVal || 0;
+      if (columnFilters.finalMin !== '' && numFinal < parseFloat(columnFilters.finalMin)) return false;
+      if (columnFilters.finalMax !== '' && numFinal > parseFloat(columnFilters.finalMax)) return false;
+
+      return true;
+    });
+  }, [
+    data, 
+    searchTerm, 
+    promoFilterMode, 
+    selectedCombo, 
+    showOutOfStock, 
+    dateFilterStart, 
+    dateFilterEnd, 
+    exactStartMatch, 
+    exactEndMatch, 
+    columnFilters
+  ]);
 
   const sortedAndFilteredData = useMemo(() => {
-    let result = [...filteredData]
-    if (!sortColumn) return result
+    let result = [...filteredData];
+    if (!sortColumn) return result;
 
     return result.sort((a, b) => {
-      let valA: any = ''
-      let valB: any = ''
+      let valA: any = '';
+      let valB: any = '';
 
       if (sortColumn === 'producto') {
-        valA = (a.articulo || a.codigo || '').toString().toLowerCase()
-        valB = (b.articulo || b.codigo || '').toString().toLowerCase()
+        const strA = (a.articulo || a.codigo || '').toString();
+        const strB = (b.articulo || b.codigo || '').toString();
+        const comp = strA.localeCompare(strB, 'es', { numeric: true, sensitivity: 'base' });
+        return sortDirection === 'asc' ? comp : -comp;
       } else if (sortColumn === 'desde') {
         const parseDateMs = (dStr: string) => {
-          if (!dStr) return 0
-          const parts = dStr.split('/')
-          if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).getTime()
-          return new Date(dStr).getTime() || 0
-        }
-        valA = parseDateMs(a.fecha_desde)
-        valB = parseDateMs(b.fecha_desde)
+          if (!dStr) return 0;
+          const parts = dStr.split('/');
+          if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).getTime();
+          return new Date(dStr).getTime() || 0;
+        };
+        valA = parseDateMs(a.fecha_desde);
+        valB = parseDateMs(b.fecha_desde);
       } else if (sortColumn === 'hasta') {
         const parseDateMs = (dStr: string) => {
-          if (!dStr) return 0
-          const parts = dStr.split('/')
-          if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).getTime()
-          return new Date(dStr).getTime() || 0
-        }
-        valA = parseDateMs(a.fecha_hasta)
-        valB = parseDateMs(b.fecha_hasta)
+          if (!dStr) return 0;
+          const parts = dStr.split('/');
+          if (parts.length === 3) return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).getTime();
+          return new Date(dStr).getTime() || 0;
+        };
+        valA = parseDateMs(a.fecha_hasta);
+        valB = parseDateMs(b.fecha_hasta);
       } else if (sortColumn === 'stock') {
-        valA = Number(a.stock || 0)
-        valB = Number(b.stock || 0)
+        valA = Number(a.stock || 0);
+        valB = Number(b.stock || 0);
       } else if (sortColumn === 'combo') {
-        valA = (a.combo || '').toString().toLowerCase()
-        valB = (b.combo || '').toString().toLowerCase()
+        const strA = (a.combo || 'N/A').toString();
+        const strB = (b.combo || 'N/A').toString();
+        const comp = strA.localeCompare(strB, 'es', { numeric: true, sensitivity: 'base' });
+        return sortDirection === 'asc' ? comp : -comp;
       } else if (sortColumn === 'precio') {
-        valA = parseFloat(String(a.precio_fidelizado || '0').replace('.', '').replace(',', '.')) || 0
-        valB = parseFloat(String(b.precio_fidelizado || '0').replace('.', '').replace(',', '.')) || 0
+        valA = parseFloat(String(a.precio_fidelizado || '0').replace(/\./g, '').replace(',', '.')) || 0;
+        valB = parseFloat(String(b.precio_fidelizado || '0').replace(/\./g, '').replace(',', '.')) || 0;
       } else if (sortColumn === 'final') {
         const priceA = a.precio_final !== null && a.precio_final !== undefined && a.precio_final !== ''
           ? parseFloat(String(a.precio_final).replace(',', '.'))
-          : calculateFinalPrice(a.precio_fidelizado, a.combo)
+          : calculateFinalPrice(a.precio_fidelizado, a.combo);
         const priceB = b.precio_final !== null && b.precio_final !== undefined && b.precio_final !== ''
           ? parseFloat(String(b.precio_final).replace(',', '.'))
-          : calculateFinalPrice(b.precio_fidelizado, b.combo)
-        valA = priceA || 0
-        valB = priceB || 0
+          : calculateFinalPrice(b.precio_fidelizado, b.combo);
+        valA = priceA || 0;
+        valB = priceB || 0;
       }
 
-      if (valA < valB) return sortDirection === 'asc' ? -1 : 1
-      if (valA > valB) return sortDirection === 'asc' ? 1 : -1
-      return 0
-    })
-  }, [filteredData, sortColumn, sortDirection])
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredData, sortColumn, sortDirection]);
+
+  const handleCopyFilteredCodes = () => {
+    let targetItems = sortedAndFilteredData;
+    if (selectedIds.size > 0) {
+      targetItems = sortedAndFilteredData.filter(item => selectedIds.has(item.id));
+    }
+
+    const codes = Array.from(new Set(targetItems.map(item => String(item.codigo).trim()).filter(Boolean)));
+    if (codes.length === 0) {
+      alert('No hay códigos para copiar.');
+      return;
+    }
+
+    const textToCopy = codes.join('\n');
+    const fallbackCopy = (text: string) => {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        setIsCopiedCodes(true);
+        setTimeout(() => setIsCopiedCodes(false), 2500);
+      } catch (err) {
+        alert('No se pudo copiar automáticamente.');
+      }
+      document.body.removeChild(textArea);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textToCopy)
+        .then(() => {
+          setIsCopiedCodes(true);
+          setTimeout(() => setIsCopiedCodes(false), 2500);
+        })
+        .catch(() => {
+          fallbackCopy(textToCopy);
+        });
+    } else {
+      fallbackCopy(textToCopy);
+    }
+  };
 
   const toggleSelectAll = () => {
     if (selectedIds.size === sortedAndFilteredData.length) {
@@ -864,9 +1085,89 @@ export default function DataPage() {
               </div>
             )}
 
+            {/* Quick Promo Mode Tabs & Copy DIA Codes */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1 hidden sm:inline">
+                  Tipo Oferta:
+                </span>
+                <button
+                  onClick={() => setPromoFilterMode('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    promoFilterMode === 'all'
+                      ? 'bg-slate-700 text-white shadow-sm ring-1 ring-slate-600'
+                      : 'bg-slate-800/50 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <span>Todos</span>
+                  <span className="text-[10px] bg-slate-950/60 px-1.5 py-0.5 rounded-full font-mono text-slate-300">
+                    {data.length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setPromoFilterMode('with_promo')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    promoFilterMode === 'with_promo'
+                      ? 'bg-red-600 text-white shadow-sm shadow-red-900/30'
+                      : 'bg-slate-800/50 text-slate-400 hover:text-red-300 hover:bg-slate-800'
+                  }`}
+                  title="Artículos con combinaciones o combos de oferta activa"
+                >
+                  <span>🏷️ Con Oferta / Combo</span>
+                  <span className="text-[10px] bg-slate-950/60 px-1.5 py-0.5 rounded-full font-mono text-slate-300">
+                    {data.length - comboStats.sinOfertaCount}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setPromoFilterMode('direct_price')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    promoFilterMode === 'direct_price'
+                      ? 'bg-amber-600 text-white shadow-sm shadow-amber-900/30 font-bold'
+                      : 'bg-slate-800/50 text-slate-400 hover:text-amber-300 hover:bg-slate-800'
+                  }`}
+                  title="Promociones semanales directas: el precio base ya es la oferta (figuran sin combo o N/A en DIA)"
+                >
+                  <span>⚡ Promociones Semanales Directas (Sin Oferta / N/A)</span>
+                  <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded-full font-mono font-bold">
+                    {comboStats.sinOfertaCount}
+                  </span>
+                </button>
+              </div>
+
+              {/* Botón Copiar Códigos DIA */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopyFilteredCodes}
+                  disabled={sortedAndFilteredData.length === 0}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 border shadow-sm ${
+                    isCopiedCodes
+                      ? 'bg-emerald-600 border-emerald-500 text-white'
+                      : 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/25 hover:border-amber-500/60'
+                  } disabled:opacity-40 disabled:cursor-not-allowed`}
+                  title="Copia los códigos DIA filtrados (1 por línea) para pegar directamente en generadores de carteles"
+                >
+                  {isCopiedCodes ? (
+                    <>
+                      <Check size={15} className="text-white" />
+                      <span>¡Códigos Copiados!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={15} />
+                      <span>
+                        Copiar Códigos DIA {selectedIds.size > 0 ? `(${selectedIds.size} selec.)` : `(${sortedAndFilteredData.length})`}
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
             {/* Toolbar */}
             <div className="glass-card p-4 flex flex-col md:flex-row gap-4 items-center justify-between border-slate-800/50">
-              <div className="relative w-full md:w-96">
+              <div className="relative w-full md:w-80">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
                 <input 
                   type="text" 
@@ -937,7 +1238,6 @@ export default function DataPage() {
                 )}
               </div>
 
-              
               <div className="flex items-center gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 scrollbar-hide">
                 {uniqueCombos.length > 0 && (
                   <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg px-2 shrink-0">
@@ -948,7 +1248,8 @@ export default function DataPage() {
                       className="bg-slate-900 text-xs py-2 pr-2 text-slate-200 focus:outline-none cursor-pointer"
                     >
                       <option value="" className="bg-slate-900 text-slate-400">Todos los combos</option>
-                      {uniqueCombos.map(c => (
+                      <option value="__SIN_COMBO__" className="bg-slate-900 text-amber-400 font-bold">⚡ Sin Oferta / N/A (Semanales)</option>
+                      {uniqueCombos.filter(c => !isSinOferta(c)).map(c => (
                         <option key={c} value={c} className="bg-slate-900 text-slate-200">
                           {c}
                         </option>
@@ -992,6 +1293,98 @@ export default function DataPage() {
                 </div>
               )}
             </div>
+
+            {/* Active Filters Row */}
+            {activeFiltersCount > 0 && (
+              <div className="flex flex-wrap items-center gap-2 p-2.5 bg-slate-900/60 border border-slate-800/80 rounded-xl text-xs">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mr-1">
+                  <Filter size={12} className="text-red-400" />
+                  Filtros activos ({activeFiltersCount}):
+                </span>
+
+                {searchTerm && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700 text-[11px]">
+                    Texto: "{searchTerm}"
+                    <button onClick={() => clearColumnFilter('producto')} className="hover:text-red-400 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {promoFilterMode === 'with_promo' && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-red-950/60 text-red-300 border border-red-800/50 text-[11px]">
+                    🏷️ Con Oferta / Combo
+                    <button onClick={() => setPromoFilterMode('all')} className="hover:text-red-200 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {promoFilterMode === 'direct_price' && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-950/60 text-amber-300 border border-amber-800/50 text-[11px]">
+                    ⚡ Promo Semanal Directa (Sin Oferta / N/A)
+                    <button onClick={() => setPromoFilterMode('all')} className="hover:text-amber-200 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {selectedCombo && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-indigo-950/60 text-indigo-300 border border-indigo-800/50 text-[11px]">
+                    Combo: {selectedCombo === '__SIN_COMBO__' ? 'Sin Oferta / N/A' : selectedCombo}
+                    <button onClick={() => setSelectedCombo('')} className="hover:text-indigo-200 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {columnFilters.selectedCombos.length > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-indigo-950/60 text-indigo-300 border border-indigo-800/50 text-[11px]">
+                    Combos: {columnFilters.selectedCombos.length} selec.
+                    <button onClick={() => setColumnFilters(f => ({ ...f, selectedCombos: [] }))} className="hover:text-indigo-200 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {(dateFilterStart || columnFilters.dateDesde) && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700 text-[11px]">
+                    Desde: {columnFilters.dateDesde || dateFilterStart} {exactStartMatch ? '(Exacto)' : ''}
+                    <button onClick={() => clearColumnFilter('desde')} className="hover:text-red-400 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {(dateFilterEnd || columnFilters.dateHasta) && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700 text-[11px]">
+                    Hasta: {columnFilters.dateHasta || dateFilterEnd} {exactEndMatch ? '(Exacto)' : ''}
+                    <button onClick={() => clearColumnFilter('hasta')} className="hover:text-red-400 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {(columnFilters.stockMode !== 'all' || showOutOfStock || columnFilters.stockMin || columnFilters.stockMax) && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700 text-[11px]">
+                    Stock: {columnFilters.stockMode === 'in_stock' ? 'Solo con stock' : columnFilters.stockMode === 'out_of_stock' ? 'Sin stock' : columnFilters.stockMin || columnFilters.stockMax ? `${columnFilters.stockMin || 0} - ${columnFilters.stockMax || '∞'}` : 'Todos'}
+                    <button onClick={() => clearColumnFilter('stock')} className="hover:text-red-400 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {(columnFilters.precioMin || columnFilters.precioMax) && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700 text-[11px]">
+                    Precio: ${columnFilters.precioMin || 0} - ${columnFilters.precioMax || '∞'}
+                    <button onClick={() => clearColumnFilter('precio')} className="hover:text-red-400 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {(columnFilters.finalMin || columnFilters.finalMax) && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700 text-[11px]">
+                    Precio Final: ${columnFilters.finalMin || 0} - ${columnFilters.finalMax || '∞'}
+                    <button onClick={() => clearColumnFilter('final')} className="hover:text-red-400 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                <div className="ml-auto flex items-center gap-3">
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    Mostrando <strong className="text-white">{sortedAndFilteredData.length}</strong> de {data.length}
+                  </span>
+                  <button
+                    onClick={handleClearAllFilters}
+                    className="text-[11px] text-red-400 hover:text-red-300 underline font-semibold"
+                  >
+                    Limpiar filtros
+                  </button>
+                </div>
+              </div>
+            )}
             
             {enrichmentStatus && (
               <div className={`text-[10px] px-4 py-1.5 rounded-lg border flex items-center gap-2 ${
@@ -1005,8 +1398,15 @@ export default function DataPage() {
               </div>
             )}
 
-            <div className="glass-card overflow-hidden border-slate-800/50 shadow-2xl">
-              <div className="overflow-x-auto">
+            <div className="glass-card overflow-hidden border-slate-800/50 shadow-2xl relative">
+              {openPopover && (
+                <div 
+                  className="fixed inset-0 z-40 bg-black/10" 
+                  onClick={() => setOpenPopover(null)} 
+                />
+              )}
+
+              <div className="overflow-x-auto min-h-[420px]">
                 <table className="w-full text-left border-collapse min-w-[800px]">
                   <thead>
                     <tr className="bg-slate-900/80 text-slate-500 text-[10px] uppercase tracking-[0.15em] font-bold">
@@ -1018,48 +1418,647 @@ export default function DataPage() {
                           className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-red-600 focus:ring-red-500 focus:ring-offset-slate-900"
                         />
                       </th>
-                      <th onClick={() => handleSort('producto')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
-                        <div className="flex items-center gap-1.5">
-                          <span>Producto</span>
-                          {sortColumn === 'producto' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+
+                      {/* PRODUCTO */}
+                      <th className="px-6 py-4 border-b border-slate-800 select-none relative">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div 
+                            onClick={() => handleSort('producto')} 
+                            className="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors flex-1"
+                            title="Ordenar por Producto (A-Z / Z-A)"
+                          >
+                            <span>Producto</span>
+                            {sortColumn === 'producto' ? (
+                              sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400 shrink-0" /> : <ArrowDown size={12} className="text-red-400 shrink-0" />
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100 shrink-0" />
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenPopover(openPopover === 'producto' ? null : 'producto'); }}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${searchTerm ? 'text-red-400' : 'text-slate-500 hover:text-slate-300'}`}
+                            title="Filtrar Producto"
+                          >
+                            <Filter size={12} />
+                          </button>
                         </div>
+
+                        {openPopover === 'producto' && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="absolute top-full left-0 mt-2 z-50 w-72 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 text-slate-200 normal-case font-normal animate-slide-up"
+                          >
+                            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                              <span className="text-xs font-bold text-slate-300">Filtrar Producto</span>
+                              <button onClick={() => setOpenPopover(null)} className="text-slate-400 hover:text-white"><X size={14} /></button>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] text-slate-400 uppercase font-bold">Buscar por código o nombre</label>
+                              <div className="relative">
+                                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
+                                <input
+                                  type="text"
+                                  placeholder="Escribe código o descripción..."
+                                  value={searchTerm}
+                                  onChange={(e) => setSearchTerm(e.target.value)}
+                                  className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                                  autoFocus
+                                />
+                              </div>
+                            </div>
+                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
+                              <button 
+                                onClick={() => { setSearchTerm(''); setOpenPopover(null); }}
+                                className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                Limpiar
+                              </button>
+                              <button 
+                                onClick={() => setOpenPopover(null)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-colors"
+                              >
+                                Listo
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </th>
-                      <th onClick={() => handleSort('desde')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
-                        <div className="flex items-center gap-1.5">
-                          <span>Desde</span>
-                          {sortColumn === 'desde' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+
+                      {/* DESDE */}
+                      <th className="px-6 py-4 border-b border-slate-800 select-none relative">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div 
+                            onClick={() => handleSort('desde')} 
+                            className="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors flex-1"
+                            title="Ordenar por Fecha Desde"
+                          >
+                            <span>Desde</span>
+                            {sortColumn === 'desde' ? (
+                              sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400 shrink-0" /> : <ArrowDown size={12} className="text-red-400 shrink-0" />
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100 shrink-0" />
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenPopover(openPopover === 'desde' ? null : 'desde'); }}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${dateFilterStart || columnFilters.dateDesde ? 'text-red-400' : 'text-slate-500 hover:text-slate-300'}`}
+                            title="Filtrar Fecha Desde"
+                          >
+                            <Filter size={12} />
+                          </button>
                         </div>
+
+                        {openPopover === 'desde' && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="absolute top-full left-0 mt-2 z-50 w-64 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 text-slate-200 normal-case font-normal animate-slide-up"
+                          >
+                            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                              <span className="text-xs font-bold text-slate-300">Fecha Desde</span>
+                              <button onClick={() => setOpenPopover(null)} className="text-slate-400 hover:text-white"><X size={14} /></button>
+                            </div>
+                            <div className="space-y-2">
+                              <input
+                                type="date"
+                                value={columnFilters.dateDesde || dateFilterStart}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setDateFilterStart(val);
+                                  setColumnFilters(f => ({ ...f, dateDesde: val }));
+                                }}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-red-500"
+                              />
+                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer pt-1">
+                                <input
+                                  type="checkbox"
+                                  checked={exactStartMatch}
+                                  onChange={(e) => setExactStartMatch(e.target.checked)}
+                                  className="rounded border-slate-700 bg-slate-950 text-red-600 focus:ring-0"
+                                />
+                                <span>Coincidencia exacta de fecha</span>
+                              </label>
+                            </div>
+                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
+                              <button 
+                                onClick={() => {
+                                  setDateFilterStart('');
+                                  setColumnFilters(f => ({ ...f, dateDesde: '' }));
+                                  setExactStartMatch(false);
+                                  setOpenPopover(null);
+                                }}
+                                className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                Limpiar
+                              </button>
+                              <button 
+                                onClick={() => setOpenPopover(null)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-colors"
+                              >
+                                Listo
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </th>
-                      <th onClick={() => handleSort('hasta')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
-                        <div className="flex items-center gap-1.5">
-                          <span>Hasta</span>
-                          {sortColumn === 'hasta' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+
+                      {/* HASTA */}
+                      <th className="px-6 py-4 border-b border-slate-800 select-none relative">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div 
+                            onClick={() => handleSort('hasta')} 
+                            className="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors flex-1"
+                            title="Ordenar por Fecha Hasta"
+                          >
+                            <span>Hasta</span>
+                            {sortColumn === 'hasta' ? (
+                              sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400 shrink-0" /> : <ArrowDown size={12} className="text-red-400 shrink-0" />
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100 shrink-0" />
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenPopover(openPopover === 'hasta' ? null : 'hasta'); }}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${dateFilterEnd || columnFilters.dateHasta ? 'text-red-400' : 'text-slate-500 hover:text-slate-300'}`}
+                            title="Filtrar Fecha Hasta"
+                          >
+                            <Filter size={12} />
+                          </button>
                         </div>
+
+                        {openPopover === 'hasta' && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="absolute top-full left-0 mt-2 z-50 w-64 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 text-slate-200 normal-case font-normal animate-slide-up"
+                          >
+                            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                              <span className="text-xs font-bold text-slate-300">Fecha Hasta</span>
+                              <button onClick={() => setOpenPopover(null)} className="text-slate-400 hover:text-white"><X size={14} /></button>
+                            </div>
+                            <div className="space-y-2">
+                              <input
+                                type="date"
+                                value={columnFilters.dateHasta || dateFilterEnd}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setDateFilterEnd(val);
+                                  setColumnFilters(f => ({ ...f, dateHasta: val }));
+                                }}
+                                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-red-500"
+                              />
+                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer pt-1">
+                                <input
+                                  type="checkbox"
+                                  checked={exactEndMatch}
+                                  onChange={(e) => setExactEndMatch(e.target.checked)}
+                                  className="rounded border-slate-700 bg-slate-950 text-red-600 focus:ring-0"
+                                />
+                                <span>Coincidencia exacta de fecha</span>
+                              </label>
+                            </div>
+                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
+                              <button 
+                                onClick={() => {
+                                  setDateFilterEnd('');
+                                  setColumnFilters(f => ({ ...f, dateHasta: '' }));
+                                  setExactEndMatch(false);
+                                  setOpenPopover(null);
+                                }}
+                                className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                Limpiar
+                              </button>
+                              <button 
+                                onClick={() => setOpenPopover(null)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-colors"
+                              >
+                                Listo
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </th>
-                      <th onClick={() => handleSort('stock')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
-                        <div className="flex items-center gap-1.5">
-                          <span>Stock</span>
-                          {sortColumn === 'stock' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+
+                      {/* STOCK */}
+                      <th className="px-6 py-4 border-b border-slate-800 select-none relative">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div 
+                            onClick={() => handleSort('stock')} 
+                            className="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors flex-1"
+                            title="Ordenar por Stock"
+                          >
+                            <span>Stock</span>
+                            {sortColumn === 'stock' ? (
+                              sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400 shrink-0" /> : <ArrowDown size={12} className="text-red-400 shrink-0" />
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100 shrink-0" />
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenPopover(openPopover === 'stock' ? null : 'stock'); }}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${showOutOfStock || columnFilters.stockMode !== 'all' || columnFilters.stockMin || columnFilters.stockMax ? 'text-red-400' : 'text-slate-500 hover:text-slate-300'}`}
+                            title="Filtrar Stock"
+                          >
+                            <Filter size={12} />
+                          </button>
                         </div>
+
+                        {openPopover === 'stock' && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="absolute top-full left-0 mt-2 z-50 w-64 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 text-slate-200 normal-case font-normal animate-slide-up"
+                          >
+                            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                              <span className="text-xs font-bold text-slate-300">Filtrar por Stock</span>
+                              <button onClick={() => setOpenPopover(null)} className="text-slate-400 hover:text-white"><X size={14} /></button>
+                            </div>
+
+                            <div className="space-y-1.5 mb-3">
+                              <label className="text-[10px] text-slate-400 uppercase font-bold">Disponibilidad</label>
+                              <div className="flex flex-col gap-1">
+                                <button
+                                  onClick={() => {
+                                    setShowOutOfStock(false);
+                                    setColumnFilters(f => ({ ...f, stockMode: 'in_stock' }));
+                                  }}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                                    columnFilters.stockMode === 'in_stock' && !showOutOfStock ? 'bg-red-600/30 text-red-300 font-bold border border-red-500/50' : 'text-slate-400 hover:bg-slate-800/50'
+                                  }`}
+                                >
+                                  Solo con stock disponible (&gt; 0)
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setShowOutOfStock(true);
+                                    setColumnFilters(f => ({ ...f, stockMode: 'all' }));
+                                  }}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                                    showOutOfStock && columnFilters.stockMode === 'all' ? 'bg-slate-800 text-white font-bold border border-slate-700' : 'text-slate-400 hover:bg-slate-800/50'
+                                  }`}
+                                >
+                                  Incluir agotados (Stock = 0)
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setShowOutOfStock(true);
+                                    setColumnFilters(f => ({ ...f, stockMode: 'out_of_stock' }));
+                                  }}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors ${
+                                    columnFilters.stockMode === 'out_of_stock' ? 'bg-red-600/30 text-red-300 font-bold border border-red-500/50' : 'text-slate-400 hover:bg-slate-800/50'
+                                  }`}
+                                >
+                                  Solo agotados (= 0)
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] text-slate-400 uppercase font-bold">Rango de Unidades</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  placeholder="Mín"
+                                  value={columnFilters.stockMin}
+                                  onChange={(e) => setColumnFilters(f => ({ ...f, stockMin: e.target.value }))}
+                                  className="w-1/2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                                />
+                                <span className="text-slate-500">-</span>
+                                <input
+                                  type="number"
+                                  placeholder="Máx"
+                                  value={columnFilters.stockMax}
+                                  onChange={(e) => setColumnFilters(f => ({ ...f, stockMax: e.target.value }))}
+                                  className="w-1/2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
+                              <button 
+                                onClick={() => {
+                                  setShowOutOfStock(false);
+                                  setColumnFilters(f => ({ ...f, stockMode: 'all', stockMin: '', stockMax: '' }));
+                                  setOpenPopover(null);
+                                }}
+                                className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                Limpiar
+                              </button>
+                              <button 
+                                onClick={() => setOpenPopover(null)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-colors"
+                              >
+                                Listo
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </th>
-                      <th onClick={() => handleSort('combo')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
-                        <div className="flex items-center gap-1.5">
-                          <span>Combo</span>
-                          {sortColumn === 'combo' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+
+                      {/* COMBO */}
+                      <th className="px-6 py-4 border-b border-slate-800 select-none relative">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div 
+                            onClick={() => handleSort('combo')} 
+                            className="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors flex-1"
+                            title="Ordenar por Combo / Oferta"
+                          >
+                            <span>Combo</span>
+                            {sortColumn === 'combo' ? (
+                              sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400 shrink-0" /> : <ArrowDown size={12} className="text-red-400 shrink-0" />
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100 shrink-0" />
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenPopover(openPopover === 'combo' ? null : 'combo'); }}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${promoFilterMode !== 'all' || selectedCombo || columnFilters.selectedCombos.length > 0 ? 'text-red-400' : 'text-slate-500 hover:text-slate-300'}`}
+                            title="Filtrar por Combo / Ofertas Semanales Directas"
+                          >
+                            <Filter size={12} />
+                          </button>
                         </div>
+
+                        {openPopover === 'combo' && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="absolute top-full left-0 mt-2 z-50 w-80 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 text-slate-200 normal-case font-normal animate-slide-up"
+                          >
+                            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                              <span className="text-xs font-bold text-slate-300">Filtrar Oferta / Combo</span>
+                              <button onClick={() => setOpenPopover(null)} className="text-slate-400 hover:text-white"><X size={14} /></button>
+                            </div>
+
+                            {/* Preset Buttons */}
+                            <div className="space-y-1.5 mb-3">
+                              <label className="text-[10px] text-slate-400 uppercase font-bold">Tipo de Promoción</label>
+                              <div className="flex flex-col gap-1">
+                                <button
+                                  onClick={() => setPromoFilterMode('all')}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs text-left flex justify-between items-center transition-colors ${
+                                    promoFilterMode === 'all' ? 'bg-slate-800 text-white font-bold border border-slate-700' : 'text-slate-400 hover:bg-slate-800/50'
+                                  }`}
+                                >
+                                  <span>Todos los artículos</span>
+                                  <span className="text-[10px] bg-slate-950 px-1.5 py-0.5 rounded text-slate-400">{data.length}</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setPromoFilterMode('direct_price')}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs text-left flex justify-between items-center transition-colors ${
+                                    promoFilterMode === 'direct_price' ? 'bg-amber-600/30 text-amber-300 font-bold border border-amber-500/50' : 'text-slate-400 hover:bg-slate-800/50'
+                                  }`}
+                                >
+                                  <span>⚡ Promociones Semanales (Sin Oferta / N/A)</span>
+                                  <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-1.5 py-0.5 rounded">{comboStats.sinOfertaCount}</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setPromoFilterMode('with_promo')}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs text-left flex justify-between items-center transition-colors ${
+                                    promoFilterMode === 'with_promo' ? 'bg-red-600/30 text-red-300 font-bold border border-red-500/50' : 'text-slate-400 hover:bg-slate-800/50'
+                                  }`}
+                                >
+                                  <span>🏷️ Artículos con Oferta / Combo</span>
+                                  <span className="text-[10px] bg-slate-950 px-1.5 py-0.5 rounded text-slate-400">{data.length - comboStats.sinOfertaCount}</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Checkboxes por cada combo */}
+                            <div className="space-y-1.5">
+                              <div className="flex justify-between items-center">
+                                <label className="text-[10px] text-slate-400 uppercase font-bold">Combos específicos</label>
+                                {columnFilters.selectedCombos.length > 0 && (
+                                  <button 
+                                    onClick={() => setColumnFilters(f => ({ ...f, selectedCombos: [] }))}
+                                    className="text-[10px] text-red-400 hover:underline"
+                                  >
+                                    Deseleccionar
+                                  </button>
+                                )}
+                              </div>
+                              <div className="max-h-36 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                                <label className="flex items-center justify-between p-1.5 hover:bg-slate-800/60 rounded cursor-pointer text-xs">
+                                  <div className="flex items-center gap-2 truncate">
+                                    <input
+                                      type="checkbox"
+                                      checked={columnFilters.selectedCombos.includes('__SIN_COMBO__')}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        setColumnFilters(f => ({
+                                          ...f,
+                                          selectedCombos: checked 
+                                            ? [...f.selectedCombos, '__SIN_COMBO__'] 
+                                            : f.selectedCombos.filter(c => c !== '__SIN_COMBO__')
+                                        }));
+                                      }}
+                                      className="rounded border-slate-700 bg-slate-950 text-amber-500 focus:ring-0"
+                                    />
+                                    <span className="text-amber-300 font-medium truncate">Sin Oferta / N/A (Semanales)</span>
+                                  </div>
+                                  <span className="text-[10px] text-slate-500 font-mono shrink-0 ml-2">{comboStats.sinOfertaCount}</span>
+                                </label>
+
+                                {Array.from(comboStats.counts.entries()).map(([comboName, count]) => (
+                                  <label key={comboName} className="flex items-center justify-between p-1.5 hover:bg-slate-800/60 rounded cursor-pointer text-xs">
+                                    <div className="flex items-center gap-2 truncate">
+                                      <input
+                                        type="checkbox"
+                                        checked={columnFilters.selectedCombos.includes(comboName)}
+                                        onChange={(e) => {
+                                          const checked = e.target.checked;
+                                          setColumnFilters(f => ({
+                                            ...f,
+                                            selectedCombos: checked 
+                                              ? [...f.selectedCombos, comboName] 
+                                              : f.selectedCombos.filter(c => c !== comboName)
+                                          }));
+                                        }}
+                                        className="rounded border-slate-700 bg-slate-950 text-red-500 focus:ring-0"
+                                      />
+                                      <span className="text-slate-300 truncate">{comboName}</span>
+                                    </div>
+                                    <span className="text-[10px] text-slate-500 font-mono shrink-0 ml-2">{count}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
+                              <button 
+                                onClick={() => {
+                                  setPromoFilterMode('all');
+                                  setSelectedCombo('');
+                                  setColumnFilters(f => ({ ...f, selectedCombos: [] }));
+                                  setOpenPopover(null);
+                                }}
+                                className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                Limpiar
+                              </button>
+                              <button 
+                                onClick={() => setOpenPopover(null)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-colors"
+                              >
+                                Listo
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </th>
-                      <th onClick={() => handleSort('precio')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
-                        <div className="flex items-center gap-1.5">
-                          <span>Precio</span>
-                          {sortColumn === 'precio' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+
+                      {/* PRECIO */}
+                      <th className="px-6 py-4 border-b border-slate-800 select-none relative">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div 
+                            onClick={() => handleSort('precio')} 
+                            className="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors flex-1"
+                            title="Ordenar por Precio Base"
+                          >
+                            <span>Precio</span>
+                            {sortColumn === 'precio' ? (
+                              sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400 shrink-0" /> : <ArrowDown size={12} className="text-red-400 shrink-0" />
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100 shrink-0" />
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenPopover(openPopover === 'precio' ? null : 'precio'); }}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${columnFilters.precioMin || columnFilters.precioMax ? 'text-red-400' : 'text-slate-500 hover:text-slate-300'}`}
+                            title="Filtrar Rango de Precio Base"
+                          >
+                            <Filter size={12} />
+                          </button>
                         </div>
+
+                        {openPopover === 'precio' && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="absolute top-full right-0 mt-2 z-50 w-64 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 text-slate-200 normal-case font-normal animate-slide-up"
+                          >
+                            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                              <span className="text-xs font-bold text-slate-300">Rango de Precio Base</span>
+                              <button onClick={() => setOpenPopover(null)} className="text-slate-400 hover:text-white"><X size={14} /></button>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] text-slate-400 uppercase font-bold">Precio Fidelizado ($)</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  placeholder="Mín $"
+                                  value={columnFilters.precioMin}
+                                  onChange={(e) => setColumnFilters(f => ({ ...f, precioMin: e.target.value }))}
+                                  className="w-1/2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                                />
+                                <span className="text-slate-500">-</span>
+                                <input
+                                  type="number"
+                                  placeholder="Máx $"
+                                  value={columnFilters.precioMax}
+                                  onChange={(e) => setColumnFilters(f => ({ ...f, precioMax: e.target.value }))}
+                                  className="w-1/2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
+                              <button 
+                                onClick={() => {
+                                  setColumnFilters(f => ({ ...f, precioMin: '', precioMax: '' }));
+                                  setOpenPopover(null);
+                                }}
+                                className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                Limpiar
+                              </button>
+                              <button 
+                                onClick={() => setOpenPopover(null)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-colors"
+                              >
+                                Listo
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </th>
-                      <th onClick={() => handleSort('final')} className="px-6 py-4 border-b border-slate-800 cursor-pointer hover:text-white transition-colors select-none">
-                        <div className="flex items-center gap-1.5">
-                          <span>Final</span>
-                          {sortColumn === 'final' ? (sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400" /> : <ArrowDown size={12} className="text-red-400" />) : <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100" />}
+
+                      {/* FINAL */}
+                      <th className="px-6 py-4 border-b border-slate-800 select-none relative">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <div 
+                            onClick={() => handleSort('final')} 
+                            className="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors flex-1"
+                            title="Ordenar por Precio Final"
+                          >
+                            <span>Final</span>
+                            {sortColumn === 'final' ? (
+                              sortDirection === 'asc' ? <ArrowUp size={12} className="text-red-400 shrink-0" /> : <ArrowDown size={12} className="text-red-400 shrink-0" />
+                            ) : (
+                              <ArrowUpDown size={12} className="opacity-30 group-hover:opacity-100 shrink-0" />
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenPopover(openPopover === 'final' ? null : 'final'); }}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${columnFilters.finalMin || columnFilters.finalMax ? 'text-red-400' : 'text-slate-500 hover:text-slate-300'}`}
+                            title="Filtrar Rango de Precio Final"
+                          >
+                            <Filter size={12} />
+                          </button>
                         </div>
+
+                        {openPopover === 'final' && (
+                          <div 
+                            onClick={(e) => e.stopPropagation()} 
+                            className="absolute top-full right-0 mt-2 z-50 w-64 bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 text-slate-200 normal-case font-normal animate-slide-up"
+                          >
+                            <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                              <span className="text-xs font-bold text-slate-300">Rango de Precio Final</span>
+                              <button onClick={() => setOpenPopover(null)} className="text-slate-400 hover:text-white"><X size={14} /></button>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] text-slate-400 uppercase font-bold">Precio con Oferta ($)</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  placeholder="Mín $"
+                                  value={columnFilters.finalMin}
+                                  onChange={(e) => setColumnFilters(f => ({ ...f, finalMin: e.target.value }))}
+                                  className="w-1/2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                                />
+                                <span className="text-slate-500">-</span>
+                                <input
+                                  type="number"
+                                  placeholder="Máx $"
+                                  value={columnFilters.finalMax}
+                                  onChange={(e) => setColumnFilters(f => ({ ...f, finalMax: e.target.value }))}
+                                  className="w-1/2 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
+                              <button 
+                                onClick={() => {
+                                  setColumnFilters(f => ({ ...f, finalMin: '', finalMax: '' }));
+                                  setOpenPopover(null);
+                                }}
+                                className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                              >
+                                Limpiar
+                              </button>
+                              <button 
+                                onClick={() => setOpenPopover(null)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-colors"
+                              >
+                                Listo
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </th>
+
                       <th className="px-6 py-4 border-b border-slate-800 text-right">Acciones</th>
                     </tr>
                   </thead>
