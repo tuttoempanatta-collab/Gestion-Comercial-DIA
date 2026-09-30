@@ -80,12 +80,24 @@ export function parseDate(str: string | null | undefined): Date | null {
   return new Date(y, m - 1, d);
 }
 
+export function parseCodeList(input: string): string[] {
+  if (!input) return [];
+  const tokens = input
+    .split(/[\r\n,;\s\t]+/)
+    .map(t => t.trim())
+    .filter(t => t.length > 0 && /^\d+$/.test(t));
+  return Array.from(new Set(tokens));
+}
+
 export default function DataPage() {
   const [history, setHistory] = useState<any[]>([])
   const [selectedExtraction, setSelectedExtraction] = useState<number | null>(null)
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<number>>(new Set())
   const [data, setData] = useState<any[]>([])
   const [searchTerm, setSearchTerm] = useState('')
+  const [codeListInput, setCodeListInput] = useState('')
+  const [codeListFilter, setCodeListFilter] = useState<string[]>([])
+  const [isCodeListModalOpen, setIsCodeListModalOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [showOutOfStock, setShowOutOfStock] = useState(false)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
@@ -226,6 +238,8 @@ export default function DataPage() {
 
   const handleClearAllFilters = () => {
     setSearchTerm('');
+    setCodeListFilter([]);
+    setCodeListInput('');
     setSelectedCombo('');
     setPromoFilterMode('all');
     setDateFilterStart('');
@@ -250,6 +264,10 @@ export default function DataPage() {
 
   const clearColumnFilter = (colKey: string) => {
     if (colKey === 'producto') setSearchTerm('');
+    if (colKey === 'codeList') {
+      setCodeListFilter([]);
+      setCodeListInput('');
+    }
     if (colKey === 'combo') {
       setSelectedCombo('');
       setColumnFilters(f => ({ ...f, selectedCombos: [] }));
@@ -446,6 +464,7 @@ export default function DataPage() {
   const activeFiltersCount = useMemo(() => {
     let count = 0;
     if (searchTerm) count++;
+    if (codeListFilter.length > 0) count++;
     if (promoFilterMode !== 'all') count++;
     if (selectedCombo) count++;
     if (dateFilterStart || columnFilters.dateDesde) count++;
@@ -455,7 +474,7 @@ export default function DataPage() {
     if (columnFilters.precioMin || columnFilters.precioMax) count++;
     if (columnFilters.finalMin || columnFilters.finalMax) count++;
     return count;
-  }, [searchTerm, promoFilterMode, selectedCombo, dateFilterStart, dateFilterEnd, showOutOfStock, columnFilters]);
+  }, [searchTerm, codeListFilter, promoFilterMode, selectedCombo, dateFilterStart, dateFilterEnd, showOutOfStock, columnFilters]);
 
   const filteredData = useMemo(() => {
     return data.filter(item => {
@@ -465,6 +484,14 @@ export default function DataPage() {
         const matchesName = (item.articulo || '').toLowerCase().includes(term);
         const matchesCode = String(item.codigo || '').toLowerCase().includes(term);
         if (!matchesName && !matchesCode) return false;
+      }
+
+      // 1.1 Filtro por Lista Masiva de Códigos
+      if (codeListFilter.length > 0) {
+        const itemCodeStr = String(item.codigo || '').trim();
+        const itemCodeNum = parseInt(itemCodeStr);
+        const match = codeListFilter.some(c => c === itemCodeStr || (!isNaN(itemCodeNum) && parseInt(c) === itemCodeNum));
+        if (!match) return false;
       }
 
       // 2. Modo de Promoción (Todas vs Con Oferta vs Promociones Semanales Directas / N/A)
@@ -546,6 +573,7 @@ export default function DataPage() {
   }, [
     data, 
     searchTerm, 
+    codeListFilter,
     promoFilterMode, 
     selectedCombo, 
     showOutOfStock, 
@@ -621,7 +649,7 @@ export default function DataPage() {
   // Reset to page 1 whenever filters or sorting change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, promoFilterMode, selectedCombo, dateFilterStart, dateFilterEnd, exactStartMatch, exactEndMatch, columnFilters, sortColumn, sortDirection, selectedExtraction]);
+  }, [searchTerm, codeListFilter, promoFilterMode, selectedCombo, dateFilterStart, dateFilterEnd, exactStartMatch, exactEndMatch, columnFilters, sortColumn, sortDirection, selectedExtraction]);
 
   const totalPages = useMemo(() => {
     if (pageSize === 'all') return 1;
@@ -872,6 +900,110 @@ export default function DataPage() {
           </div>
         </div>
       )}
+
+      {/* MODAL: FILTRAR POR LISTA DE CÓDIGOS DIA */}
+      {isCodeListModalOpen && (() => {
+        const parsedTokens = parseCodeList(codeListInput);
+        const matchCount = data.filter(item => {
+          const itemCodeStr = String(item.codigo || '').trim();
+          const itemCodeNum = parseInt(itemCodeStr);
+          return parsedTokens.some(c => c === itemCodeStr || (!isNaN(itemCodeNum) && parseInt(c) === itemCodeNum));
+        }).length;
+
+        return (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden animate-slide-up">
+              {/* Header */}
+              <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
+                    <FileText size={18} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Filtrar por Lista de Códigos DIA</h3>
+                    <p className="text-xs text-slate-400">Pega o escribe varios códigos DIA a la vez</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsCodeListModalOpen(false)}
+                  className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 flex flex-col gap-3">
+                <label className="text-xs text-slate-300 font-medium flex items-center justify-between">
+                  <span>Lista de códigos DIA (1 por renglón, comas o espacios):</span>
+                  <span className="text-[11px] text-slate-500 font-normal">Detecta números automáticamente</span>
+                </label>
+                <textarea
+                  value={codeListInput}
+                  onChange={(e) => setCodeListInput(e.target.value)}
+                  placeholder={`Ejemplo:\n102458\n203491\n304582\n405912\n\n(Puedes copiar y pegar directo desde una columna de Excel)`}
+                  rows={8}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none transition-all"
+                  autoFocus
+                />
+
+                {/* Counters and feedback */}
+                <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-950/60 rounded-xl border border-slate-800/80 text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <span className="text-slate-500">Códigos detectados:</span>
+                    <strong className="text-blue-400 font-mono text-sm">{parsedTokens.length}</strong>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <span className="text-slate-500">Coincidencias en extracción:</span>
+                    <strong className={`font-mono text-sm ${matchCount > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {matchCount}
+                    </strong>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-500 italic">
+                  💡 Se omiten textos o encabezados no numéricos (p. ej. "Código").
+                </p>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCodeListInput('');
+                    setCodeListFilter([]);
+                  }}
+                  disabled={!codeListInput && codeListFilter.length === 0}
+                  className="px-3 py-2 text-xs font-semibold text-slate-400 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  Limpiar lista
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCodeListModalOpen(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCodeListFilter(parsedTokens);
+                      setIsCodeListModalOpen(false);
+                    }}
+                    className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/20 transition-all flex items-center gap-1.5"
+                  >
+                    <Check size={14} />
+                    <span>Aplicar Filtro {parsedTokens.length > 0 ? `(${parsedTokens.length})` : ''}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="flex flex-col gap-6 animate-fade-in">
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -1191,15 +1323,35 @@ export default function DataPage() {
 
             {/* Toolbar */}
             <div className="glass-card p-4 flex flex-col md:flex-row gap-4 items-center justify-between border-slate-800/50">
-              <div className="relative w-full md:w-80">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                <input 
-                  type="text" 
-                  placeholder="Buscar código o nombre..." 
-                  className="input-field pl-10 text-sm py-2"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
+              <div className="flex items-center gap-2 w-full md:w-auto">
+                <div className="relative w-full md:w-80">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                  <input 
+                    type="text" 
+                    placeholder="Buscar código o nombre..." 
+                    className="input-field pl-10 text-sm py-2"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!codeListInput && codeListFilter.length > 0) {
+                      setCodeListInput(codeListFilter.join('\n'));
+                    }
+                    setIsCodeListModalOpen(true);
+                  }}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border shrink-0 ${
+                    codeListFilter.length > 0
+                      ? 'bg-blue-600/20 border-blue-500/50 text-blue-400 shadow-sm ring-1 ring-blue-500/30'
+                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                  title="Filtrar pegando una lista masiva de códigos DIA"
+                >
+                  <FileText size={15} className={codeListFilter.length > 0 ? 'text-blue-400' : 'text-slate-400'} />
+                  <span>{codeListFilter.length > 0 ? `Lista (${codeListFilter.length})` : 'Pegar Lista'}</span>
+                </button>
               </div>
 
               <div className="flex flex-wrap items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5">
@@ -1330,6 +1482,31 @@ export default function DataPage() {
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-200 border border-slate-700 text-[11px]">
                     Texto: "{searchTerm}"
                     <button onClick={() => clearColumnFilter('producto')} className="hover:text-red-400 ml-1"><X size={11} /></button>
+                  </span>
+                )}
+
+                {codeListFilter.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-950/60 text-blue-300 border border-blue-800/50 text-[11px]">
+                    <span 
+                      onClick={() => {
+                        if (!codeListInput && codeListFilter.length > 0) {
+                          setCodeListInput(codeListFilter.join('\n'));
+                        }
+                        setIsCodeListModalOpen(true);
+                      }}
+                      className="cursor-pointer hover:underline flex items-center gap-1"
+                      title="Clic para ver o modificar la lista de códigos"
+                    >
+                      <FileText size={11} />
+                      Lista: {codeListFilter.length} códigos ({sortedAndFilteredData.length} en pantalla)
+                    </span>
+                    <button 
+                      onClick={() => { setCodeListFilter([]); setCodeListInput(''); }} 
+                      className="hover:text-blue-100 ml-1"
+                      title="Quitar filtro de lista de códigos"
+                    >
+                      <X size={11} />
+                    </button>
                   </span>
                 )}
 
@@ -1488,6 +1665,22 @@ export default function DataPage() {
                                   className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500"
                                   autoFocus
                                 />
+                              </div>
+                              <div className="pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenPopover(null);
+                                    if (!codeListInput && codeListFilter.length > 0) {
+                                      setCodeListInput(codeListFilter.join('\n'));
+                                    }
+                                    setIsCodeListModalOpen(true);
+                                  }}
+                                  className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg bg-blue-600/10 border border-blue-500/30 text-blue-400 hover:bg-blue-600/20 text-[11px] font-semibold transition-colors"
+                                >
+                                  <FileText size={12} />
+                                  <span>{codeListFilter.length > 0 ? `Ver lista (${codeListFilter.length} códigos)` : 'Pegar lista masiva de códigos...'}</span>
+                                </button>
                               </div>
                             </div>
                             <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-800">
