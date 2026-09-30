@@ -107,8 +107,11 @@ app.post('/api/extract', async (req, res) => {
     const extractionId = await createExtraction(startDate, endDate);
     const settings = await getSettings();
     
-    activeLogs[extractionId] = [];
-    activeProgress[extractionId] = { percentage: 0, message: stageName ? `Iniciando ${stageName}...` : 'Iniciando...' };
+    const initialMsg = stageName ? `Iniciando ${stageName}...` : 'Iniciando proceso de extracción...';
+    activeLogs[extractionId] = [
+      { timestamp: new Date().toISOString(), message: initialMsg, percentage: 1 }
+    ];
+    activeProgress[extractionId] = { percentage: 1, message: initialMsg };
     
     console.log(`[DEBUG] Finalizando preparación para Ext-${extractionId} (${stageName || 'Extracción'}). Llamando a runScraper...`);
     
@@ -200,10 +203,11 @@ app.get('/api/logs/:extractionId', async (req, res) => {
   const { extractionId } = req.params;
   const targetId = parseInt(extractionId);
 
-  if (activeLogs[targetId] && activeLogs[targetId].length > 0) {
+  // If extraction is active in memory on this server, return logs directly without falling back to DB
+  if (activeLogs[targetId] !== undefined) {
     return res.json({
       logs: activeLogs[targetId],
-      progress: activeProgress[targetId] || { percentage: 0 }
+      progress: activeProgress[targetId] || { percentage: 0, message: 'Iniciando...' }
     });
   }
 

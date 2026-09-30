@@ -46,11 +46,13 @@ export default function ExtractPage() {
                 setStatus('completed');
                 localStorage.removeItem('activeExtraction')
                 localStorage.removeItem('activeExtractionId')
+                localStorage.removeItem('activeExtractionTime')
               } else if (lastLog?.message?.includes('Error')) {
                 setIsExtracting(false);
                 setStatus('failed');
                 localStorage.removeItem('activeExtraction')
                 localStorage.removeItem('activeExtractionId')
+                localStorage.removeItem('activeExtractionTime')
               }
             })
             .catch(err => {
@@ -70,6 +72,7 @@ export default function ExtractPage() {
     setProgress({ percentage: 0, message: 'Iniciando...' })
     
     localStorage.setItem('activeExtraction', 'true')
+    localStorage.setItem('activeExtractionTime', String(Date.now()))
     
     try {
       const res = await fetch(API_URL('/api/extract'), {
@@ -91,12 +94,24 @@ export default function ExtractPage() {
       setStatus('failed')
       setProgress({ percentage: 0, message: `❌ ${err.message}` })
       localStorage.removeItem('activeExtraction')
+      localStorage.removeItem('activeExtractionId')
+      localStorage.removeItem('activeExtractionTime')
     }
   }
 
   useEffect(() => {
     const active = localStorage.getItem('activeExtraction')
     const id = localStorage.getItem('activeExtractionId')
+    const startTime = localStorage.getItem('activeExtractionTime')
+
+    // Si la extracción en localStorage tiene más de 30 minutos, descartarla para no arrastrar errores pasados
+    if (startTime && (Date.now() - parseInt(startTime) > 30 * 60 * 1000)) {
+      localStorage.removeItem('activeExtraction')
+      localStorage.removeItem('activeExtractionId')
+      localStorage.removeItem('activeExtractionTime')
+      return;
+    }
+
     if (active === 'true' && id) {
       setIsExtracting(true)
       setStatus('running')

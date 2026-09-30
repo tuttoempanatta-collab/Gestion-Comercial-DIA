@@ -20,7 +20,19 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--no-zygote',
-          '--single-process'
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-breakpad',
+          '--disable-component-update',
+          '--disable-domain-reliability',
+          '--disable-ipc-flooding-protection',
+          '--disable-renderer-backgrounding',
+          '--disk-cache-size=1',
+          '--js-flags=--max-old-space-size=256'
         ]
   });
 
@@ -28,6 +40,10 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     viewport: { width: 1280, height: 720 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
   });
+
+  // Bloquear inmediatamente imágenes, fuentes, media y assets pesados para ahorrar hasta 70% de memoria RAM en Render
+  await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico,woff,woff2,ttf,eot,mp4,mp3}', route => route.abort());
+
   const page = await context.newPage();
 
   try {
@@ -35,7 +51,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     console.log(`[Ext-${extractionId}] Iniciando scraper...`);
     onProgress({ message: 'Preparando navegador...', current: 0, total: 100, percentage: 2 });
     
-    await page.goto(settings.portal_url, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.goto(settings.portal_url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     onProgress({ message: 'Portal cargado. Identificándose...', current: 0, total: 100, percentage: 5 });
 
     const loginSelector = '#vSECUSERNAME, #vUSERSEGLGN';
@@ -47,11 +63,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       await page.waitForTimeout(5000);
     }
 
-    await page.waitForLoadState('load');
+    await page.waitForLoadState('domcontentloaded');
     onProgress({ message: 'Sesión iniciada. Navegando a la tabla...', current: 5, total: 100, percentage: 5 });
-
-    // 0. Disable images to save RAM
-    await context.route('**/*.{png,jpg,jpeg,gif,svg}', route => route.abort());
 
     let isTableLoaded = false;
     try {
