@@ -77,12 +77,28 @@ export default function SettingsPage() {
   }, [])
 
   useEffect(() => {
-    fetch(API_URL('/api/settings')).then(r => r.json()).then(setSettings)
+    fetchSettings()
     fetchCatalogStatus()
     loadFileHandle().then(h => {
       if (h) { setSavedHandle(h); setSavedHandleName(h.name) }
     })
   }, [])
+
+  const fetchSettings = async () => {
+    try {
+      const r = await fetch(API_URL('/api/settings'))
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      if (d) setSettings(d)
+    } catch (_) {
+      setTimeout(async () => {
+        try {
+          const retry = await fetch(API_URL('/api/settings'))
+          if (retry.ok) setSettings(await retry.json())
+        } catch (_) {}
+      }, 2500)
+    }
+  }
 
   useEffect(() => {
     if (catalogStatus && catalogStatus.total > 0) fetchCatalogItems()
@@ -91,10 +107,22 @@ export default function SettingsPage() {
   const fetchCatalogStatus = async () => {
     try {
       const r = await fetch(API_URL('/api/catalog-status'))
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setCatalogStatus(d)
-      if (d.total > 0) fetchCatalogItems()
-    } catch {}
+      if (d && d.total > 0) fetchCatalogItems()
+    } catch (err) {
+      setTimeout(async () => {
+        try {
+          const retry = await fetch(API_URL('/api/catalog-status'))
+          if (retry.ok) {
+            const d = await retry.json()
+            setCatalogStatus(d)
+            if (d && d.total > 0) fetchCatalogItems()
+          }
+        } catch (_) {}
+      }, 2500)
+    }
   }
 
   const fetchCatalogItems = async () => {

@@ -395,37 +395,46 @@ app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
       return res.status(422).json({ error: 'El archivo no contiene items en la tabla Item.' });
     }
 
-    // Upsert all items to Supabase
+    // Upsert all items to PostgreSQL / Supabase in fast multi-row batches
     let imported = 0;
-    const BATCH = 100;
+    const BATCH = 200;
     for (let i = 0; i < items.length; i += BATCH) {
       const batch = items.slice(i, i + BATCH);
-      for (const item of batch) {
-        await pool.query(
-          `INSERT INTO catalog_items (item_id, loyalty_description, price_amount, current_quantity, updated_at)
-           VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-           ON CONFLICT (item_id) DO UPDATE SET
-             loyalty_description = EXCLUDED.loyalty_description,
-             price_amount = EXCLUDED.price_amount,
-             current_quantity = EXCLUDED.current_quantity,
-             updated_at = CURRENT_TIMESTAMP`,
-          [
-            String(item.ItemID),
-            item.LoyaltyDescription || '',
-            item.PriceAmount || 0,
-            item.CurrentQuantityInUnits || 0
-          ]
+      const values = [];
+      const placeholders = [];
+      batch.forEach((item, idx) => {
+        const base = idx * 4;
+        placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, CURRENT_TIMESTAMP)`);
+        values.push(
+          String(item.ItemID),
+          item.LoyaltyDescription || '',
+          parseFloat(item.PriceAmount) || 0,
+          parseFloat(item.CurrentQuantityInUnits) || 0
         );
-        const numPrice = parseFloat(item.PriceAmount || 0);
-        const priceFormatted = isNaN(numPrice) ? '0,00' : String(numPrice.toFixed(2)).replace('.', ',');
-        await pool.query(
-          `UPDATE commercial_actions 
-           SET precio_fidelizado = $1, stock = $2 
-           WHERE codigo = $3 AND (precio_final IS NULL OR precio_final = '')`,
-          [priceFormatted, item.CurrentQuantityInUnits || 0, String(item.ItemID)]
-        );
-        imported++;
-      }
+      });
+
+      const sql = `
+        INSERT INTO catalog_items (item_id, loyalty_description, price_amount, current_quantity, updated_at)
+        VALUES ${placeholders.join(', ')}
+        ON CONFLICT (item_id) DO UPDATE SET
+          loyalty_description = EXCLUDED.loyalty_description,
+          price_amount = EXCLUDED.price_amount,
+          current_quantity = EXCLUDED.current_quantity,
+          updated_at = CURRENT_TIMESTAMP
+      `;
+      await pool.query(sql, values);
+      imported += batch.length;
+    }
+
+    // Fast bulk update of stock and price in commercial_actions
+    try {
+      await pool.query(`
+        UPDATE commercial_actions
+        SET stock = (SELECT COALESCE(current_quantity, 0) FROM catalog_items WHERE item_id = commercial_actions.codigo)
+        WHERE codigo IN (SELECT item_id FROM catalog_items)
+      `);
+    } catch (updateErr) {
+      console.warn('[Catalog Sync Warning]: Could not bulk update stock in commercial_actions:', updateErr.message);
     }
 
     // Clean up temp file
