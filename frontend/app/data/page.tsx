@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check, Pencil, ArrowUpDown, ArrowUp, ArrowDown, Copy } from 'lucide-react'
+import { Search, FileSpreadsheet, FileJson, FileText, Calendar, Filter, Printer, Package, PackageX, Trash2, X, Download, Check, Pencil, ArrowUpDown, ArrowUp, ArrowDown, Copy, RefreshCw, Loader2 } from 'lucide-react'
 import { generatePosters } from '@/lib/posterGenerator'
 import { Smartphone, CreditCard, Wallet, Info } from 'lucide-react'
 import { API_URL } from '@/lib/api'
@@ -94,12 +94,15 @@ export default function DataPage() {
   const [selectedExtraction, setSelectedExtraction] = useState<number | null>(null)
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<number>>(new Set())
   const [data, setData] = useState<any[]>([])
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true)
+  const [isLoadingData, setIsLoadingData] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [codeListInput, setCodeListInput] = useState('')
   const [codeListFilter, setCodeListFilter] = useState<string[]>([])
   const [isCodeListModalOpen, setIsCodeListModalOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [showOutOfStock, setShowOutOfStock] = useState(false)
+  const [showOutOfStock, setShowOutOfStock] = useState(true)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
 
   const toggleHistorySelection = (e: React.MouseEvent, id: number) => {
@@ -400,27 +403,95 @@ export default function DataPage() {
   }
 
   useEffect(() => {
-    loadHistory()
-  }, [])
+    let targetId: number | null = null;
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlId = params.get('id') || params.get('extractionId');
+      if (urlId && !isNaN(parseInt(urlId))) {
+        targetId = parseInt(urlId);
+      }
+    }
+    loadHistory(targetId);
+  }, []);
 
-  const loadHistory = () => {
-    fetch(API_URL('/api/history'))
-      .then(res => res.json())
-      .then(result => setHistory(Array.isArray(result) ? result : []))
-      .catch(() => setHistory([]))
-  }
+  const loadHistory = async (targetIdToSelect?: number | null) => {
+    setIsLoadingHistory(true);
+    setHistoryError(null);
+    try {
+      const res = await fetch(API_URL('/api/history'));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      const historyList = Array.isArray(result) ? result : [];
+      setHistory(historyList);
+
+      if (historyList.length > 0) {
+        if (targetIdToSelect && historyList.some(r => r.id === targetIdToSelect)) {
+          setSelectedExtraction(targetIdToSelect);
+        } else if (!selectedExtraction) {
+          // Auto-select latest extraction by default
+          setSelectedExtraction(historyList[0].id);
+        }
+      }
+    } catch (err: any) {
+      console.warn('[loadHistory Warning]:', err?.message);
+      setHistoryError('Error conectando con el servidor. Reintentando...');
+      // Auto-retry once after 2.5s (useful if backend Render is warming up)
+      setTimeout(async () => {
+        try {
+          const retryRes = await fetch(API_URL('/api/history'));
+          if (retryRes.ok) {
+            const retryResult = await retryRes.json();
+            const retryList = Array.isArray(retryResult) ? retryResult : [];
+            setHistory(retryList);
+            setHistoryError(null);
+            if (retryList.length > 0) {
+              if (targetIdToSelect && retryList.some(r => r.id === targetIdToSelect)) {
+                setSelectedExtraction(targetIdToSelect);
+              } else if (!selectedExtraction) {
+                setSelectedExtraction(retryList[0].id);
+              }
+            }
+          }
+        } catch (retryErr) {
+          setHistoryError('No se pudo conectar con el servidor.');
+        } finally {
+          setIsLoadingHistory(false);
+        }
+      }, 2500);
+      return;
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
 
   useEffect(() => {
     if (selectedExtraction) {
+      setIsLoadingData(true);
       fetch(API_URL(`/api/data/${selectedExtraction}`))
         .then(res => res.json())
-        .then(result => setData(Array.isArray(result) ? result : []))
-        .catch(() => setData([]))
-      setSelectedIds(new Set())
+        .then(result => {
+          const items = Array.isArray(result) ? result : [];
+          setData(items);
+          // If items don't have stock registered (stock <= 0 for all items),
+          // ensure showOutOfStock = true so they are not hidden!
+          const hasPositiveStock = items.some(it => Number(it.stock || 0) > 0);
+          if (!hasPositiveStock) {
+            setShowOutOfStock(true);
+          }
+        })
+        .catch(err => {
+          console.error('[Fetch Extraction Data Error]:', err);
+          setData([]);
+        })
+        .finally(() => {
+          setIsLoadingData(false);
+        });
+      setSelectedIds(new Set());
     } else {
-      setData([])
+      setData([]);
+      setIsLoadingData(false);
     }
-  }, [selectedExtraction])
+  }, [selectedExtraction]);
 
   const handleResetSystem = () => {
     if (confirm('⚠️ ¿BORRAR TODO? Se eliminarán todas las extracciones y las descripciones oficiales guardadas. Tendrás que empezar de cero.')) {
@@ -1016,8 +1087,8 @@ export default function DataPage() {
                 onClick={() => setShowOutOfStock(!showOutOfStock)}
                 className={`flex items-center gap-2 text-xs font-bold transition-colors ${showOutOfStock ? 'text-red-400' : 'text-emerald-400'}`}
               >
-                {showOutOfStock ? <PackageX size={14} /> : <Package size={14} />}
-                {showOutOfStock ? 'Mostrando todo' : 'Filtrando por Stock Real'}
+                {showOutOfStock ? <Package size={14} /> : <PackageX size={14} />}
+                {showOutOfStock ? 'Mostrando todos los artículos' : 'Filtrando por Stock Real'}
               </button>
             </div>
           </div>
@@ -1042,12 +1113,23 @@ export default function DataPage() {
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
                   <Calendar size={14} /> Historial
                 </h3>
-                <button 
-                  onClick={handleResetSystem}
-                  className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold text-red-400 hover:text-red-300 transition-colors border border-red-500/20 rounded-md hover:bg-red-500/10"
-                >
-                  <Trash2 size={12} /> REINICIAR
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button 
+                    onClick={() => loadHistory(selectedExtraction)}
+                    disabled={isLoadingHistory}
+                    className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors border border-slate-700/50 disabled:opacity-50"
+                    title="Actualizar historial"
+                  >
+                    <RefreshCw size={12} className={isLoadingHistory ? 'animate-spin text-red-400' : ''} />
+                  </button>
+                  <button 
+                    onClick={handleResetSystem}
+                    className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold text-red-400 hover:text-red-300 transition-colors border border-red-500/20 rounded-md hover:bg-red-500/10"
+                    title="Reiniciar base de datos"
+                  >
+                    <Trash2 size={12} /> REINICIAR
+                  </button>
+                </div>
               </div>
 
               {selectedHistoryIds.size > 0 && (
@@ -1060,45 +1142,62 @@ export default function DataPage() {
                 </button>
               )}
 
-              <div className="flex flex-row lg:flex-col gap-2 overflow-x-auto lg:overflow-y-auto lg:max-h-[500px] pb-2 lg:pb-0 scrollbar-hide">
-                {history.map((run) => (
-                  <div
-                    key={run.id}
-                    onClick={() => setSelectedExtraction(run.id)}
-                    className={`group relative p-3 rounded-xl text-left transition-all border min-w-[180px] lg:min-w-0 cursor-pointer flex items-center gap-2.5 ${
-                      selectedExtraction === run.id 
-                      ? 'bg-red-600/20 border-red-500/40 text-white shadow-inner' 
-                      : selectedHistoryIds.has(run.id)
-                        ? 'bg-indigo-600/20 border-indigo-500/40 text-white'
-                        : 'bg-slate-900/30 border-slate-800/50 text-slate-400 hover:border-slate-700'
-                    }`}
+              {isLoadingHistory && history.length === 0 ? (
+                <div className="p-4 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs py-8">
+                  <Loader2 size={20} className="animate-spin text-red-400" />
+                  <span>Cargando historial...</span>
+                </div>
+              ) : history.length === 0 ? (
+                <div className="p-4 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs py-6 text-center border border-dashed border-slate-800 rounded-xl">
+                  <span>{historyError || 'No hay extracciones registradas.'}</span>
+                  <button
+                    onClick={() => loadHistory()}
+                    className="mt-1 px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-semibold transition-colors"
                   >
-                    <input 
-                      type="checkbox"
-                      checked={selectedHistoryIds.has(run.id)}
-                      onChange={(e) => toggleHistorySelection(e as any, run.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-0 shrink-0 cursor-pointer"
-                      title="Seleccionar para unificar"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-bold truncate pr-4">
-                        {new Date(run.timestamp).toLocaleDateString()} - {new Date(run.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                      </div>
-                      <div className="text-[10px] opacity-50 mt-1 flex justify-between items-center">
-                        <span>{run.items_count} items</span>
-                        <span className="capitalize">{run.status}</span>
-                      </div>
-                    </div>
-                    <div 
-                      onClick={(e) => handleDeleteExtraction(e, run.id)}
-                      className="p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-red-600 hover:text-white transition-all text-slate-500 shrink-0"
+                    Reintentar
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-row lg:flex-col gap-2 overflow-x-auto lg:overflow-y-auto lg:max-h-[500px] pb-2 lg:pb-0 scrollbar-hide">
+                  {history.map((run) => (
+                    <div
+                      key={run.id}
+                      onClick={() => setSelectedExtraction(run.id)}
+                      className={`group relative p-3 rounded-xl text-left transition-all border min-w-[180px] lg:min-w-0 cursor-pointer flex items-center gap-2.5 ${
+                        selectedExtraction === run.id 
+                        ? 'bg-red-600/20 border-red-500/40 text-white shadow-inner' 
+                        : selectedHistoryIds.has(run.id)
+                          ? 'bg-indigo-600/20 border-indigo-500/40 text-white'
+                          : 'bg-slate-900/30 border-slate-800/50 text-slate-400 hover:border-slate-700'
+                      }`}
                     >
-                      <Trash2 size={12} />
+                      <input 
+                        type="checkbox"
+                        checked={selectedHistoryIds.has(run.id)}
+                        onChange={(e) => toggleHistorySelection(e as any, run.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-0 shrink-0 cursor-pointer"
+                        title="Seleccionar para unificar"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold truncate pr-4">
+                          {new Date(run.timestamp).toLocaleDateString()} - {new Date(run.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </div>
+                        <div className="text-[10px] opacity-50 mt-1 flex justify-between items-center">
+                          <span>{run.items_count} items</span>
+                          <span className="capitalize">{run.status}</span>
+                        </div>
+                      </div>
+                      <div 
+                        onClick={(e) => handleDeleteExtraction(e, run.id)}
+                        className="p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-red-600 hover:text-white transition-all text-slate-500 shrink-0"
+                      >
+                        <Trash2 size={12} />
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
 
             </div>
 
@@ -2475,10 +2574,32 @@ export default function DataPage() {
                     }) : (
                       <tr>
                         <td colSpan={9} className="px-6 py-16 text-center text-slate-600">
-                          <div className="flex flex-col items-center gap-2">
-                            <Search size={40} className="opacity-20" />
-                            <p className="italic">No hay artículos con los filtros aplicados para mostrar.</p>
-                          </div>
+                          {isLoadingData ? (
+                            <div className="flex flex-col items-center gap-3 py-6">
+                              <Loader2 size={36} className="animate-spin text-red-500" />
+                              <p className="text-slate-300 font-semibold text-sm">Cargando artículos de la extracción...</p>
+                              <p className="text-slate-500 text-xs">Obteniendo datos del servidor, un momento por favor.</p>
+                            </div>
+                          ) : !selectedExtraction ? (
+                            <div className="flex flex-col items-center gap-2">
+                              <Package size={40} className="opacity-20 text-slate-500" />
+                              <p className="text-slate-400 font-medium">Selecciona una extracción del historial para ver sus artículos.</p>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-2">
+                              <Search size={40} className="opacity-20" />
+                              <p className="italic">No hay artículos con los filtros aplicados para mostrar.</p>
+                              {!showOutOfStock && (
+                                <button
+                                  onClick={() => setShowOutOfStock(true)}
+                                  className="mt-2 text-xs text-emerald-400 hover:underline flex items-center gap-1 font-semibold"
+                                >
+                                  <Package size={13} />
+                                  Mostrar todos los artículos (desactivar filtro de stock)
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )}

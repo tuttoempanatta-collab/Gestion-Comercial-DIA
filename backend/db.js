@@ -1,5 +1,7 @@
 const { pool } = require('./pool');
 
+const verifiedExtractions = new Set();
+
 module.exports = {
   pool,
   
@@ -8,6 +10,7 @@ module.exports = {
     const values = ['running', startDate, endDate];
     const res = await pool.query(query, values);
     const id = res.rows[0].id;
+    verifiedExtractions.add(id);
     console.log(`[DB] Created new extraction entry with ID: ${id}`);
     return id;
   },
@@ -24,13 +27,16 @@ module.exports = {
 
     try {
       // 1. Resilient Safeguard: Ensure parent extraction entry exists in extractions table to satisfy FK
-      const extCheck = await pool.query('SELECT id FROM extractions WHERE id = $1', [extractionId]);
-      if (!extCheck.rows || extCheck.rows.length === 0) {
-        console.warn(`[DB Safeguard] Extraction ID ${extractionId} not found in extractions table. Auto-creating entry to preserve foreign key integrity.`);
-        await pool.query(
-          'INSERT INTO extractions (id, status, start_date, end_date) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING',
-          [extractionId, 'running', enrichedData.fecha_desde || '', enrichedData.fecha_hasta || '']
-        );
+      if (!verifiedExtractions.has(extractionId)) {
+        const extCheck = await pool.query('SELECT id FROM extractions WHERE id = $1', [extractionId]);
+        if (!extCheck.rows || extCheck.rows.length === 0) {
+          console.warn(`[DB Safeguard] Extraction ID ${extractionId} not found in extractions table. Auto-creating entry to preserve foreign key integrity.`);
+          await pool.query(
+            'INSERT INTO extractions (id, status, start_date, end_date) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING',
+            [extractionId, 'running', enrichedData.fecha_desde || '', enrichedData.fecha_hasta || '']
+          );
+        }
+        verifiedExtractions.add(extractionId);
       }
 
       // Deduplication check: prevent multiple rows for the same product code in the same extraction
@@ -113,6 +119,7 @@ module.exports = {
   },
 
   deleteExtraction: async (id) => {
+    verifiedExtractions.delete(id);
     // Delete child rows first then parent extraction
     await pool.query('DELETE FROM commercial_actions WHERE extraction_id = $1', [id]);
     await pool.query('DELETE FROM extractions WHERE id = $1', [id]);
@@ -124,6 +131,7 @@ module.exports = {
   },
 
   clearAll: async () => {
+    verifiedExtractions.clear();
     await pool.withTransaction(async (client) => {
       await client.query('DELETE FROM commercial_actions');
       await client.query('DELETE FROM extractions');

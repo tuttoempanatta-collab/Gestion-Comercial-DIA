@@ -240,6 +240,21 @@ export default function ExtractPage() {
                 <p className="text-xs text-slate-400 italic">
                   {progress.message || 'Procesando datos del portal...'}
                 </p>
+
+                {status === 'completed' && (
+                  <div className="mt-2 pt-3 border-t border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <span className="text-xs text-emerald-300 font-medium">
+                      ✨ ¡Extracción finalizada con éxito! Todos los artículos ya están guardados.
+                    </span>
+                    <a
+                      href={extractionId ? `/data?id=${extractionId}` : '/data'}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-900/40 transition-all hover:scale-105 shrink-0"
+                    >
+                      <CheckCircle2 size={16} />
+                      <span>Ver Datos Extraídos en Pantalla →</span>
+                    </a>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -275,16 +290,25 @@ export default function ExtractPage() {
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2 text-xs">
                   {status === 'completed' ? (
-                    <><CheckCircle2 size={14} className="text-emerald-400" /> <span className="text-emerald-400">Finalizado</span></>
+                    <><CheckCircle2 size={14} className="text-emerald-400" /> <span className="text-emerald-400 font-bold">Finalizado</span></>
                   ) : status === 'failed' ? (
-                    <><AlertCircle size={14} className="text-red-400" /> <span className="text-red-400">Error</span></>
+                    <><AlertCircle size={14} className="text-red-400" /> <span className="text-red-400 font-bold">Error</span></>
                   ) : isExtracting ? (
-                    <><Loader2 size={14} className="animate-spin text-red-400" /> <span className="text-red-400">Procesando ({progress.percentage}%)</span></>
+                    <><Loader2 size={14} className="animate-spin text-red-400" /> <span className="text-red-400 font-bold">Procesando ({progress.percentage}%)</span></>
                   ) : (
                     <span className="text-slate-500">Inactivo</span>
                   )}
                 </div>
               </div>
+
+              {status === 'completed' && (
+                <a
+                  href={extractionId ? `/data?id=${extractionId}` : '/data'}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline transition-all"
+                >
+                  <span>Abrir Explorador de Datos →</span>
+                </a>
+              )}
             </div>
           </div>
         </div>
