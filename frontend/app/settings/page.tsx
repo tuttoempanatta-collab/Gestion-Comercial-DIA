@@ -47,11 +47,15 @@ async function loadFileHandle(): Promise<FileSystemFileHandle | null> {
 
 interface CatalogStatus { total: number; lastUpdate: string | null }
 interface CatalogItem { item_id: string; loyalty_description: string; price_amount: number; current_quantity: number }
+interface DbStatus { provider: string; isSqlite: boolean; hasDatabaseUrl: boolean; error: string | null; active: boolean }
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({ username: '', password: '', portal_url: '' })
   const [isSaving, setIsSaving] = useState(false)
   const [message, setMessage] = useState('')
+
+  // Database connection status
+  const [dbStatus, setDbStatus] = useState<DbStatus | null>(null)
 
   // Catalog state
   const [catalogStatus, setCatalogStatus] = useState<CatalogStatus | null>(null)
@@ -79,10 +83,28 @@ export default function SettingsPage() {
   useEffect(() => {
     fetchSettings()
     fetchCatalogStatus()
+    fetchDbStatus()
     loadFileHandle().then(h => {
       if (h) { setSavedHandle(h); setSavedHandleName(h.name) }
     })
   }, [])
+
+  const fetchDbStatus = async () => {
+    try {
+      const r = await fetch(API_URL('/api/db-status'))
+      if (r.ok) {
+        const d = await r.json()
+        setDbStatus(d)
+      }
+    } catch (_) {
+      setTimeout(async () => {
+        try {
+          const retry = await fetch(API_URL('/api/db-status'))
+          if (retry.ok) setDbStatus(await retry.json())
+        } catch (_) {}
+      }, 2500)
+    }
+  }
 
   const fetchSettings = async () => {
     try {
@@ -142,17 +164,31 @@ export default function SettingsPage() {
     setIsUploading(true)
     setUploadResult(null)
     setUploadError('')
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 60000)
+
     try {
       const form = new FormData()
       form.append('catalog', file)
-      const r = await fetch(API_URL('/api/upload-catalog'), { method: 'POST', body: form })
+      const r = await fetch(API_URL('/api/upload-catalog'), {
+        method: 'POST',
+        body: form,
+        signal: controller.signal
+      })
+      clearTimeout(timeoutId)
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || 'Error al importar')
       setUploadResult(d)
       fetchCatalogStatus()
+      fetchDbStatus()
       setCatalogPage(1)
     } catch (e: any) {
-      setUploadError(e.message)
+      clearTimeout(timeoutId)
+      if (e.name === 'AbortError') {
+        setUploadError('La carga tardó demasiado tiempo (timeout). Es muy probable que Supabase esté pausado o con conexión demorada. Revisá el estado de la base de datos a la derecha.')
+      } else {
+        setUploadError(e.message || 'Error al importar el catálogo')
+      }
     } finally {
       setIsUploading(false)
     }
@@ -414,7 +450,9 @@ export default function SettingsPage() {
               </div>
               <div className="flex justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-500">Base de Datos</span>
-                <span className="text-slate-300">PostgreSQL (Supabase)</span>
+                <span className={`font-medium ${dbStatus?.isSqlite ? 'text-amber-400' : dbStatus ? 'text-emerald-400' : 'text-slate-400'}`}>
+                  {dbStatus ? dbStatus.provider : 'Conectando...'}
+                </span>
               </div>
               <div className="flex justify-between border-b border-slate-800 pb-2">
                 <span className="text-slate-500">Catálogo</span>
@@ -422,6 +460,36 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
+
+          {dbStatus?.isSqlite && (
+            <div className="glass-card border-amber-500/40 bg-amber-950/20 p-5 flex flex-col gap-3">
+              <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
+                <AlertTriangle size={18} /> Supabase Pausado o Inaccesible
+              </div>
+              <p className="text-xs text-amber-200/90 leading-relaxed">
+                El backend no pudo conectarse a PostgreSQL en Supabase y está operando temporalmente en SQLite local.
+              </p>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                En las cuentas gratuitas de Supabase, las bases de datos se pausan tras 7 días de inactividad.
+              </p>
+              <a
+                href="https://supabase.com/dashboard"
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 text-center py-2 px-3 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs transition-colors"
+              >
+                Abrir Supabase Dashboard para Reactivar
+              </a>
+              {dbStatus.error && (
+                <div className="mt-1">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Detalle del error:</span>
+                  <p className="text-[11px] font-mono bg-black/40 p-2 rounded text-red-300 break-all mt-1">
+                    {dbStatus.error}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

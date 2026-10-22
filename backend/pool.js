@@ -5,6 +5,8 @@ require('dotenv').config();
 
 let activePool = null;
 let useSqlite = false;
+let lastConnectionError = null;
+let dbProvider = 'pending';
 
 // Helper to translate Postgres syntax into SQLite syntax
 function translatePgToSqlite(sql, params) {
@@ -141,8 +143,10 @@ async function getActivePool() {
         );
 
         ALTER TABLE commercial_actions ADD COLUMN IF NOT EXISTS precio_final TEXT;
+        CREATE INDEX IF NOT EXISTS idx_ca_codigo ON commercial_actions(codigo);
+        CREATE INDEX IF NOT EXISTS idx_ca_extraction ON commercial_actions(extraction_id);
       `);
-      console.log('[Database] PostgreSQL: Verified schema and tables.');
+      console.log('[Database] PostgreSQL: Verified schema, tables and indexes.');
 
       // Resync sequences to avoid any primary key collision or out-of-sync sequence errors
       try {
@@ -163,10 +167,14 @@ async function getActivePool() {
       }
 
       activePool = pgPool;
+      dbProvider = 'PostgreSQL (Supabase)';
+      lastConnectionError = null;
       return activePool;
     } catch (err) {
       console.error('[Database Error] Failed to connect to PostgreSQL:', err.message);
       console.log('[Database] Falling back to SQLite because PostgreSQL is unreachable.');
+      lastConnectionError = err.message;
+      dbProvider = 'SQLite (Fallback)';
       useSqlite = true;
     }
   }
@@ -234,6 +242,11 @@ async function getActivePool() {
     db.exec('ALTER TABLE commercial_actions ADD COLUMN precio_final TEXT');
     console.log('[Database] SQLite: Added column precio_final to commercial_actions');
   }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ca_codigo ON commercial_actions(codigo);
+    CREATE INDEX IF NOT EXISTS idx_ca_extraction ON commercial_actions(extraction_id);
+  `);
 
   activePool = {
     isSqlite: true,
@@ -333,5 +346,16 @@ const pool = {
   }
 };
 
-module.exports = { pool };
+async function getDbStatus() {
+  const active = await getActivePool();
+  return {
+    provider: active.isSqlite ? 'SQLite (Fallback)' : 'PostgreSQL (Supabase)',
+    isSqlite: Boolean(active.isSqlite),
+    hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+    error: lastConnectionError,
+    active: true
+  };
+}
+
+module.exports = { pool, getDbStatus };
 

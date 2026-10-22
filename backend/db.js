@@ -1,9 +1,10 @@
-const { pool } = require('./pool');
+const { pool, getDbStatus } = require('./pool');
 
 const verifiedExtractions = new Set();
 
 module.exports = {
   pool,
+  getDbStatus,
   
   createExtraction: async (startDate, endDate) => {
     const query = 'INSERT INTO extractions (status, start_date, end_date) VALUES ($1, $2, $3) RETURNING id';

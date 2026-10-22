@@ -7,6 +7,7 @@ const fs = require('fs');
 const motScheduler = require('./mot_scheduler');
 const { 
   pool,
+  getDbStatus,
   createExtraction, 
   updateExtractionStatus, 
   getHistory, 
@@ -47,6 +48,16 @@ const PORT = process.env.PORT || 3001;
 // Health check for Render
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Real-time Database Status endpoint
+app.get('/api/db-status', async (req, res) => {
+  try {
+    const status = await getDbStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Global enrichment progress
@@ -431,14 +442,14 @@ app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
       await pool.query(`
         UPDATE commercial_actions
         SET stock = (SELECT COALESCE(current_quantity, 0) FROM catalog_items WHERE item_id = commercial_actions.codigo)
-        WHERE codigo IN (SELECT item_id FROM catalog_items)
+        WHERE EXISTS (SELECT 1 FROM catalog_items WHERE item_id = commercial_actions.codigo)
       `);
     } catch (updateErr) {
       console.warn('[Catalog Sync Warning]: Could not bulk update stock in commercial_actions:', updateErr.message);
     }
 
     // Clean up temp file
-    fs.unlinkSync(tmpPath);
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
     res.json({ imported, total: items.length });
   } catch (err) {
     try { fs.unlinkSync(tmpPath); } catch (_) {}
