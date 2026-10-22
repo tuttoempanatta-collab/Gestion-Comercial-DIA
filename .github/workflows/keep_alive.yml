@@ -48,15 +48,19 @@ jobs:
             echo "Para máxima efectividad, agregá la variable BACKEND_URL en Settings > Secrets and variables > Actions."
           fi
 
-          # Ping directo a Supabase si las credenciales están presentes
-          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_KEY" ]; then
-            echo "3. Realizando consulta directa a la API REST de Supabase..."
-            SUPA_CODE=$(curl -s -o /tmp/supa_res.json -w "%{http_code}" "$SUPABASE_URL/rest/v1/settings?select=key&limit=1" -H "apikey: $SUPABASE_KEY" || echo "000")
-            echo "Código HTTP Supabase: $SUPA_CODE"
+          # Ping directo a Supabase
+          TARGET_SUPABASE="${SUPABASE_URL:-https://zrbawrypaebfmgpivyvd.supabase.co}"
+          echo "3. Realizando ping a Supabase en $TARGET_SUPABASE..."
+          if [ -n "$SUPABASE_KEY" ]; then
+            SUPA_CODE=$(curl -s -o /tmp/supa_res.json -w "%{http_code}" "$TARGET_SUPABASE/rest/v1/settings?select=key&limit=1" -H "apikey: $SUPABASE_KEY" || echo "000")
+            echo "Código HTTP Supabase (con Key): $SUPA_CODE"
             if [ -f /tmp/supa_res.json ]; then
               cat /tmp/supa_res.json
               echo ""
             fi
+          else
+            SUPA_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_SUPABASE/auth/v1/health" || echo "000")
+            echo "Código HTTP Supabase Health: $SUPA_HEALTH"
           fi
 
           # Ping al Frontend en Vercel

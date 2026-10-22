@@ -7,6 +7,7 @@ let activePool = null;
 let useSqlite = false;
 let lastConnectionError = null;
 let dbProvider = 'pending';
+let lastRetryTime = 0;
 
 // Helper to translate Postgres syntax into SQLite syntax
 function translatePgToSqlite(sql, params) {
@@ -81,9 +82,20 @@ function translatePgToSqlite(sql, params) {
 }
 
 async function getActivePool() {
-  if (activePool) return activePool;
+  const now = Date.now();
+  // If we already have a healthy PostgreSQL pool, return it
+  if (activePool && !activePool.isSqlite) return activePool;
 
-  if (process.env.DATABASE_URL && !useSqlite) {
+  // If we are currently on SQLite fallback, but DATABASE_URL is set,
+  // allow retrying PostgreSQL if at least 10 seconds have passed since the last attempt
+  if (activePool && activePool.isSqlite) {
+    if (!process.env.DATABASE_URL || (now - lastRetryTime < 10000)) {
+      return activePool;
+    }
+  }
+
+  if (process.env.DATABASE_URL) {
+    lastRetryTime = now;
     try {
       console.log('[Database] Connecting to PostgreSQL using DATABASE_URL...');
       const pgPool = new Pool({
@@ -169,6 +181,7 @@ async function getActivePool() {
       activePool = pgPool;
       dbProvider = 'PostgreSQL (Supabase)';
       lastConnectionError = null;
+      useSqlite = false;
       return activePool;
     } catch (err) {
       console.error('[Database Error] Failed to connect to PostgreSQL:', err.message);
@@ -176,8 +189,14 @@ async function getActivePool() {
       lastConnectionError = err.message;
       dbProvider = 'SQLite (Fallback)';
       useSqlite = true;
+      if (activePool && activePool.isSqlite) {
+        return activePool;
+      }
     }
   }
+
+  // If already on SQLite, return it
+  if (activePool && activePool.isSqlite) return activePool;
 
   // Initialize SQLite
   console.log('[Database] Initializing local SQLite (database.sqlite)...');
