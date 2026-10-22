@@ -60,6 +60,38 @@ app.get('/api/db-status', async (req, res) => {
   }
 });
 
+// Keep-Alive endpoint for automated ping (keeps Render and Supabase awake)
+app.get('/api/keep-alive', async (req, res) => {
+  try {
+    const start = Date.now();
+    const result = await pool.query('SELECT 1 as alive, CURRENT_TIMESTAMP as time');
+    const dbStatus = await getDbStatus();
+    res.json({
+      status: 'active',
+      uptime: process.uptime(),
+      db: {
+        provider: dbStatus.provider,
+        isSqlite: dbStatus.isSqlite,
+        responseTimeMs: Date.now() - start,
+        timestamp: result.rows?.[0]?.time || new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Internal 12-hour periodic ping to prevent Supabase idle timeout while backend process is alive
+const KEEP_ALIVE_INTERVAL = 12 * 60 * 60 * 1000;
+setInterval(async () => {
+  try {
+    await pool.query('SELECT 1');
+    console.log('[Database Keep-Alive] Internal ping executed successfully.');
+  } catch (err) {
+    console.warn('[Database Keep-Alive Warning]:', err.message);
+  }
+}, KEEP_ALIVE_INTERVAL);
+
 // Global enrichment progress
 let enrichmentProgress = { percentage: 0, message: '', status: 'idle' };
 

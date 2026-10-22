@@ -1,0 +1,69 @@
+name: Supabase & Backend Keep-Alive Bot
+
+on:
+  schedule:
+    # Corre cada 12 horas (a las 04:00 y 16:00 UTC) para garantizar actividad continua
+    - cron: '0 4,16 * * *'
+  workflow_dispatch:
+    inputs:
+      backend_url:
+        description: 'URL del backend (opcional si ya está configurado en Secrets)'
+        required: false
+        default: ''
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ejecutar Ping de Actividad a Supabase y Backend
+        env:
+          SECRET_BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          VAR_BACKEND_URL: ${{ vars.BACKEND_URL }}
+          INPUT_BACKEND_URL: ${{ github.event.inputs.backend_url }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "========================================================"
+          echo "Iniciando proceso de Keep-Alive para evitar pausas"
+          echo "Fecha y hora: $(date -u)"
+          echo "========================================================"
+
+          # Determinar la URL del Backend
+          TARGET_BACKEND="${INPUT_BACKEND_URL:-${SECRET_BACKEND_URL:-$VAR_BACKEND_URL}}"
+
+          if [ -n "$TARGET_BACKEND" ]; then
+            echo "1. Realizando ping al endpoint /api/keep-alive en el Backend: $TARGET_BACKEND"
+            HTTP_CODE=$(curl -s -o /tmp/keepalive_res.json -w "%{http_code}" "$TARGET_BACKEND/api/keep-alive" || echo "000")
+            echo "Código HTTP recibido: $HTTP_CODE"
+            if [ -f /tmp/keepalive_res.json ]; then
+              cat /tmp/keepalive_res.json
+              echo ""
+            fi
+
+            echo "2. Realizando ping al endpoint /api/db-status..."
+            curl -s "$TARGET_BACKEND/api/db-status" || echo "Error al consultar db-status"
+            echo ""
+          else
+            echo "Aviso: No se configuró BACKEND_URL en GitHub Secrets o Variables."
+            echo "Para máxima efectividad, agregá la variable BACKEND_URL en Settings > Secrets and variables > Actions."
+          fi
+
+          # Ping directo a Supabase si las credenciales están presentes
+          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_KEY" ]; then
+            echo "3. Realizando consulta directa a la API REST de Supabase..."
+            SUPA_CODE=$(curl -s -o /tmp/supa_res.json -w "%{http_code}" "$SUPABASE_URL/rest/v1/settings?select=key&limit=1" -H "apikey: $SUPABASE_KEY" || echo "000")
+            echo "Código HTTP Supabase: $SUPA_CODE"
+            if [ -f /tmp/supa_res.json ]; then
+              cat /tmp/supa_res.json
+              echo ""
+            fi
+          fi
+
+          # Ping al Frontend en Vercel
+          echo "4. Realizando ping a la aplicación web en Vercel..."
+          VERCEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://gestion-comercial-dia.vercel.app" || echo "000")
+          echo "Código HTTP Frontend Vercel: $VERCEL_CODE"
+
+          echo "========================================================"
+          echo "Keep-Alive completado exitosamente."
+          echo "========================================================"
