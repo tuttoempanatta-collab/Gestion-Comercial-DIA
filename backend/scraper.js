@@ -198,24 +198,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         onProgress({ message: `Aviso: Error en filtros (${e.message.slice(0, 40)})`, current: 5, total: 100, percentage: 10 });
       }
 
-      onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 14 });
+      onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 12 });
     }
-
-    // 4. Detectar total de páginas estimado
-    onProgress({ message: 'Calculando páginas disponibles...', current: 12, total: 100, percentage: 14 });
-    let totalPages = 1;
-    try {
-      const detected = await page.evaluate(() => {
-        const text = document.body.innerText || '';
-        const m = text.match(/(?:P\u00e1gina|Página|Pagina|P\u00e1g\.?|Pág\.?)\s+\d+\s+(?:de|of)\s+(\d+)/i);
-        if (m) return parseInt(m[1]);
-        return null;
-      });
-      if (detected && detected >= 1) totalPages = detected;
-    } catch (e) {}
-
-    console.log(`[Ext-${extractionId}] Total páginas detectadas inicialmente: ${totalPages}`);
-    onProgress({ message: `Iniciando extracción (detectadas inicialmente: ${totalPages} páginas)...`, current: 0, total: totalPages, percentage: 15 });
 
     // RECURSIVE function to find the data frame anywhere in the hierarchy
     const findDataFrameRecursive = async (parent) => {
@@ -235,6 +219,228 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const found = await findDataFrameRecursive(p.mainFrame());
       return found || p.mainFrame();
     };
+
+    // Helper para leer "Página X de Y" y cantidad de filas actuales en la tabla
+    const getGridState = async () => {
+      const df = await findDataFrame(page);
+      const frames = Array.from(new Set([df, ...(page.frames ? page.frames() : [])]));
+      for (const f of frames) {
+        try {
+          const state = await f.evaluate(() => {
+            const text = document.body.innerText || '';
+            const m = text.match(/(?:P\u00e1gina|Página|Pagina|P\u00e1g\.?|Pág\.?)\s+(\d+)\s+(?:de|of)\s+(\d+)/i);
+            const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table[id*="Grid"] tr'));
+            let validRows = 0;
+            let firstCode = '';
+            for (const row of trs) {
+              const tds = row.querySelectorAll('td');
+              if (tds.length >= 7 && !row.querySelector('th') && !row.classList.contains('Grid_WorkWithHeader')) {
+                const code = tds[0]?.innerText.trim() || '';
+                if (code && !isNaN(parseInt(code))) {
+                  validRows++;
+                  if (!firstCode) firstCode = code;
+                }
+              }
+            }
+            if (m || validRows > 0) {
+              return {
+                currentPage: m ? parseInt(m[1]) : 1,
+                totalPages: m ? parseInt(m[2]) : 1,
+                validRows,
+                firstCode
+              };
+            }
+            return null;
+          });
+          if (state) return state;
+        } catch (e) {}
+      }
+      return { currentPage: 1, totalPages: 1, validRows: 0, firstCode: '' };
+    };
+
+    // 4. Detectar estado inicial y aplicar el filtro de filas por página (ej. 50 filas)
+    let gridState = await getGridState();
+    let totalPages = gridState.totalPages;
+    console.log(`[Ext-${extractionId}] Estado inicial tras búsqueda: Página ${gridState.currentPage} de ${totalPages} (${gridState.validRows} filas visibles)`);
+
+    const targetSize = parseInt(pageSize) || 50;
+    if (targetSize !== 10 && gridState.validRows > 0) {
+      onProgress({ message: `Aplicando filtro de ${targetSize} filas por página...`, current: 12, total: 100, percentage: 13 });
+      console.log(`[Ext-${extractionId}] Aplicando configuración de ${targetSize} filas por página (actual: ${gridState.validRows} filas, ${totalPages} págs)...`);
+
+      let sizeApplied = false;
+      for (let attempt = 1; attempt <= 2 && !sizeApplied; attempt++) {
+        dataFrame = await findDataFrame(page);
+        const framesToTry = Array.from(new Set([dataFrame, ...(page.frames ? page.frames() : [])]));
+
+        for (const f of framesToTry) {
+          if (sizeApplied) break;
+          try {
+            await f.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+            await page.waitForTimeout(600);
+
+            // Paso A: Localizar el botón "Página X de Y" abajo a la izquierda de la tabla
+            const triggerFound = await f.evaluate(() => {
+              document.querySelectorAll('[data-gx-page-trigger]').forEach(el => el.removeAttribute('data-gx-page-trigger'));
+              const regex = /^(?:P\u00e1gina|Página|Pagina|P\u00e1g\.?|Pág\.?)\s+\d+\s+(?:de|of)\s+\d+/i;
+              const candidates = Array.from(document.querySelectorAll('button, a, span, div, td')).filter(el => {
+                const t = (el.innerText || '').trim();
+                if (!regex.test(t) || t.length > 40) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              });
+
+              if (candidates.length === 0) return null;
+
+              let best = candidates.find(el => el.tagName === 'BUTTON' || el.tagName === 'A' || el.classList.contains('dropdown-toggle'));
+              if (!best) {
+                best = candidates[candidates.length - 1];
+                const interactiveParent = best.closest('button, a, .dropdown-toggle, [data-toggle="dropdown"]');
+                if (interactiveParent && (interactiveParent.innerText || '').trim().length < 50) {
+                  best = interactiveParent;
+                }
+              }
+
+              best.scrollIntoView({ block: 'center' });
+              best.setAttribute('data-gx-page-trigger', 'true');
+              return { tag: best.tagName, text: (best.innerText || '').trim() };
+            });
+
+            if (triggerFound) {
+              console.log(`[Ext-${extractionId}] [Intento ${attempt}] Abriendo menú en "${triggerFound.text}" (${triggerFound.tag})...`);
+              const triggerLoc = f.locator('[data-gx-page-trigger="true"]').first();
+              await triggerLoc.click({ timeout: 5000 }).catch(async () => {
+                await f.evaluate(() => {
+                  const el = document.querySelector('[data-gx-page-trigger="true"]');
+                  if (el) el.click();
+                });
+              });
+              await page.waitForTimeout(1200);
+            } else {
+              // Fallback por selector de texto en Playwright
+              const fbTrigger = f.locator('button:has-text("Página "), a:has-text("Página "), text=/^P[aá]gina\\s+\\d+\\s+de\\s+\\d+/i').first();
+              if (await fbTrigger.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await fbTrigger.click().catch(() => {});
+                await page.waitForTimeout(1200);
+              }
+            }
+
+            // Paso B: Buscar y hacer clic en la opción "${targetSize} filas" (ej. "50 filas")
+            const optionFound = await f.evaluate((size) => {
+              document.querySelectorAll('[data-gx-rows-opt]').forEach(el => el.removeAttribute('data-gx-rows-opt'));
+              const optRegex = new RegExp(`^${size}\\s*(?:filas|rows|registros)$`, 'i');
+
+              const allMatches = Array.from(document.querySelectorAll('a, span, li, div, button')).filter(el => {
+                const t = (el.innerText || '').trim();
+                return optRegex.test(t);
+              });
+
+              if (allMatches.length === 0) return null;
+
+              const visibleMatches = allMatches.filter(el => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              });
+
+              const pool = visibleMatches.length > 0 ? visibleMatches : allMatches;
+              let best = pool.find(el => el.tagName === 'A' || el.tagName === 'BUTTON') || pool[pool.length - 1];
+              const linkParent = best.closest('a, button');
+              if (linkParent && optRegex.test((linkParent.innerText || '').trim())) {
+                best = linkParent;
+              }
+
+              best.setAttribute('data-gx-rows-opt', 'true');
+              const rect = best.getBoundingClientRect();
+              return {
+                tag: best.tagName,
+                text: (best.innerText || '').trim(),
+                visible: rect.width > 0 && rect.height > 0
+              };
+            }, targetSize);
+
+            if (optionFound) {
+              console.log(`[Ext-${extractionId}] Seleccionando opción "${optionFound.text}" (${optionFound.tag}, visible=${optionFound.visible})...`);
+              if (optionFound.visible) {
+                await f.locator('[data-gx-rows-opt="true"]').first().click({ timeout: 5000 }).catch(async () => {
+                  await f.evaluate(() => {
+                    const el = document.querySelector('[data-gx-rows-opt="true"]');
+                    if (el) el.click();
+                  });
+                });
+              } else {
+                await f.evaluate(() => {
+                  const el = document.querySelector('[data-gx-rows-opt="true"]');
+                  if (el) {
+                    el.click();
+                    if (el.parentElement) el.parentElement.click();
+                  }
+                });
+              }
+
+              // Esperar que GeneXus recargue la tabla con las nuevas filas
+              await page.waitForTimeout(1500);
+              await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
+
+              const prevTotal = totalPages;
+              const prevRows = gridState.validRows;
+              for (let waitStep = 0; waitStep < 15; waitStep++) {
+                await page.waitForTimeout(1000);
+                const updated = await getGridState();
+                if (
+                  (updated.totalPages !== prevTotal && updated.totalPages >= 1) ||
+                  (targetSize > 10 && updated.validRows > 10) ||
+                  (targetSize === 5 && updated.validRows <= 5) ||
+                  (prevTotal === 1 && prevRows < 10)
+                ) {
+                  gridState = updated;
+                  totalPages = updated.totalPages;
+                  sizeApplied = true;
+                  break;
+                }
+              }
+
+              await page.waitForTimeout(2500);
+              gridState = await getGridState();
+              totalPages = gridState.totalPages;
+              console.log(`[Ext-${extractionId}] Vista actualizada: ${gridState.validRows} filas en pág 1, Total de páginas: ${totalPages}`);
+              sizeApplied = true;
+              break;
+            }
+          } catch (err) {
+            console.log(`[Ext-${extractionId}] Aviso en intento ${attempt} de cambio de filas:`, err.message);
+          }
+        }
+      }
+    }
+
+    // Si startPageParam > 1, usar el campo "Ir a página:" del popup de paginación
+    if (startPageParam > 1) {
+      onProgress({ message: `Saltando a página inicial ${startPageParam} de ${totalPages}...`, current: 0, total: totalPages, percentage: 14 });
+      console.log(`[Ext-${extractionId}] Saltando directamente a página ${startPageParam}...`);
+      dataFrame = await findDataFrame(page);
+      try {
+        await dataFrame.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+        await page.waitForTimeout(500);
+        const triggerLoc = dataFrame.locator('[data-gx-page-trigger="true"], button:has-text("Página "), a:has-text("Página ")').first();
+        if (await triggerLoc.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await triggerLoc.click().catch(() => {});
+          await page.waitForTimeout(1000);
+          const pageInput = dataFrame.locator('.dropdown-menu input[type="text"], .dropdown-menu input[type="number"], input[id*="PAGINATION"], input[id*="PAGING"]').first();
+          if (await pageInput.isVisible({ timeout: 2500 }).catch(() => false)) {
+            await pageInput.fill(String(startPageParam));
+            await pageInput.press('Enter');
+            await page.waitForTimeout(1500);
+            await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
+            await page.waitForTimeout(4000);
+          }
+        }
+      } catch (e) {
+        console.log(`[Ext-${extractionId}] Error en salto directo a página ${startPageParam}:`, e.message);
+      }
+    }
+
+    console.log(`[Ext-${extractionId}] Total de páginas: ${totalPages} (${gridState.validRows} filas por página)`);
+    onProgress({ message: `Iniciando extracción de ${totalPages} páginas (${gridState.validRows} filas por página)...`, current: 0, total: totalPages, percentage: 15 });
 
     // Expose the save function to the browser to save RAM
     await page.exposeFunction('saveRowToDb', async (row) => {
@@ -332,6 +538,16 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         if (pageResults.firstCode) lastFirstCode = pageResults.firstCode;
       }
 
+      // Si ya alcanzamos el total de páginas indicado por el paginador ("Página 23 de 23"), finalizar limpiamente
+      const currentGridInfo = await getGridState();
+      if (currentGridInfo.totalPages > 1) {
+        totalPages = currentGridInfo.totalPages;
+      }
+      if (totalPages > 1 && currentPage >= totalPages && currentGridInfo.currentPage >= totalPages) {
+        console.log(`[Ext-${extractionId}] Última página alcanzada (${currentPage} de ${totalPages}). Finalizando extracción.`);
+        break;
+      }
+
       // Buscar y hacer clic en el botón "Sig" para ir a la siguiente página
       dataFrame = await findDataFrame(page);
       const nextSelectors = [
@@ -365,10 +581,20 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               }).catch(() => false);
 
               if (!isDisabled) {
-                console.log(`[Ext-${extractionId}] Clic en botón "Sig" (avanzando a página ${currentPage + 1})...`);
+                console.log(`[Ext-${extractionId}] Clic en botón "Sig" (avanzando a página ${currentPage + 1} de ${totalPages})...`);
                 await nextBtn.click().catch(() => {});
+                await page.waitForTimeout(1000);
                 await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 20000 }).catch(() => {});
-                await page.waitForTimeout(4000);
+
+                // Esperar activamente a que cambie el indicador de página o el primer código de la tabla
+                for (let w = 0; w < 12; w++) {
+                  await page.waitForTimeout(800);
+                  const st = await getGridState();
+                  if (st.currentPage === currentPage + 1 || (st.firstCode && st.firstCode !== lastFirstCode)) {
+                    break;
+                  }
+                }
+                await page.waitForTimeout(1500);
                 nextClicked = true;
                 break;
               }
