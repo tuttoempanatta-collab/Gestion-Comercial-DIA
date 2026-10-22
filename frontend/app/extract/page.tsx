@@ -155,18 +155,12 @@ export default function ExtractPage() {
               />
             </div>
 
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-slate-400">Items por página (Vista)</label>
-              <select 
-                value={pageSize}
-                onChange={(e) => setPageSize(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-red-500 transition-colors appearance-none cursor-pointer"
-              >
-                <option value="5">5 registros por página</option>
-                <option value="10">10 registros por página</option>
-                <option value="20">20 registros por página</option>
-                <option value="50">50 registros por página</option>
-              </select>
+            <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-lg flex flex-col gap-1 text-xs text-slate-400">
+              <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                Extracción Multivista Automática
+              </span>
+              <span>El portal DIA entrega los artículos en bloques de 10 por página. El bot recorrerá todas las páginas consecutivamente hasta extraer la totalidad de las ofertas.</span>
             </div>
           </div>
 
