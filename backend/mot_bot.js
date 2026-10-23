@@ -939,34 +939,85 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 }
 
 /**
- * Completa una tarea de Orden y Limpieza (MOT.WebLimpieza)
- * ingresando el legajo en #W0093W0054vRESPONSABLE y presionando #W0093W0054BTNCONFIRMAR.
+ * Las 5 tareas que el robot SIEMPRE debe omitir en modo automático porque requieren
+ * información física externa de tienda (Remito, Lote, Vencimiento, Albarán, Retiro o Conteo de Caducidad):
+ * 1. Ctrol Temp Recep GD (Proveedor)
+ * 2. Trazabilidad Horneado/Descongelado (Trazabilidad)
+ * 3. Caducidades (Caducidad)
+ * 4. Retiro Calidad (Retiro)
+ * 5. Ctrol Temp Recep Almacén (Almacen)
+ */
+function isOmittedStoreTask(task) {
+  if (!task) return false;
+  const tipo = String(task.tipoControl || '');
+  const nomb = String(task.nombre || '').toLowerCase();
+  if (['Proveedor', 'Trazabilidad', 'Caducidad', 'Retiro', 'Almacen'].includes(tipo)) {
+    return true;
+  }
+  if (
+    /recep.*gd/i.test(nomb) ||
+    /trazabilidad.*horneado|horneado.*descongelado/i.test(nomb) ||
+    /caducidad/i.test(nomb) ||
+    /retiro.*calidad/i.test(nomb) ||
+    /recep.*almac[eé]n/i.test(nomb)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Completa una tarea que requiere Legajo de Responsable (Orden y Limpieza MOT.WebLimpieza u otra con vRESPONSABLE)
+ * ingresando el legajo 23250 en #W0093W0054vRESPONSABLE y presionando #W0093W0054BTNCONFIRMAR.
  */
 async function executeLimpiezaControlOnMot(task, options = {}) {
   const legajo = options.responsable || DEFAULT_LEGAJO;
-  log(`Confirmando tarea de Limpieza en MOT: "${task.nombre}" (Legajo: ${legajo})...`);
+  log(`Confirmando tarea con Legajo en MOT: "${task.nombre}" (Legajo: ${legajo})...`);
 
-  const fullUrl = task.detailLink.startsWith('http')
-    ? task.detailLink
-    : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+  // Navegar desde la grilla activa para conservar el token encriptado GeneXus de la sesión actual
+  if (_page.url().includes('tareastienda')) {
+    const linkLocator = _page.locator(`#span_MAESTROTAREANOMBRE_${task.rowIndex} a`).first();
+    if (await linkLocator.isVisible().catch(() => false)) {
+      await linkLocator.click();
+      await _page.waitForTimeout(2500);
+    } else if (task.detailLink) {
+      const fullUrl = task.detailLink.startsWith('http')
+        ? task.detailLink
+        : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+      await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await _page.waitForTimeout(2500);
+    }
+  } else if (task.detailLink) {
+    const fullUrl = task.detailLink.startsWith('http')
+      ? task.detailLink
+      : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await _page.waitForTimeout(2500);
+  }
 
-  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-  await _page.waitForTimeout(2500);
-
-  const respInput = _page.locator('#W0093W0054vRESPONSABLE, input[id*="W0054vRESPONSABLE"]').first();
+  const respInput = _page.locator('#W0093W0054vRESPONSABLE, input[id*="vRESPONSABLE"]').first();
   if (await respInput.isVisible().catch(() => false)) {
     await respInput.fill('');
     await respInput.fill(String(legajo));
     await _page.waitForTimeout(300);
 
+    // Si tiene botón Validar Responsable, presionarlo también
+    const valBtn = _page.locator('input[id*="BTNVALIDARRESP"]').first();
+    if (await valBtn.isVisible().catch(() => false)) {
+      await valBtn.click();
+      await _page.waitForTimeout(1200);
+    }
+
     const confirmBtn = _page.locator('#W0093W0054BTNCONFIRMAR, input[id*="BTNCONFIRMAR"]').first();
-    await confirmBtn.click();
-    await _page.waitForTimeout(2500);
-    log(`✓ Tarea de Limpieza "${task.nombre}" confirmada con legajo ${legajo}.`);
-    return { ok: true, msg: `Limpieza confirmada con legajo ${legajo}.` };
+    if (await confirmBtn.isVisible().catch(() => false)) {
+      await confirmBtn.click();
+      await _page.waitForTimeout(2500);
+    }
+    log(`✓ Tarea "${task.nombre}" confirmada con legajo ${legajo}.`);
+    return { ok: true, msg: `Tarea confirmada con legajo ${legajo}.` };
   }
 
-  // Fallback: si por alguna razón tiene botón CUMPLIR visible en el detalle
+  // Fallback: si tiene botón CUMPLIR visible en el detalle
   const cumplirDetail = _page.locator('#CUMPLIR').first();
   if (await cumplirDetail.isVisible().catch(() => false)) {
     await cumplirDetail.click();
@@ -1187,8 +1238,14 @@ async function markDueTasks(markedToday = new Set()) {
 
       if (!shouldMark(task.horarioInicio, task.horarioCierre)) continue;
 
-      // Solo auto-marcar tareas Directas, Limpieza y Equipo
-      if (!['Directa', 'Limpieza', 'Equipo'].includes(task.tipoControl)) {
+      // Omitir SIEMPRE las 5 tareas reservadas para gestión manual en tienda:
+      // Ctrol Temp Recep GD, Trazabilidad Horneado/Descongelado, Caducidades, Retiro Calidad y Ctrol Temp Recep Almacén
+      if (isOmittedStoreTask(task)) {
+        const omitKey = `OMIT|${key}`;
+        if (!markedToday.has(omitKey)) {
+          markedToday.add(omitKey);
+          log(`⏭️ [Omitida por Regla Tienda] "${task.nombre}" requiere datos físicos externos y se marca manualmente desde la tienda.`);
+        }
         continue;
       }
 
@@ -1201,7 +1258,7 @@ async function markDueTasks(markedToday = new Set()) {
         if (task.tipoControl === 'Equipo') {
           await executeTemperatureControlOnMot(task, { responsable: DEFAULT_LEGAJO });
           success = true;
-        } else if (task.tipoControl === 'Limpieza' && !task.tieneBotonCheck) {
+        } else if (task.tipoControl === 'Limpieza' || !task.tieneBotonCheck) {
           await executeLimpiezaControlOnMot(task, { responsable: DEFAULT_LEGAJO });
           success = true;
         } else {

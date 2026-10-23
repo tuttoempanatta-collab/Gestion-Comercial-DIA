@@ -1037,13 +1037,23 @@ export default function MotBotPage() {
                         </span>
 
                         {!st.done && task.horarioInicio && (
-                          <span
-                            title="El Robot marca esta tarea automáticamente 10 minutos después de su horario de inicio"
-                            className="flex items-center gap-1 font-mono text-[11px] text-amber-300 bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-500/30"
-                          >
-                            <Bot size={12} className="text-amber-400" />
-                            Auto-Marca: {getAutoMarkTimeStr(task.horarioInicio, task.horarioCierre)} hs (+10m inicio)
-                          </span>
+                          ['Proveedor', 'Trazabilidad', 'Caducidad', 'Retiro', 'Almacen'].includes(task.tipoControl) ? (
+                            <span
+                              title="Esta tarea requiere información externa en tienda (Remito, Lote, Vencimiento, Albarán o Retiro) y el Robot la omite siempre"
+                              className="flex items-center gap-1 font-mono text-[11px] text-rose-300 bg-rose-950/40 px-2.5 py-1 rounded-lg border border-rose-500/30"
+                            >
+                              <Store size={12} className="text-rose-400" />
+                              Manual en Tienda (Omitida por Robot)
+                            </span>
+                          ) : (
+                            <span
+                              title="El Robot marca esta tarea automáticamente 10 minutos después de su horario de inicio"
+                              className="flex items-center gap-1 font-mono text-[11px] text-amber-300 bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-500/30"
+                            >
+                              <Bot size={12} className="text-amber-400" />
+                              Auto-Marca: {getAutoMarkTimeStr(task.horarioInicio, task.horarioCierre)} hs (+10m inicio)
+                            </span>
+                          )
                         )}
 
                         <span className={`px-2.5 py-1 rounded-lg font-semibold border ${st.badgeBg}`}>

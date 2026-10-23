@@ -214,6 +214,15 @@ async function start(options = {}) {
   _lastError = null;
 
   console.log(`[MOT-Scheduler] Iniciando (${autoWoken ? 'Auto-Despertar 05:30' : 'Manual'})...`);
+  try {
+    log(`🔄 [Sincronización al Despertar] Sincronizando grilla de tareas del día con MOT Oficial...`);
+    const syncData = await getMotDashboard(true);
+    const totalCount = syncData?.tasks?.length || 0;
+    log(`✅ [Sincronización Completada] ${totalCount} tareas del día verificadas en MOT. Robot en espera activa para marcar cada tarea +10 min después de su inicio (omitiendo las 5 tareas manuales de tienda).`);
+  } catch (syncErr) {
+    log(`⚠️ Aviso en sincronización inicial al despertar: ${syncErr.message}`, 'warn');
+  }
+
   await runCycle();
   _interval = setInterval(runCycle, 60 * 1000);
 }
