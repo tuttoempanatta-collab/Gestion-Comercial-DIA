@@ -424,7 +424,15 @@ export default function MotBotPage() {
   const [equipamiento, setEquipamiento] = useState<EquipamientoCategoria[]>(DEFAULT_EQUIPAMIENTO_624)
   const [lastSyncAt, setLastSyncAt]   = useState<string | null>(null)
 
-  const [activeTab, setActiveTab]     = useState<'tareas' | 'temperatura' | 'estadisticas' | 'bot'>('tareas')
+  const [activeTab, setActiveTab]     = useState<'tareas' | 'temperatura' | 'estadisticas' | 'auditoria' | 'bot'>('tareas')
+  const [auditData, setAuditData]     = useState<{ audit: Record<string, any[]>; incidents: any[] }>({ audit: {}, incidents: [] })
+  const fetchAudit = useCallback(async () => {
+    try {
+      const r = await fetch(API_URL('/api/mot-bot/audit'))
+      const j = await r.json()
+      if (j.ok) setAuditData({ audit: j.audit || {}, incidents: j.incidents || [] })
+    } catch (_) {}
+  }, [])
   const [loading, setLoading]         = useState(false)
   const [syncingTasks, setSyncingTasks] = useState(false)
   const [action, setAction]           = useState<string | null>(null)
@@ -1002,6 +1010,18 @@ export default function MotBotPage() {
         </button>
 
         <button
+          onClick={() => { setActiveTab('auditoria'); fetchAudit() }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+            activeTab === 'auditoria'
+              ? 'bg-red-600 text-white shadow-lg shadow-red-900/30'
+              : 'bg-slate-900/80 text-slate-400 hover:text-white hover:bg-slate-800'
+          }`}
+        >
+          <ShieldAlert size={17} />
+          Auditoría
+        </button>
+
+        <button
           onClick={() => setActiveTab('bot')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
             activeTab === 'bot'
@@ -1488,6 +1508,45 @@ export default function MotBotPage() {
               })}
             </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'auditoria' && (
+        <div className="glass-card p-6 rounded-2xl border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2"><ShieldAlert size={18} /> Auditoría del Motor IA de Verificación</h3>
+            <button onClick={fetchAudit} className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700">Actualizar</button>
+          </div>
+          <p className="text-xs text-slate-400">Cada marcación se relee en MOT: estado, hora no futura y reintentos. Lo que no se pudo confirmar queda para marcar manualmente.</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-slate-400 border-b border-slate-800">
+                <th className="py-2 pr-3">Tarea</th><th className="pr-3">Resultado</th><th className="pr-3">Hora MOT</th><th className="pr-3">Intentos</th><th>Detalle</th>
+              </tr></thead>
+              <tbody>
+                {Object.entries(auditData.audit || {}).length === 0 && <tr><td colSpan={5} className="py-4 text-slate-500">Sin registros todavía.</td></tr>}
+                {(Object.entries(auditData.audit || {}) as [string, any[]][]).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 1).flatMap(([, list]) => list).map((e: any, i: number) => (
+                  <tr key={i} className="border-b border-slate-900">
+                    <td className="py-2 pr-3 text-slate-200">{e.tarea}</td>
+                    <td className={`pr-3 font-semibold ${e.estado === 'verificada' ? 'text-emerald-400' : e.estado === 'ALERTA_CRITICA' ? 'text-red-400' : 'text-amber-400'}`}>{e.estado}</td>
+                    <td className="pr-3 text-slate-300">{e.horaMOT || '—'}</td>
+                    <td className="pr-3 text-slate-300">{e.intentos ?? '—'}</td>
+                    <td className="text-slate-400">{e.motivo || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {auditData.incidents.length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold text-slate-200 mb-2">Incidentes aprendidos (últimos {Math.min(10, auditData.incidents.length)})</h4>
+              <ul className="space-y-1 text-xs text-slate-400">
+                {auditData.incidents.slice(0, 10).map((i: any, k: number) => (
+                  <li key={k}>{new Date(i.ts).toLocaleString('es-AR')} · <span className="text-slate-300">{i.tarea}</span> · {i.tipo}: {i.causa} → {i.accion}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 

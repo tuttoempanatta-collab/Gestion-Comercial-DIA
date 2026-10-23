@@ -137,6 +137,13 @@ async function enterNightSleep(reason = 'Reposo nocturno automático') {
   _forcedNightRun = false;
   _nextRunAt      = null;
   _status         = 'sleeping';
+  try {
+    const mb = require('./mot_bot');
+    const day = mb.getAudit(mb.getTodayKey());
+    const ok = day.filter(e => e.estado === 'verificada').length;
+    const rev = day.filter(e => e.estado !== 'verificada').length;
+    log(`📋 [Reporte de Auditoría Diario] ${ok} tareas verificadas en MOT, ${rev} requieren revisión.`);
+  } catch (_) {}
   await closeBrowser();
   log(`🌙 [Auto-Sleep] ${reason} Robot en reposo nocturno. Se despertará solo a las ${DAILY_WAKE_TIME} hs.`);
 }
@@ -223,6 +230,13 @@ async function start(options = {}) {
     log(`✅ [Sincronización Completada] ${totalCount} tareas del día verificadas en MOT. Robot en espera activa para marcar cada tarea +10 min después de su inicio (omitiendo las 5 tareas manuales de tienda).`);
   } catch (syncErr) {
     log(`⚠️ Aviso en sincronización inicial al despertar: ${syncErr.message}`, 'warn');
+  }
+
+  try {
+    await require('./mot_bot').preflightCheck();
+    log('🕒 [Pre-vuelo] Reloj del navegador verificado en hora Argentina (UTC-3). Robot autorizado a marcar.');
+  } catch (pfErr) {
+    log(`⛔ [Pre-vuelo] ${pfErr.message}`, 'error');
   }
 
   await runCycle();

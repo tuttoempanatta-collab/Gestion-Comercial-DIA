@@ -12,6 +12,7 @@
 process.env.TZ = 'America/Argentina/Buenos_Aires';
 
 const { chromium } = require('playwright');
+const knowledge = require('./mot_knowledge');
 const path = require('path');
 const fs = require('fs');
 
@@ -1085,6 +1086,21 @@ async function executeTemperatureControlOnMot(task, options = {}) {
       if (customEntry.producto !== undefined && customEntry.producto !== '') tempProd = String(customEntry.producto);
     }
 
+    // Recaudo del Motor IA: ninguna temperatura puede salir del rango del perfil del equipo
+    for (const field of ['equipo', 'producto']) {
+      const val = parseFloat(field === 'equipo' ? tempEqui : tempProd);
+      if (Number.isNaN(val) || val < aiDecision.minC || val > aiDecision.maxC) {
+        const safe = field === 'equipo' ? aiDecision.tempEquipo : aiDecision.tempProducto;
+        knowledge.recordIncident({
+          tarea: task.nombre,
+          tipo: 'TEMP_FUERA_DE_RANGO',
+          causa: `${rowData.nombre}: ${field}=${val} fuera de ${aiDecision.minC}..${aiDecision.maxC}`,
+          accion: `Se usa valor seguro del perfil ${aiDecision.profileId}: ${safe}`,
+        });
+        if (field === 'equipo') tempEqui = safe; else tempProd = safe;
+      }
+    }
+
     log(`[Motor IA -> ${rowData.nombre} (${catName})] Perfil: ${aiDecision.profileId} (${aiDecision.minC}°C a ${aiDecision.maxC}°C) | Ayer: ${aiDecision.prevEquipo}°C/${aiDecision.prevProducto}°C => Hoy: ${tempEqui}°C/${tempProd}°C`);
 
     await _page.fill('#W0093W0024W0034vTEMPERATURAEQUIPO_0001', String(tempEqui), { timeout: 3000 }).catch(() => {});
@@ -1115,6 +1131,7 @@ async function executeTemperatureControlOnMot(task, options = {}) {
   log(`✓ [Motor IA Temperatura] Control completado para "${task.nombre}" (${totalAprobados} equipos aprobados con legajo ${legajo}).`);
   return {
     ok: true,
+    aprobados: totalAprobados,
     msg: `Control de temperatura aprobado por Motor IA (${totalAprobados} equipos) con legajo ${legajo}.`,
   };
 }
@@ -1375,7 +1392,131 @@ async function markTaskOnMot(params = {}) {
 
 // ─── Ciclo automático del Bot (10 min DESPUÉS del inicio de cada tarea) ──────
 
+// ─── Motor IA de Verificación: pre-vuelo, verificación posterior y reintentos ──
+
+/**
+ * Pre-vuelo: garantiza que el reloj del navegador sea el de Argentina (UTC-3) y no esté adelantado.
+ * Si falla, reinicia navegador + sesión y vuelve a comprobar. Si persiste, NO se marca nada.
+ */
+async function preflightCheck() {
+  const check = async () => {
+    if (!_page || _page.isClosed()) return null;
+    return await _page.evaluate(() => {
+      const d = new Date();
+      return { offset: d.getTimezoneOffset(), h: d.getHours(), m: d.getMinutes() };
+    }).catch(() => null);
+  };
+
+  const evaluate = (c) => {
+    if (!c) return { ok: false, why: 'sin página activa' };
+    const arg = getNowArgentina();
+    const argMin = arg.getHours() * 60 + arg.getMinutes();
+    const brMin  = c.h * 60 + c.m;
+    if (c.offset !== knowledge.RULES.TZ_OFFSET_MIN) return { ok: false, why: `offset navegador ${c.offset} != ${knowledge.RULES.TZ_OFFSET_MIN}` };
+    if (brMin > argMin + 1) return { ok: false, why: `hora navegador ${c.h}:${String(c.m).padStart(2, '0')} adelantada respecto a Argentina` };
+    return { ok: true };
+  };
+
+  let res = evaluate(await check());
+  if (res.ok) return true;
+
+  log(`⚠️ [Pre-vuelo] Reloj inválido (${res.why}). Reiniciando navegador...`, 'warn');
+  knowledge.recordIncident({ tarea: '*', tipo: 'RELOJ_INVALIDO', causa: res.why, accion: 'Reinicio de navegador y sesión' });
+  await closeBrowser();
+  await doLogin(true);
+  res = evaluate(await check());
+  if (!res.ok) {
+    throw new Error(`Pre-vuelo fallido: ${res.why}. Se bloquea la marcación para evitar horas futuras.`);
+  }
+  return true;
+}
+
+/**
+ * Verificación posterior: relee MOT y comprueba estado cumplido y hora de cumplimiento no futura.
+ * Devuelve { ok, estadoCode, horaCumplimiento, motivo }.
+ */
+async function verifyMark(task) {
+  _localMarkedMap.delete(task.rowIndex); // evitar falsos positivos con marcas locales
+  const fresh = await readTasks();
+  const t = fresh.find(x => x.rowIndex === task.rowIndex || x.nombre === task.nombre);
+  if (!t) return { ok: false, motivo: 'tarea no encontrada tras marcar' };
+
+  const done = knowledge.RULES.DONE_CODES.includes(t.estadoCode) || !!t.horaCumplimiento;
+  if (!done) return { ok: false, estadoCode: t.estadoCode, motivo: 'MOT no refleja la tarea como cumplida' };
+
+  if (t.horaCumplimiento) {
+    const hMin = parseTimeToMinutes(t.horaCumplimiento);
+    const nowMin = nowMinutes();
+    if (hMin !== null && hMin > nowMin + 1) {
+      knowledge.recordIncident({
+        tarea: task.nombre,
+        tipo: 'HORA_FUTURA',
+        causa: `MOT registró ${t.horaCumplimiento} y la hora real es ${minutesToHHMM(nowMin)}`,
+        accion: 'Alerta crítica: revisar manualmente en MOT',
+      });
+      return { ok: false, estadoCode: t.estadoCode, horaCumplimiento: t.horaCumplimiento, motivo: `HORA FUTURA registrada (${t.horaCumplimiento})`, critical: true };
+    }
+    if (hMin !== null && Math.abs(nowMin - hMin) > knowledge.RULES.HOUR_TOLERANCE_MIN + 2) {
+      log(`ℹ️ [Verificación] "${task.nombre}": hora MOT ${t.horaCumplimiento} difiere de la hora real ${minutesToHHMM(nowMin)}.`, 'warn');
+    }
+  }
+  return { ok: true, estadoCode: t.estadoCode, horaCumplimiento: t.horaCumplimiento };
+}
+
+/**
+ * Ciclo completo por tarea: pre-vuelo -> (re-chequeo) -> ejecutar -> verificar -> reintentar.
+ * `executor` ejecuta la marcación y devuelve { skipped?, reason? }.
+ */
+async function markWithRetry(task, executor) {
+  const maxAttempts = 1 + knowledge.RULES.MAX_RETRIES;
+  let lastReason = '';
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await preflightCheck();
+
+      if (attempt > 1) {
+        // Re-chequeo: quizá el intento anterior sí impactó en MOT
+        const again = await readTasks();
+        const cur = again.find(x => x.rowIndex === task.rowIndex || x.nombre === task.nombre);
+        if (cur && (knowledge.RULES.DONE_CODES.includes(cur.estadoCode) || cur.horaCumplimiento)) {
+          const v = await verifyMark(task);
+          if (v.ok) return { ok: true, attempts: attempt, verification: v };
+        }
+      }
+
+      const exec = await executor(task);
+      if (exec && exec.skipped) return { ok: false, skipped: true, reason: exec.reason, attempts: attempt };
+
+      const v = await verifyMark(task);
+      if (v.ok) return { ok: true, attempts: attempt, verification: v, exec };
+      if (v.critical) return { ok: false, critical: true, reason: v.motivo, attempts: attempt, verification: v };
+      lastReason = v.motivo;
+    } catch (e) {
+      lastReason = e.message;
+      if (/sesi[oó]n|login|timeout|closed|Target page/i.test(e.message)) {
+        try { await doLogin(true); } catch (_) {}
+      }
+    }
+    knowledge.recordIncident({
+      tarea: task.nombre,
+      tipo: 'FALLO_MARCACION',
+      causa: lastReason,
+      accion: attempt < maxAttempts ? `Reintento ${attempt}/${knowledge.RULES.MAX_RETRIES}` : 'Requiere revisión manual',
+    });
+    log(`⚠️ [Verificación] "${task.nombre}" intento ${attempt}/${maxAttempts} sin confirmar: ${lastReason}`, 'warn');
+  }
+  return { ok: false, reason: lastReason, attempts: maxAttempts };
+}
+
+const _failedAttempts = new Map(); // key -> ciclos fallidos del día (tope para no insistir sin fin)
+let _failedDate = '';
+const MAX_FAILED_CYCLES = 2;
+
 async function markDueTasks(markedToday = new Set()) {
+  if (_failedDate !== getTodayStrArg()) {
+    _failedAttempts.clear();
+    _failedDate = getTodayStrArg();
+  }
   return await withLock(async () => {
     const results = [];
 
@@ -1423,40 +1564,42 @@ async function markDueTasks(markedToday = new Set()) {
 
       const targetMarkHHMM = minutesToHHMM(getTargetMarkMinutes(task.horarioInicio, task.horarioCierre));
       log(`[Auto-Bot +10m] Marcando "${task.nombre}" (inicio: ${task.horarioInicio} -> marca programada: ${targetMarkHHMM}, cierre: ${task.horarioCierre}, tipo: ${task.tipoControl})`);
-      try {
-        let success = false;
-        let reason  = '';
+      if ((_failedAttempts.get(key) || 0) >= MAX_FAILED_CYCLES) continue; // ya se escaló a revisión manual
 
-        if (task.tipoControl === 'Equipo') {
-          await executeTemperatureControlOnMot(task, { responsable: DEFAULT_LEGAJO });
-          success = true;
-        } else if (task.tipoControl === 'Limpieza' || !task.tieneBotonCheck) {
-          await executeLimpiezaControlOnMot(task, { responsable: DEFAULT_LEGAJO });
-          success = true;
-        } else {
+      const auditDate = getTodayStrArg();
+      try {
+        const outcome = await markWithRetry(task, async (t) => {
+          if (t.tipoControl === 'Equipo') {
+            const res = await executeTemperatureControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+            const expectedTotal = Object.values(knowledge.RULES.EXPECTED_EQUIPMENT).reduce((a, b) => a + b, 0);
+            if (res.aprobados !== undefined && res.aprobados < expectedTotal) {
+              log(`ℹ️ [Verificación Temperatura] Se aprobaron ${res.aprobados} de ${expectedTotal} equipos esperados (puede haber equipos ya aprobados).`, 'warn');
+            }
+            return res;
+          }
+          if (t.tipoControl === 'Limpieza' || !t.tieneBotonCheck) {
+            return await executeLimpiezaControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+          }
           // Volver a asegurarnos de estar en la grilla de tareas si salimos a un detalle
           if (!_page.url().includes('tareastienda')) {
             await navigateToTareasPage();
           }
-          const btn = _page.locator(`#CUMPLIR_${task.rowIndex}`).first();
+          const btn = _page.locator(`#CUMPLIR_${t.rowIndex}`).first();
           if (await btn.isVisible().catch(() => false)) {
             await btn.click();
             await _page.waitForTimeout(1800);
             await handleMotivePopupIfPresent('Cumplimiento en tienda');
-            success = true;
-          } else {
-            reason = 'Botón Cumplir no visible en grilla';
+            return { ok: true };
           }
-        }
+          return { skipped: true, reason: 'Botón Cumplir no visible en grilla' };
+        });
 
-        if (success) {
-          const nowArg = getNowArgentina();
-          const hh = String(nowArg.getHours()).padStart(2, '0');
-          const mm = String(nowArg.getMinutes()).padStart(2, '0');
+        if (outcome.ok) {
+          const v = outcome.verification || {};
           _localMarkedMap.set(task.rowIndex, {
-            estadoCode: 'C',
-            estadoTexto: 'a tiempo',
-            horaCumplimiento: `${hh}:${mm}`,
+            estadoCode: v.estadoCode || 'C',
+            estadoTexto: v.estadoCode === 'FT' ? 'fuera de hora' : 'a tiempo',
+            horaCumplimiento: v.horaCumplimiento || '',
             fecha: _cachedDate || new Date().toLocaleDateString('es-AR'),
           });
           markedToday.add(key);
@@ -1468,13 +1611,26 @@ async function markDueTasks(markedToday = new Set()) {
             estado: 'marcado',
             ts: new Date().toISOString(),
           });
-          log(`✓ [Auto-Bot +10m] Marcada exitosamente: "${task.nombre}"`);
+          knowledge.recordAudit(auditDate, {
+            tarea: task.nombre, tipo: task.tipoControl, estado: 'verificada',
+            horaMOT: v.horaCumplimiento || '', estadoMOT: v.estadoCode || '', intentos: outcome.attempts,
+          });
+          log(`✓ [Auto-Bot +10m] Marcada y VERIFICADA en MOT: "${task.nombre}" (${v.horaCumplimiento || 's/h'} hs, intentos: ${outcome.attempts})`);
         } else {
+          const reason = outcome.reason || 'sin detalle';
+          _failedAttempts.set(key, (_failedAttempts.get(key) || 0) + (outcome.critical ? MAX_FAILED_CYCLES : 1));
           results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: reason, ts: new Date().toISOString() });
-          log(`✗ [Auto-Bot +10m] No se pudo marcar "${task.nombre}": ${reason}`, 'warn');
+          knowledge.recordAudit(auditDate, {
+            tarea: task.nombre, tipo: task.tipoControl,
+            estado: outcome.critical ? 'ALERTA_CRITICA' : 'requiere_revision',
+            motivo: reason, intentos: outcome.attempts,
+          });
+          log(`✗ [Auto-Bot +10m] No se pudo confirmar "${task.nombre}": ${reason}`, 'warn');
         }
       } catch (e) {
+        _failedAttempts.set(key, (_failedAttempts.get(key) || 0) + 1);
         results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: e.message, ts: new Date().toISOString() });
+        knowledge.recordAudit(auditDate, { tarea: task.nombre, tipo: task.tipoControl, estado: 'requiere_revision', motivo: e.message });
         log(`Error marcando "${task.nombre}": ${e.message}`, 'error');
       }
     }
@@ -1519,6 +1675,11 @@ module.exports = {
   getTaskDetail,
   markTaskOnMot,
   markDueTasks,
+  preflightCheck,
+  verifyMark,
+  getAudit: knowledge.getAudit,
+  getTodayKey: getTodayStrArg,
+  getIncidents: knowledge.getIncidents,
   closeBrowser,
   captureDebugScreenshot,
   log,

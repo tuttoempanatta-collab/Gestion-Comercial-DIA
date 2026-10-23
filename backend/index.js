@@ -537,6 +537,16 @@ app.get('/api/mot-bot/status', (req, res) => {
   res.json(motScheduler.getStatus());
 });
 
+// GET bitácora de auditoría del Motor IA de Verificación (por día) e incidentes aprendidos
+app.get('/api/mot-bot/audit', (req, res) => {
+  try {
+    const motBot = require('./mot_bot');
+    res.json({ ok: true, audit: motBot.getAudit(req.query.date || undefined), incidents: motBot.getIncidents(50) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // GET lista completa de tareas, porcentajes y equipamiento desde MOT original
 app.get('/api/mot-bot/tasks', async (req, res) => {
   try {
