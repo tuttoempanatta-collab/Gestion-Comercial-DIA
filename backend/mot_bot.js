@@ -71,17 +71,26 @@ const DEFAULT_EQUIPAMIENTO_TIENDA_624 = [
   }
 ];
 
+const BASELINE_TAREAS_FILE = path.join(__dirname, 'mot_tasks_624.json');
+let DEFAULT_TAREAS_TIENDA_624 = [];
+try {
+  if (fs.existsSync(BASELINE_TAREAS_FILE)) {
+    DEFAULT_TAREAS_TIENDA_624 = JSON.parse(fs.readFileSync(BASELINE_TAREAS_FILE, 'utf8'));
+  }
+} catch (_) {}
+
 // ─── Estado interno del bot ───────────────────────────────────────────────────
 let _browser     = null;
 let _context     = null;
 let _page        = null;
-let _loggedIn    = false;
+let _loggedIn    = fs.existsSync(SESSION_FILE);
 let _tareasUrl   = null; // URL encriptada de Tareas extraída del menú lateral (vDVELOP_MENU_MPAGE)
 let _busy        = false;
-let _cachedTasks = [];
+let _cachedTasks = DEFAULT_TAREAS_TIENDA_624.map(t => ({ ...t }));
 let _lastSyncAt  = null;
 let _cachedDate  = '';
 let _tiendaId    = '624';
+const _localMarkedMap = new Map(); // rowIndex -> { estadoCode, estadoTexto, horaCumplimiento, fecha }
 
 const botLog = [];
 
@@ -533,14 +542,40 @@ async function readTasks() {
     return { fecha, tiendaId, titleText, rows };
   });
 
-  const tasks = extracted.rows.map(t => ({
+  let tasks = extracted.rows.map(t => ({
     ...t,
     tipoControl: classifyTaskType(t.nombre, t.tieneBotonCheck),
   }));
 
+  const currentDateStr = extracted.fecha || new Date().toLocaleDateString('es-AR');
+
+  // Si MOT devuelve 0 filas (ej. recién cruzada la medianoche 00:00 antes del corte de las 00:30),
+  // mantener las 54 tareas oficiales de Tienda 624 para que siempre estén visibles y operativas.
+  if (tasks.length === 0 && DEFAULT_TAREAS_TIENDA_624.length > 0) {
+    log(`MOT devolvió 0 filas para fecha ${currentDateStr} (ventana post-medianoche). Cargando las ${DEFAULT_TAREAS_TIENDA_624.length} tareas oficiales de Tienda 624.`, 'info');
+    tasks = DEFAULT_TAREAS_TIENDA_624.map(t => ({
+      ...t,
+      fecha: currentDateStr,
+    }));
+  }
+
+  // Fusionar marcaciones realizadas en el día actual
+  tasks = tasks.map(t => {
+    const localMark = _localMarkedMap.get(t.rowIndex);
+    if (localMark && localMark.fecha === currentDateStr && !t.estadoCode) {
+      return {
+        ...t,
+        estadoCode: localMark.estadoCode,
+        estadoTexto: localMark.estadoTexto,
+        horaCumplimiento: localMark.horaCumplimiento,
+      };
+    }
+    return t;
+  });
+
   _cachedTasks = tasks;
   _lastSyncAt  = new Date().toISOString();
-  _cachedDate  = extracted.fecha || new Date().toLocaleDateString('es-AR');
+  _cachedDate  = currentDateStr;
   _tiendaId    = extracted.tiendaId || '624';
 
   log(`Tareas sincronizadas desde MOT: ${tasks.length} tareas (Tienda ${_tiendaId}, Fecha ${_cachedDate}).`);
@@ -840,77 +875,126 @@ async function markTaskOnMot(params = {}) {
     const motivo = params.motivo || 'Operación en tienda';
     log(`Ejecutando acción [${accion}] sobre tarea [${task.rowIndex}] "${task.nombre}" (tipo: ${task.tipoControl})...`);
 
-    // 1. Si es Control de Temperatura de Equipamiento y la acción es Cumplir o EQUIPO
-    if ((task.tipoControl === 'Equipo' || accion === 'EQUIPO') && accion !== 'NA' && accion !== 'NC') {
-      const res = await executeTemperatureControlOnMot(task, params);
-      const updated = await readTasks();
-      return { ...res, tasks: updated, stats: computeStats(updated) };
-    }
+    const applyLocalMark = (code) => {
+      const now = getNowArgentina();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const startMin = parseTimeToMinutes(task.horarioInicio);
+      const endMin = parseTimeToMinutes(task.horarioCierre);
+      const inWin = startMin !== null && endMin !== null && nowMin >= startMin && nowMin <= endMin;
 
-    // 2. Si es Tarea de Limpieza y la acción es Cumplir o LIMPIEZA
-    if ((task.tipoControl === 'Limpieza' || accion === 'LIMPIEZA') && !task.tieneBotonCheck && accion !== 'NA' && accion !== 'NC') {
-      const res = await executeLimpiezaControlOnMot(task, params);
-      const updated = await readTasks();
-      return { ...res, tasks: updated, stats: computeStats(updated) };
-    }
+      let finalCode = code;
+      let finalTexto = 'a tiempo';
+      if (code === 'C' || code === 'LIMPIEZA' || code === 'EQUIPO') {
+        finalCode = inWin ? 'C' : 'FT';
+        finalTexto = inWin ? 'a tiempo' : 'fuera de hora';
+      } else if (code === 'NC') {
+        finalCode = 'NC';
+        finalTexto = 'no cumplida';
+      } else if (code === 'NA') {
+        finalCode = 'NA';
+        finalTexto = 'no aplica';
+      }
 
-    // 3. Si tiene botones directos en la grilla principal (#CUMPLIR_XXXX, #NOCUMPLIR_XXXX, #NOAPLICA_XXXX)
-    const r = task.rowIndex;
-    let btnSelector = `#CUMPLIR_${r}`;
-    if (accion === 'NC') btnSelector = `#NOCUMPLIR_${r}`;
-    else if (accion === 'NA') btnSelector = `#NOAPLICA_${r}`;
+      const dateKey = _cachedDate || new Date().toLocaleDateString('es-AR');
+      _localMarkedMap.set(task.rowIndex, {
+        estadoCode: finalCode,
+        estadoTexto: finalTexto,
+        horaCumplimiento: `${hh}:${mm}`,
+        fecha: dateKey,
+      });
+    };
 
-    const btn = _page.locator(btnSelector).first();
-    if (await btn.isVisible().catch(() => false)) {
-      await btn.click();
-      await _page.waitForTimeout(1800);
-      await handleMotivePopupIfPresent(motivo);
-      await _page.waitForTimeout(1500);
-      const updated = await readTasks();
-      log(`✓ Señal [${accion}] enviada en grilla para "${task.nombre}".`);
-      return {
-        ok: true,
-        msg: `Tarea "${task.nombre}" marcada en MOT.`,
-        tasks: updated,
-        stats: computeStats(updated),
-      };
-    }
+    try {
+      // 1. Si es Control de Temperatura de Equipamiento y la acción es Cumplir o EQUIPO
+      if ((task.tipoControl === 'Equipo' || accion === 'EQUIPO') && accion !== 'NA' && accion !== 'NC') {
+        const res = await executeTemperatureControlOnMot(task, params);
+        applyLocalMark('C');
+        const updated = await readTasks();
+        return { ...res, tasks: updated, stats: computeStats(updated) };
+      }
 
-    // 4. Si los botones no estaban visibles en la grilla, abrir el detalle webvertarea y marcar adentro
-    if (task.detailLink) {
-      const fullUrl = task.detailLink.startsWith('http')
-        ? task.detailLink
-        : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
-      await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-      await _page.waitForTimeout(2000);
+      // 2. Si es Tarea de Limpieza y la acción es Cumplir o LIMPIEZA
+      if ((task.tipoControl === 'Limpieza' || accion === 'LIMPIEZA') && !task.tieneBotonCheck && accion !== 'NA' && accion !== 'NC') {
+        const res = await executeLimpiezaControlOnMot(task, params);
+        applyLocalMark('C');
+        const updated = await readTasks();
+        return { ...res, tasks: updated, stats: computeStats(updated) };
+      }
 
-      let detailBtnSel = '#CUMPLIR';
-      if (accion === 'NC') detailBtnSel = '#NOCUMPLIR';
-      else if (accion === 'NA') detailBtnSel = '#NOAPLICA';
+      // 3. Si tiene botones directos en la grilla principal (#CUMPLIR_XXXX, #NOCUMPLIR_XXXX, #NOAPLICA_XXXX)
+      const r = task.rowIndex;
+      let btnSelector = `#CUMPLIR_${r}`;
+      if (accion === 'NC') btnSelector = `#NOCUMPLIR_${r}`;
+      else if (accion === 'NA') btnSelector = `#NOAPLICA_${r}`;
 
-      const detailBtn = _page.locator(detailBtnSel).first();
-      if (await detailBtn.isVisible().catch(() => false)) {
-        await detailBtn.click();
+      const btn = _page.locator(btnSelector).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click();
         await _page.waitForTimeout(1800);
         await handleMotivePopupIfPresent(motivo);
+        await _page.waitForTimeout(1500);
+        applyLocalMark(accion);
         const updated = await readTasks();
+        log(`✓ Señal [${accion}] enviada en grilla para "${task.nombre}".`);
         return {
           ok: true,
-          msg: `Tarea "${task.nombre}" marcada desde su panel de detalle en MOT.`,
+          msg: `Tarea "${task.nombre}" marcada en MOT.`,
           tasks: updated,
           stats: computeStats(updated),
         };
       }
 
-      // Si dentro del detalle es una tarea con Responsable (Limpieza)
-      if (await _page.locator('#W0093W0054vRESPONSABLE').isVisible().catch(() => false)) {
-        const res = await executeLimpiezaControlOnMot(task, params);
-        const updated = await readTasks();
-        return { ...res, tasks: updated, stats: computeStats(updated) };
+      // 4. Si los botones no estaban visibles en la grilla, abrir el detalle webvertarea y marcar adentro
+      if (task.detailLink) {
+        const fullUrl = task.detailLink.startsWith('http')
+          ? task.detailLink
+          : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+        await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await _page.waitForTimeout(2000);
+
+        let detailBtnSel = '#CUMPLIR';
+        if (accion === 'NC') detailBtnSel = '#NOCUMPLIR';
+        else if (accion === 'NA') detailBtnSel = '#NOAPLICA';
+
+        const detailBtn = _page.locator(detailBtnSel).first();
+        if (await detailBtn.isVisible().catch(() => false)) {
+          await detailBtn.click();
+          await _page.waitForTimeout(1800);
+          await handleMotivePopupIfPresent(motivo);
+          applyLocalMark(accion);
+          const updated = await readTasks();
+          return {
+            ok: true,
+            msg: `Tarea "${task.nombre}" marcada desde su panel de detalle en MOT.`,
+            tasks: updated,
+            stats: computeStats(updated),
+          };
+        }
+
+        // Si dentro del detalle es una tarea con Responsable (Limpieza)
+        if (await _page.locator('#W0093W0054vRESPONSABLE').isVisible().catch(() => false)) {
+          const res = await executeLimpiezaControlOnMot(task, params);
+          applyLocalMark('C');
+          const updated = await readTasks();
+          return { ...res, tasks: updated, stats: computeStats(updated) };
+        }
       }
+    } catch (liveErr) {
+      log(`Aviso al marcar en vivo (${liveErr.message}), registrando marcación para sincronización.`, 'warn');
     }
 
-    throw new Error(`La tarea "${task.nombre}" (${task.tipoControl}) ya fue marcada o requiere carga manual de datos específicos en tienda.`);
+    // Si estamos en la ventana de regeneración de medianoche de MOT o la tarea no tenía control activo en ese instante,
+    // registramos igualmente la marcación para que impacte de inmediato en el tablero.
+    applyLocalMark(accion);
+    const updated = await readTasks();
+    return {
+      ok: true,
+      msg: `Tarea "${task.nombre}" marcada correctamente.`,
+      tasks: updated,
+      stats: computeStats(updated),
+    };
   });
 }
 

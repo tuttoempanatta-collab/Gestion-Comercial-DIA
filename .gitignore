@@ -12,7 +12,10 @@ backend/node_modules/
 backend/.env
 backend/*.sqlite
 backend/screenshots/
-backend/playwright_data/
+backend/playwright_data/*
+!backend/playwright_data/mot_session/
+backend/playwright_data/mot_session/*
+!backend/playwright_data/mot_session/storage_state.json
 
 # Frontend specific
 frontend/node_modules/

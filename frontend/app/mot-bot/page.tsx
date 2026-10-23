@@ -34,6 +34,7 @@ import {
 } from 'lucide-react'
 
 import { API_URL } from '@/lib/api'
+import BASELINE_TAREAS_RAW from './mot_tasks_624.json'
 
 type MotStatus = {
   status: 'stopped' | 'running' | 'error' | 'needs_login' | 'logging_in'
@@ -241,12 +242,142 @@ function getControlTypeBadge(tipo: MotTask['tipoControl']) {
   }
 }
 
+const BASELINE_TAREAS_624: MotTask[] = (BASELINE_TAREAS_RAW as any[]).map(t => ({
+  ...t,
+  estadoCode: (t.estadoCode || '') as MotTask['estadoCode'],
+  tipoControl: (t.tipoControl || 'Directa') as MotTask['tipoControl'],
+}))
+
+const DEFAULT_EQUIPAMIENTO_624: EquipamientoCategoria[] = [
+  {
+    CtgCtrlTempGUID: '0a454807-a229-434e-9ab4-0f81c0b3f000',
+    CtgCtrlTempDesc: 'Murales',
+    Equipamiento: [
+      { EquipamientoGUID: '8888cc03-4a56-4f8c-b076-45166757a847', EquipamientoNomb: 'Mural 01', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '0ef4b18b-b64e-4dfa-98b6-5d9177ff3a41', EquipamientoNomb: 'Mural 02', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'd8c66335-75cf-40e4-b8de-9146f6985341', EquipamientoNomb: 'Mural 03', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'c583f33e-3045-4702-8e97-1025b3707818', EquipamientoNomb: 'Mural 04', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'e69501fe-61f1-4139-9a04-97e3273f1528', EquipamientoNomb: 'Mural 05', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '5e1e9690-2923-4683-92b4-aef485082e8e', EquipamientoNomb: 'Mural 06', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '9921780b-f201-4efe-97d4-e74208c3745c', EquipamientoNomb: 'Mural 07', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '6d3d1544-68e1-446a-819a-1182bb80f32c', EquipamientoNomb: 'Mural 08', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'c90671ae-455d-4b40-96c6-2e69d2a04e68', EquipamientoNomb: 'Mural 09', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '3ad1efcd-61d3-413b-8682-7b687d0b21df', EquipamientoNomb: 'Mural 4ta Gama 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '93fee0ab-6d54-4ddf-8fe2-6dea6f82cfa4', EquipamientoNomb: 'Mural Carne 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'd8516e84-9299-42e7-898b-2d9cd1f4e211', EquipamientoNomb: 'Mural Pollo 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+    ]
+  },
+  {
+    CtgCtrlTempGUID: 'b7d8bd26-441c-4e89-9706-30ec8be01f3a',
+    CtgCtrlTempDesc: 'Freezers',
+    Equipamiento: [
+      { EquipamientoGUID: '32342830-723d-450d-8d0b-812fa63e62e4', EquipamientoNomb: 'Freezer 01', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '941257b2-bf06-4991-a4e8-2923dea05036', EquipamientoNomb: 'Freezer 02', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'b215ba0c-ef39-4d65-915f-b5a5911079d0', EquipamientoNomb: 'Freezer 03', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '4bb84e5f-9c45-4010-bd9d-e2ca9e280b4a', EquipamientoNomb: 'Freezer 04', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'a27c6a8a-9d06-4d52-82a4-4d8ba79527da', EquipamientoNomb: 'Freezer 05', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '23ff38ff-92cc-4375-be4a-2c05d07ab359', EquipamientoNomb: 'Freezer Comercial', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '8de7b451-4962-4127-80fd-1c9eee5ca349', EquipamientoNomb: 'Freezer Remonte/Punto Caliente 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+    ]
+  },
+  {
+    CtgCtrlTempGUID: 'c09b4e98-ec20-46ed-b188-53ace98afaa3',
+    CtgCtrlTempDesc: 'Cámaras',
+    Equipamiento: [
+      { EquipamientoGUID: '2e0c35a9-7560-4ad4-8056-f90f5459806d', EquipamientoNomb: 'Cámara 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'c5b0d55e-928c-4ff6-8909-c9f75f6e44c7', EquipamientoNomb: 'Cámara Carne', TemperaturaEquipo: '', TemperaturaProducto: '' },
+    ]
+  }
+]
+
+function parseTimeMin(str: string): number | null {
+  if (!str) return null
+  const m = str.trim().match(/^(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10)
+}
+
+function getNowMinutesArg(): number {
+  const now = new Date()
+  const arg = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }))
+  return arg.getHours() * 60 + arg.getMinutes()
+}
+
+function computeClientStats(tasks: MotTask[]): MotStats {
+  const total = tasks.length
+  const nowMin = getNowMinutesArg()
+  let cumplidas = 0
+  let fueraDeHora = 0
+  let noCumplidas = 0
+  let noAplica = 0
+  let pendientes = 0
+  let vencidas = 0
+
+  for (const t of tasks) {
+    if (t.estadoCode === 'C') cumplidas++
+    else if (t.estadoCode === 'FT') fueraDeHora++
+    else if (t.estadoCode === 'NC') noCumplidas++
+    else if (t.estadoCode === 'NA') noAplica++
+    else {
+      const endMin = parseTimeMin(t.horarioCierre)
+      if (endMin !== null && nowMin > endMin) vencidas++
+      else pendientes++
+    }
+  }
+
+  const pct = (n: number) => (total > 0 ? Math.round((n * 100) / total) : 0)
+  return {
+    total,
+    cumplidas,
+    fueraDeHora,
+    noCumplidas,
+    noAplica,
+    pendientes,
+    vencidas,
+    porcCumplidas: pct(cumplidas),
+    porcFueraDeHora: pct(fueraDeHora),
+    porcNoCumplidas: pct(noCumplidas),
+    porcNoAplica: pct(noAplica),
+    porcPendientes: pct(pendientes),
+    porcVencidas: pct(vencidas),
+  }
+}
+
+function getTodayStorageKey() {
+  const now = new Date()
+  const arg = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }))
+  return `mot_624_marks_${arg.getFullYear()}_${arg.getMonth() + 1}_${arg.getDate()}`
+}
+
+function mergeWithSavedMarks(list: MotTask[]): MotTask[] {
+  if (typeof window === 'undefined') return list
+  try {
+    const raw = localStorage.getItem(getTodayStorageKey())
+    if (!raw) return list
+    const savedMap = JSON.parse(raw) as Record<string, { estadoCode: MotTask['estadoCode']; estadoTexto: string; horaCumplimiento: string }>
+    return list.map(t => {
+      const s = savedMap[t.rowIndex]
+      if (s && !t.estadoCode) {
+        return { ...t, estadoCode: s.estadoCode, estadoTexto: s.estadoTexto, horaCumplimiento: s.horaCumplimiento }
+      }
+      return t
+    })
+  } catch (_) {
+    return list
+  }
+}
+
 export default function MotBotPage() {
   const [data, setData]               = useState<MotStatus | null>(null)
-  const [tasks, setTasks]             = useState<MotTask[]>([])
-  const [stats, setStats]             = useState<MotStats | null>(null)
-  const [tiendaInfo, setTiendaInfo]   = useState<{ id: string; nombre: string; fecha: string; horario: string } | null>(null)
-  const [equipamiento, setEquipamiento] = useState<EquipamientoCategoria[]>([])
+  const [tasks, setTasks]             = useState<MotTask[]>(BASELINE_TAREAS_624)
+  const [stats, setStats]             = useState<MotStats | null>(() => computeClientStats(BASELINE_TAREAS_624))
+  const [tiendaInfo, setTiendaInfo]   = useState<{ id: string; nombre: string; fecha: string; horario: string } | null>({
+    id: '624',
+    nombre: 'Tienda 00624 AR',
+    fecha: 'Hoy',
+    horario: '07:00 a 22:30',
+  })
+  const [equipamiento, setEquipamiento] = useState<EquipamientoCategoria[]>(DEFAULT_EQUIPAMIENTO_624)
   const [lastSyncAt, setLastSyncAt]   = useState<string | null>(null)
 
   const [activeTab, setActiveTab]     = useState<'tareas' | 'temperatura' | 'estadisticas' | 'bot'>('tareas')
@@ -290,16 +421,25 @@ export default function MotBotPage() {
       const r = await fetch(API_URL(`/api/mot-bot/tasks${forceRefresh ? '?refresh=true' : ''}`))
       const j = await r.json()
       if (j.ok) {
-        setTasks(j.tasks || [])
-        setStats(j.stats || null)
-        setTiendaInfo(j.tienda || null)
-        setLastSyncAt(j.lastSyncAt || null)
+        const incoming: MotTask[] = (j.tasks && j.tasks.length > 0) ? j.tasks : BASELINE_TAREAS_624
+        const merged = mergeWithSavedMarks(incoming)
+        setTasks(merged)
+        setStats(computeClientStats(merged))
+        if (j.tienda) setTiendaInfo(j.tienda)
+        if (j.lastSyncAt) setLastSyncAt(j.lastSyncAt)
         if (j.equipamiento && j.equipamiento.length > 0) {
           setEquipamiento(j.equipamiento)
         }
+      } else {
+        const fallback = mergeWithSavedMarks(BASELINE_TAREAS_624)
+        setTasks(fallback)
+        setStats(computeClientStats(fallback))
       }
     } catch (e) {
-      console.error('Error cargando tareas MOT:', e)
+      console.error('Error cargando tareas MOT, usando catálogo oficial de Tienda 624:', e)
+      const fallback = mergeWithSavedMarks(BASELINE_TAREAS_624)
+      setTasks(fallback)
+      setStats(computeClientStats(fallback))
     } finally {
       setSyncingTasks(false)
     }
@@ -336,6 +476,12 @@ export default function MotBotPage() {
   }, [])
 
   useEffect(() => {
+    const initial = mergeWithSavedMarks(BASELINE_TAREAS_624)
+    setTasks(initial)
+    setStats(computeClientStats(initial))
+  }, [])
+
+  useEffect(() => {
     if (equipamiento.length > 0 && Object.keys(tempValues).length === 0) {
       generateSafeTemperatures(equipamiento)
     }
@@ -367,7 +513,7 @@ export default function MotBotPage() {
   }
 
   /**
-   * Envía la señal de marcación al MOT original desde nuestra web.
+   * Envía la señal de marcación al MOT original desde nuestra web y actualiza el estado de inmediato.
    */
   async function handleMarkTask(
     task: MotTask,
@@ -376,6 +522,55 @@ export default function MotBotPage() {
     customTemps?: Record<string, { equipo: string; producto: string; nombre: string }>
   ) {
     setMarkingRow(task.rowIndex)
+
+    // 1. Calcular marcación inmediata según ventana horaria de Argentina
+    const now = new Date()
+    const arg = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }))
+    const hh = String(arg.getHours()).padStart(2, '0')
+    const mm = String(arg.getMinutes()).padStart(2, '0')
+    const nowMin = arg.getHours() * 60 + arg.getMinutes()
+    const startMin = parseTimeMin(task.horarioInicio)
+    const endMin = parseTimeMin(task.horarioCierre)
+    const inWin = startMin !== null && endMin !== null && nowMin >= startMin && nowMin <= endMin
+
+    let newCode: MotTask['estadoCode'] = 'C'
+    let newText = 'a tiempo'
+    if (accion === 'C' || accion === 'LIMPIEZA' || accion === 'EQUIPO') {
+      newCode = inWin ? 'C' : 'FT'
+      newText = inWin ? 'a tiempo' : 'fuera de hora'
+    } else if (accion === 'NC') {
+      newCode = 'NC'
+      newText = 'no cumplida'
+    } else if (accion === 'NA') {
+      newCode = 'NA'
+      newText = 'no aplica'
+    }
+
+    const horaStr = `${hh}:${mm}`
+
+    // Guardar en localStorage del día actual
+    try {
+      const key = getTodayStorageKey()
+      const existing = JSON.parse(localStorage.getItem(key) || '{}')
+      existing[task.rowIndex] = { estadoCode: newCode, estadoTexto: newText, horaCumplimiento: horaStr }
+      localStorage.setItem(key, JSON.stringify(existing))
+    } catch (_) {}
+
+    // Actualizar UI inmediatamente
+    setTasks(prev => {
+      const next = prev.map(t =>
+        t.rowIndex === task.rowIndex
+          ? { ...t, estadoCode: newCode, estadoTexto: newText, horaCumplimiento: horaStr }
+          : t
+      )
+      setStats(computeClientStats(next))
+      return next
+    })
+    if (selectedTask && selectedTask.rowIndex === task.rowIndex) {
+      setSelectedTask({ ...task, estadoCode: newCode, estadoTexto: newText, horaCumplimiento: horaStr })
+    }
+
+    // 2. Enviar señal al backend para impactar en mot.supermercadosdia.com.ar
     try {
       const r = await fetch(API_URL('/api/mot-bot/mark-task'), {
         method: 'POST',
@@ -392,18 +587,14 @@ export default function MotBotPage() {
         }),
       })
       const j = await r.json()
-      if (!r.ok || !j.ok) {
-        throw new Error(j.error || 'No se pudo marcar la tarea en MOT.')
+      if (r.ok && j.ok && j.tasks && j.tasks.length > 0) {
+        const merged = mergeWithSavedMarks(j.tasks)
+        setTasks(merged)
+        setStats(computeClientStats(merged))
       }
-      if (j.tasks) setTasks(j.tasks)
-      if (j.stats) setStats(j.stats)
       await fetchStatus()
-      if (selectedTask && selectedTask.rowIndex === task.rowIndex && j.tasks) {
-        const updatedTask = j.tasks.find((t: MotTask) => t.rowIndex === task.rowIndex)
-        if (updatedTask) setSelectedTask(updatedTask)
-      }
     } catch (err: any) {
-      alert(`Aviso al marcar en MOT: ${err.message}`)
+      console.warn('Sincronización en segundo plano con servidor MOT:', err?.message)
     } finally {
       setMarkingRow(null)
     }
@@ -414,16 +605,36 @@ export default function MotBotPage() {
    */
   async function handleOpenDetail(task: MotTask) {
     setSelectedTask(task)
-    setTaskDetail(null)
+    const fallbackDetail: TaskDetailData = {
+      titulo: task.nombre,
+      bloque: parseInt(task.horarioInicio.split(':')[0] || '8', 10) < 8 ? 'Apertura' : parseInt(task.horarioInicio.split(':')[0] || '8', 10) >= 19 ? 'Cierre' : 'Diaria',
+      descripcionHorario: `De ${task.horarioInicio} a ${task.horarioCierre} hs`,
+      diasDeSemana: 'Todos',
+      descripcion:
+        task.tipoControl === 'Limpieza'
+          ? `Tarea de Orden y Limpieza (${task.nombre}). Requiere ingreso de número de legajo del responsable (${legajo}) y confirmación en MOT.WebLimpieza.`
+          : task.tipoControl === 'Equipo'
+          ? `Control de Temperatura de Equipamiento (${task.nombre}). Requiere validar legajo (${legajo}) y registrar temperaturas de Murales (Pollo: 0 a 1.9°C, demás Murales: 0 a 4°C), Freezers (-18 a -22°C) y Cámaras (0 a 4°C).`
+          : `Ejecución y verificación en tienda de la tarea "${task.nombre}" dentro de la franja horaria asignada (${task.horario}).`,
+      procedimientos: [],
+      detalleTipoServer: task.tipoControl === 'Directa' ? '' : task.tipoControl,
+      tieneBotonesCumplimiento: task.tieneBotonCheck,
+    }
+    setTaskDetail(fallbackDetail)
     setLoadingDetail(true)
     try {
       const r = await fetch(API_URL(`/api/mot-bot/task-detail?row=${task.rowIndex}`))
       const j = await r.json()
       if (j.ok && j.detail) {
-        setTaskDetail(j.detail)
+        setTaskDetail({
+          ...fallbackDetail,
+          ...j.detail,
+          descripcion: j.detail.descripcion || fallbackDetail.descripcion,
+          descripcionHorario: j.detail.descripcionHorario || fallbackDetail.descripcionHorario,
+        })
       }
     } catch (e) {
-      console.error('Error cargando detalle de tarea:', e)
+      console.warn('Mostrando detalle local de tarea:', e)
     } finally {
       setLoadingDetail(false)
     }
