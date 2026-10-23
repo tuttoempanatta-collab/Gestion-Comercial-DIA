@@ -465,14 +465,67 @@ export default function MotBotPage() {
   }, [])
 
   // Motor IA: Inicializar valores seguros de temperatura según el tipo de equipo aprendido
-  // Reglas de rango del Motor IA:
+  // con memoria histórica del día anterior para garantizar una leve variación diaria (±0.2 a ±0.7 °C)
+  // y evitar que se repitan los mismos datos dos días seguidos:
   // - Mural de Pollo: 0.0 a 1.9 °C
   // - Demás Murales: 0.0 a 4.0 °C
   // - Freezers: -18.0 a -22.0 °C
   // - Reserva / Cámara Carne: 0.0 a 2.0 °C
   // - Reserva / Cámara 1 (General): 0.0 a 4.0 °C
   const generateSafeTemperatures = useCallback((cats: EquipamientoCategoria[]) => {
+    const now = new Date()
+    const arg = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }))
+    const yest = new Date(arg)
+    yest.setDate(yest.getDate() - 1)
+    const yestKey = `${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, '0')}-${String(yest.getDate()).padStart(2, '0')}`
+    const todayKey = `${arg.getFullYear()}-${String(arg.getMonth() + 1).padStart(2, '0')}-${String(arg.getDate()).padStart(2, '0')}`
+
+    let savedHist: Record<string, Record<string, { equipo: string; producto: string }>> = {}
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('mot_624_temp_history_v1')
+        if (raw) savedHist = JSON.parse(raw)
+      } catch (_) {}
+    }
+
+    const detPrev = (seedName: string, minV: number, maxV: number) => {
+      const s = `${yestKey}::${seedName}`
+      let h = 2166136261
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i)
+        h = Math.imul(h, 16777619)
+      }
+      const norm = ((h >>> 0) % 1000) / 1000
+      return Number((minV + norm * (maxV - minV)).toFixed(1))
+    }
+
+    const pickDifferentFromYesterday = (minV: number, maxV: number, prevV: number) => {
+      const span = maxV - minV
+      const minDelta = span <= 1.5 ? 0.2 : 0.3
+      let cand = Number((Math.random() * (maxV - minV) + minV).toFixed(1))
+      for (let i = 0; i < 20; i++) {
+        const dir = (i % 2 === 0 ? 1 : -1) * (Math.random() < 0.5 ? 1 : -1)
+        const step = minDelta + Math.random() * Math.min(0.6, span * 0.45)
+        let nextVal = Number((prevV + dir * step).toFixed(1))
+        if (nextVal < minV || nextVal > maxV) {
+          nextVal = Number((Math.random() * (maxV - minV) + minV).toFixed(1))
+        }
+        if (Math.abs(nextVal - prevV) >= minDelta - 0.01 && nextVal >= minV && nextVal <= maxV) {
+          cand = nextVal
+          break
+        }
+      }
+      cand = Math.max(minV, Math.min(maxV, cand))
+      if (cand.toFixed(1) === prevV.toFixed(1)) {
+        const nudged = cand + minDelta <= maxV ? cand + minDelta : cand - minDelta
+        cand = Math.max(minV, Math.min(maxV, nudged))
+      }
+      return cand.toFixed(1)
+    }
+
     const next: Record<string, { equipo: string; producto: string; nombre: string }> = {}
+    const todayRecord: Record<string, { equipo: string; producto: string }> = {}
+
     for (const cat of cats) {
       const catDesc = cat.CtgCtrlTempDesc.toLowerCase()
       const isFreezer = catDesc.includes('freezer')
@@ -480,30 +533,42 @@ export default function MotBotPage() {
       for (const item of cat.Equipamiento) {
         const nomb = item.EquipamientoNomb.toLowerCase()
         const isPollo = nomb.includes('pollo')
-        let eq = (Math.random() * (3.2 - 0.6) + 0.6).toFixed(1)
-        let pr = (Math.random() * (3.7 - 1.0) + 1.0).toFixed(1)
+        let eqMin = 0.6, eqMax = 3.2, prMin = 1.0, prMax = 3.7
         if (isPollo) {
-          eq = (Math.random() * (1.5 - 0.2) + 0.2).toFixed(1)
-          pr = (Math.random() * (1.8 - 0.4) + 0.4).toFixed(1)
+          eqMin = 0.2; eqMax = 1.5; prMin = 0.4; prMax = 1.8
         } else if (isFreezer) {
-          eq = (-18.5 - Math.random() * 2.8).toFixed(1)
-          pr = (-18.2 - Math.random() * 2.4).toFixed(1)
+          eqMin = -21.5; eqMax = -18.5; prMin = -20.8; prMax = -18.2
         } else if (isCamara) {
           if (nomb.includes('carne')) {
-            eq = (Math.random() * (1.6 - 0.3) + 0.3).toFixed(1)
-            pr = (Math.random() * (1.9 - 0.5) + 0.5).toFixed(1)
+            eqMin = 0.3; eqMax = 1.6; prMin = 0.5; prMax = 1.9
           } else {
-            eq = (Math.random() * (3.3 - 0.8) + 0.8).toFixed(1)
-            pr = (Math.random() * (3.7 - 1.1) + 1.1).toFixed(1)
+            eqMin = 0.8; eqMax = 3.3; prMin = 1.1; prMax = 3.7
           }
         }
+
+        const prevEntry = savedHist[yestKey]?.[item.EquipamientoNomb]
+        const prevEq = prevEntry?.equipo ? parseFloat(prevEntry.equipo) : detPrev(`${item.EquipamientoNomb}_EQ`, eqMin, eqMax)
+        const prevPr = prevEntry?.producto ? parseFloat(prevEntry.producto) : detPrev(`${item.EquipamientoNomb}_PR`, prMin, prMax)
+
+        const eq = pickDifferentFromYesterday(eqMin, eqMax, prevEq)
+        const pr = pickDifferentFromYesterday(prMin, prMax, prevPr)
+
         next[item.EquipamientoGUID] = {
           equipo: eq,
           producto: pr,
           nombre: item.EquipamientoNomb,
         }
+        todayRecord[item.EquipamientoNomb] = { equipo: eq, producto: pr }
       }
     }
+
+    if (typeof window !== 'undefined') {
+      try {
+        savedHist[todayKey] = todayRecord
+        localStorage.setItem('mot_624_temp_history_v1', JSON.stringify(savedHist))
+      } catch (_) {}
+    }
+
     setTempValues(next)
   }, [])
 
@@ -1236,8 +1301,8 @@ export default function MotBotPage() {
                     Motor IA de Aprendizaje y Perfiles Térmicos Activo
                   </span>
                 </div>
-                <span className="text-[11px] text-slate-400 font-mono">
-                  Inspecciona DOM MOT.WebEquipamiento → Clasifica Equipo → Inyecta T° Equipo/Producto → Clic ✓ Aprobar
+                <span className="text-[11px] text-sky-300 font-mono bg-sky-950/50 px-2.5 py-1 rounded-lg border border-sky-500/30">
+                  🔄 Variación Diaria Anti-Repetición (±0.2°C a ±0.7°C vs. Día Anterior)
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">

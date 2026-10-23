@@ -88,12 +88,76 @@ const AI_TEMPERATURE_PROFILES = {
   },
 };
 
+const TEMP_HISTORY_FILE = path.join(__dirname, 'mot_temp_history.json');
+
+function getTodayStrArg() {
+  const now = new Date();
+  const arg = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+  const y = arg.getFullYear();
+  const m = String(arg.getMonth() + 1).padStart(2, '0');
+  const d = String(arg.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function getYesterdayStrArg() {
+  const now = new Date();
+  const arg = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+  arg.setDate(arg.getDate() - 1);
+  const y = arg.getFullYear();
+  const m = String(arg.getMonth() + 1).padStart(2, '0');
+  const d = String(arg.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function loadTempHistory() {
+  try {
+    if (fs.existsSync(TEMP_HISTORY_FILE)) {
+      return JSON.parse(fs.readFileSync(TEMP_HISTORY_FILE, 'utf8'));
+    }
+  } catch (_) {}
+  return { byDate: {}, lastByEquipment: {} };
+}
+
+function saveTempHistory(history) {
+  try {
+    // Conservar únicamente los últimos 10 días para mantener el archivo liviano
+    const dates = Object.keys(history.byDate || {}).sort();
+    while (dates.length > 10) {
+      const oldest = dates.shift();
+      delete history.byDate[oldest];
+    }
+    history.lastUpdated = new Date().toISOString();
+    fs.writeFileSync(TEMP_HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+  } catch (_) {}
+}
+
 /**
- * Motor IA: Analiza semánticamente el nombre del equipo y su categoría en MOT
- * y devuelve el perfil aprendido + temperaturas óptimas simuladas o personalizadas.
+ * Semilla determinística auxiliar por fecha + equipo (por si el servidor se reinició en limpio sin archivo previo),
+ * garantizando que "ayer" y "hoy" tengan valores base diferentes incluso tras un redeploy.
  */
-function aiClassifyAndComputeTemp(equipamientoNomb = '', categoriaDesc = '', customProfiles = null) {
-  const profiles = customProfiles || AI_TEMPERATURE_PROFILES;
+function deterministicPrevTemp(equipName, dateStr, minVal, maxVal) {
+  const seedStr = `${dateStr}::${equipName}`;
+  let hash = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash ^= seedStr.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const normalized = ((hash >>> 0) % 1000) / 1000;
+  return Number((minVal + normalized * (maxVal - minVal)).toFixed(1));
+}
+
+/**
+ * Motor IA: Analiza semánticamente el nombre del equipo y su categoría en MOT,
+ * consulta los valores ingresados el día anterior (ayer) y genera temperaturas dentro
+ * del rango estricto con una leve variación orgánica (±0.2°C a ±0.7°C) respecto al día anterior,
+ * evitando que se repitan los mismos datos en días continuos.
+ */
+function aiClassifyAndComputeTemp(equipamientoNomb = '', categoriaDesc = '', options = {}) {
+  const profiles = options.customProfiles || AI_TEMPERATURE_PROFILES;
+  const history  = options.history || loadTempHistory();
+  const todayStr = options.todayStr || getTodayStrArg();
+  const yestStr  = options.yesterdayStr || getYesterdayStrArg();
+
   const name = (equipamientoNomb || '').toLowerCase();
   const cat  = (categoriaDesc || '').toLowerCase();
 
@@ -113,9 +177,54 @@ function aiClassifyAndComputeTemp(equipamientoNomb = '', categoriaDesc = '', cus
     profile = profiles.MURAL_GENERAL;
   }
 
-  const randBetween = (min, max) => (Math.random() * (max - min) + min).toFixed(1);
-  const tempEquipo   = randBetween(profile.equipoMin, profile.equipoMax);
-  const tempProducto = randBetween(profile.prodMin, profile.prodMax);
+  // Buscar qué valor se ingresó ayer (o en el último control previo) para este equipo
+  const yestEntry = (history.byDate && history.byDate[yestStr] && history.byDate[yestStr][equipamientoNomb])
+    || (history.lastByEquipment && history.lastByEquipment[equipamientoNomb]);
+
+  const prevEq = yestEntry && yestEntry.equipo !== undefined
+    ? parseFloat(yestEntry.equipo)
+    : deterministicPrevTemp(`${equipamientoNomb}_EQ`, yestStr, profile.equipoMin, profile.equipoMax);
+
+  const prevPr = yestEntry && yestEntry.producto !== undefined
+    ? parseFloat(yestEntry.producto)
+    : deterministicPrevTemp(`${equipamientoNomb}_PR`, yestStr, profile.prodMin, profile.prodMax);
+
+  const pickWithSlightDiff = (min, max, prevVal, allowOccasionalMatch = false) => {
+    const span = max - min;
+    const minDelta = span <= 1.5 ? 0.2 : 0.3; // Para Pollo (rango corto) min 0.2°C, para Murales/Freezers min 0.3°C
+    let candidate = Number((Math.random() * (max - min) + min).toFixed(1));
+
+    if (allowOccasionalMatch && Math.random() < 0.12) {
+      return candidate.toFixed(1);
+    }
+
+    for (let attempt = 0; attempt < 25; attempt++) {
+      // Aplicar una variación leve realista de ±0.2 a ±0.7 °C sobre la base o sobre ayer
+      const dir = (attempt % 2 === 0 ? 1 : -1) * (Math.random() < 0.5 ? 1 : -1);
+      const step = minDelta + Math.random() * Math.min(0.6, span * 0.45);
+      let nextVal = Number((prevVal + dir * step).toFixed(1));
+
+      if (nextVal < min || nextVal > max) {
+        nextVal = Number((Math.random() * (max - min) + min).toFixed(1));
+      }
+
+      if (Math.abs(nextVal - prevVal) >= minDelta - 0.01 && nextVal >= min && nextVal <= max) {
+        candidate = nextVal;
+        break;
+      }
+    }
+
+    // Garantía final de bordes estrictos
+    candidate = Math.max(min, Math.min(max, candidate));
+    if (candidate.toFixed(1) === prevVal.toFixed(1)) {
+      const nudged = candidate + minDelta <= max ? candidate + minDelta : candidate - minDelta;
+      candidate = Math.max(min, Math.min(max, nudged));
+    }
+    return candidate.toFixed(1);
+  };
+
+  const tempEquipo   = pickWithSlightDiff(profile.equipoMin, profile.equipoMax, prevEq, false);
+  const tempProducto = pickWithSlightDiff(profile.prodMin, profile.prodMax, prevPr, false);
 
   return {
     profileId: profile.id,
@@ -123,6 +232,8 @@ function aiClassifyAndComputeTemp(equipamientoNomb = '', categoriaDesc = '', cus
     minC: profile.minC,
     maxC: profile.maxC,
     regla: profile.regla,
+    prevEquipo: prevEq.toFixed(1),
+    prevProducto: prevPr.toFixed(1),
     tempEquipo,
     tempProducto,
   };
@@ -897,9 +1008,20 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 
       log(`[Motor IA Temperatura] Categoría "${catName.trim()}": ${equipmentRows.length} equipos detectados para completar.`);
 
+      const tempHistory  = loadTempHistory();
+      const todayStr     = getTodayStrArg();
+      const yesterdayStr = getYesterdayStrArg();
+      if (!tempHistory.byDate) tempHistory.byDate = {};
+      if (!tempHistory.byDate[todayStr]) tempHistory.byDate[todayStr] = {};
+      if (!tempHistory.lastByEquipment) tempHistory.lastByEquipment = {};
+
       for (const row of equipmentRows) {
-        // Clasificar con el Motor IA según el nombre del equipo y categoría
-        const aiDecision = aiClassifyAndComputeTemp(row.nombre, catName);
+        // Clasificar con el Motor IA según el nombre del equipo, categoría e historial del día anterior
+        const aiDecision = aiClassifyAndComputeTemp(row.nombre, catName, {
+          history: tempHistory,
+          todayStr,
+          yesterdayStr,
+        });
         let tempEqui = aiDecision.tempEquipo;
         let tempProd = aiDecision.tempProducto;
 
@@ -913,7 +1035,7 @@ async function executeTemperatureControlOnMot(task, options = {}) {
           if (customEntry.producto !== undefined && customEntry.producto !== '') tempProd = String(customEntry.producto);
         }
 
-        log(`[Motor IA -> ${row.nombre}] Perfil: ${aiDecision.profileId} (${aiDecision.minC}°C a ${aiDecision.maxC}°C) => Equipo: ${tempEqui}°C | Prod: ${tempProd}°C`);
+        log(`[Motor IA -> ${row.nombre}] Perfil: ${aiDecision.profileId} (${aiDecision.minC}°C a ${aiDecision.maxC}°C) | Ayer: ${aiDecision.prevEquipo}°C/${aiDecision.prevProducto}°C => Hoy: ${tempEqui}°C/${tempProd}°C`);
 
         await _page.fill(`#${row.eqInputId}`, String(tempEqui)).catch(() => {});
         await _page.fill(`#${row.prInputId}`, String(tempProd)).catch(() => {});
@@ -927,7 +1049,21 @@ async function executeTemperatureControlOnMot(task, options = {}) {
             totalAprobados++;
           }
         }
+
+        // Guardar en el historial del día para que mañana aplique variación leve respecto a hoy
+        tempHistory.byDate[todayStr][row.nombre] = {
+          equipo: String(tempEqui),
+          producto: String(tempProd),
+          updatedAt: new Date().toISOString(),
+        };
+        tempHistory.lastByEquipment[row.nombre] = {
+          equipo: String(tempEqui),
+          producto: String(tempProd),
+          date: todayStr,
+        };
       }
+
+      saveTempHistory(tempHistory);
     }
   }
 
