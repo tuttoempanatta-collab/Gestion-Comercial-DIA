@@ -6,6 +6,8 @@
  * No requiere dejar abierta la página web ni el APK.
  */
 
+process.env.TZ = 'America/Argentina/Buenos_Aires';
+
 const {
   doLogin,
   readTasks,

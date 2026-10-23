@@ -9,6 +9,8 @@
  *   3. Ejecutar el ciclo automático del bot 10 minutos antes del horario de cierre de cada tarea.
  */
 
+process.env.TZ = 'America/Argentina/Buenos_Aires';
+
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
@@ -405,7 +407,7 @@ function classifyTaskType(nombre, tieneBotonesDirectos) {
   if (n.includes('trazabilidad')) return 'Trazabilidad';
   if (n.includes('limpieza')) return 'Limpieza';
   if (tieneBotonesDirectos) return 'Directa';
-  return 'Limpieza';
+  return 'Directa';
 }
 
 /**
@@ -521,6 +523,7 @@ async function ensureBrowser(headless = true) {
       viewport: { width: 1280, height: 800 },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       locale: 'es-AR',
+      timezoneId: 'America/Argentina/Buenos_Aires',
     };
     if (sessionExists()) {
       contextOptions.storageState = SESSION_FILE;
@@ -531,12 +534,27 @@ async function ensureBrowser(headless = true) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
-        '--lang=es-AR'
+        '--lang=es-AR',
+        '--timezone=America/Argentina/Buenos_Aires',
       ],
       slowMo: headless ? 0 : 100,
     });
     _context = await _browser.newContext(contextOptions);
+    await _context.addInitScript(() => {
+      try {
+        Intl.DateTimeFormat().resolvedOptions().timeZone = 'America/Argentina/Buenos_Aires';
+      } catch (_) {}
+    });
     _page = await _context.newPage();
+
+    // Verificación de auditoría del reloj del navegador
+    try {
+      const tzCheck = await _page.evaluate(() => ({
+        offset: new Date().getTimezoneOffset(),
+        localTime: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      }));
+      log(`[Verificación Auditoría Horaria] Browser Offset: ${tzCheck.offset} min (esperado: 180 min UTC-3) | Hora Browser: ${tzCheck.localTime} hs`);
+    } catch (_) {}
   }
 }
 
@@ -768,10 +786,17 @@ async function readTasks() {
       // Determinar código de estado ('C', 'FT', 'NC', 'NA', '')
       let estadoCode = '';
       const estLower = estadoTextoRaw.toLowerCase();
-      if (estLower.includes('a tiempo')) estadoCode = 'C';
-      else if (estLower.includes('fuera de hora')) estadoCode = 'FT';
-      else if (estLower.includes('no cumplida')) estadoCode = 'NC';
-      else if (estLower.includes('no aplica')) estadoCode = 'NA';
+      if (estLower.includes('a tiempo') || estLower.startsWith('c ') || estLower === 'c' || estLower.includes('cumplida')) {
+        estadoCode = 'C';
+      } else if (estLower.includes('fuera de hora') || estLower.startsWith('ft')) {
+        estadoCode = 'FT';
+      } else if (estLower.includes('no cumplida') || estLower.startsWith('nc')) {
+        estadoCode = 'NC';
+      } else if (estLower.includes('no aplica') || estLower.startsWith('na')) {
+        estadoCode = 'NA';
+      } else if (horaCumplRaw && horaCumplRaw !== '00:00') {
+        estadoCode = 'C';
+      }
 
       rows.push({
         rowIndex: r,
@@ -802,18 +827,21 @@ async function readTasks() {
 
   const currentDateStr = extracted.fecha || new Date().toLocaleDateString('es-AR');
 
-  // Si MOT devuelve 0 filas (ej. recién cruzada la medianoche 00:00 antes del corte de las 00:30),
-  // mantener las 54 tareas oficiales de Tienda 624 para que siempre estén visibles y operativas.
-  if (tasks.length === 0 && DEFAULT_TAREAS_TIENDA_624.length > 0) {
-    log(`MOT devolvió 0 filas para fecha ${currentDateStr} (ventana post-medianoche). Cargando las ${DEFAULT_TAREAS_TIENDA_624.length} tareas oficiales de Tienda 624.`, 'info');
-    tasks = DEFAULT_TAREAS_TIENDA_624.map(t => ({
-      ...t,
-      fecha: currentDateStr,
-    }));
-  }
-
-  // Fusionar marcaciones realizadas en el día actual
+  // Sincronizar marcaciones detectadas en el APK oficial o registradas durante la jornada
   tasks = tasks.map(t => {
+    // Si la tarea ya viene cumplida en el APK oficial / servidor MOT
+    if (t.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(t.estadoCode)) {
+      _localMarkedMap.set(t.rowIndex, {
+        estadoCode: t.estadoCode,
+        estadoTexto: t.estadoTexto || (t.estadoCode === 'C' ? 'a tiempo' : t.estadoCode === 'FT' ? 'fuera de hora' : t.estadoCode),
+        horaCumplimiento: t.horaCumplimiento || '',
+        fecha: currentDateStr,
+        origen: 'APK_OFICIAL',
+      });
+      return t;
+    }
+
+    // Si localMarkedMap tiene una marcación registrada en el día y el DOM aún no reflejó el cambio
     const localMark = _localMarkedMap.get(t.rowIndex);
     if (localMark && localMark.fecha === currentDateStr && !t.estadoCode) {
       return {
@@ -825,6 +853,25 @@ async function readTasks() {
     }
     return t;
   });
+
+  // Si MOT devuelve 0 filas (ej. recién cruzada la medianoche 00:00 antes del corte de las 00:30),
+  // mantener las 56 tareas oficiales de Tienda 624 para que siempre estén visibles y operativas.
+  if (tasks.length === 0 && DEFAULT_TAREAS_TIENDA_624.length > 0) {
+    log(`MOT devolvió 0 filas para fecha ${currentDateStr} (ventana post-medianoche). Cargando las ${DEFAULT_TAREAS_TIENDA_624.length} tareas oficiales de Tienda 624.`, 'info');
+    tasks = DEFAULT_TAREAS_TIENDA_624.map(t => {
+      const localMark = _localMarkedMap.get(t.rowIndex);
+      if (localMark && localMark.fecha === currentDateStr && !t.estadoCode) {
+        return {
+          ...t,
+          fecha: currentDateStr,
+          estadoCode: localMark.estadoCode,
+          estadoTexto: localMark.estadoTexto,
+          horaCumplimiento: localMark.horaCumplimiento,
+        };
+      }
+      return { ...t, fecha: currentDateStr };
+    });
+  }
 
   _cachedTasks = tasks;
   _lastSyncAt  = new Date().toISOString();
@@ -910,6 +957,10 @@ async function getTaskDetail(rowIndex) {
       // Equipamiento si existe
       const equipamiento = gx.W0093W0024vSDTCTGEQUIPAMIENTOS || null;
 
+      const domElements = Array.from(document.querySelectorAll('input[id], button[id], img[id], a[id], span[id*="RESP"]'))
+        .filter(el => el.type !== 'hidden')
+        .map(el => ({ tag: el.tagName, id: el.id, type: el.type || '', val: el.value || '', vis: el.offsetParent !== null }));
+
       return {
         titulo: gx.DVPANEL_TABLECONTENT_Title || '',
         bloque: bloqueMap[bloqueCode] || bloqueCode,
@@ -920,6 +971,7 @@ async function getTaskDetail(rowIndex) {
         detalleTipoServer: gx.W0093vDETALLETAREA || gx.MAESTROTAREADETALLE || '',
         tieneBotonesCumplimiento: gx.TABLEBTNSCUMPLIMIENTO_Visible === 1 || gx.TABLEBTNSCUMPLIMIENTO_Visible === '1',
         equipamiento,
+        domElements,
       };
     });
 
@@ -966,106 +1018,99 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 
   let totalAprobados = 0;
 
-  // 2. Recorrer las 3 categorías (0001 = Murales, 0002 = Freezers, 0003 = Cámaras / Reserva)
-  for (const catIdx of ['0001', '0002', '0003']) {
-    const catName = await _page.locator(`#span_W0093W0024SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC_${catIdx}`).innerText().catch(() => `Categoría ${catIdx}`);
-    log(`[Motor IA Temperatura] Expandiendo categoría ${catIdx}: "${catName.trim()}"...`);
+  // 2. Recorrer dinámicamente la primera categoría pendiente (0001) y su primer equipo pendiente (0001).
+  // En GeneXus (MOT.WebEquipo), cada vez que se aprueba el equipo _0001:
+  //   - Ese equipo se elimina de pendientes, pasando el siguiente equipo a la fila _0001 y colapsando el acordeón.
+  //   - Cuando se aprueban todos los equipos de la categoría _0001 (ej. Murales), la categoría entera desaparece
+  //     y la siguiente categoría (Freezers, luego Cámaras) pasa a ocupar la posición _0001.
+  //   - Al aprobarse el último equipo de la última categoría, la tarea queda automáticamente Cumplida ('C') en MOT.
+  const tempHistory  = loadTempHistory();
+  const todayStr     = getTodayStrArg();
+  const yesterdayStr = getYesterdayStrArg();
+  if (!tempHistory.byDate) tempHistory.byDate = {};
+  if (!tempHistory.byDate[todayStr]) tempHistory.byDate[todayStr] = {};
+  if (!tempHistory.lastByEquipment) tempHistory.lastByEquipment = {};
 
-    const arrow = _page.locator(`#span_W0093W0024vDETAILWEBCOMPONENT_${catIdx}, #W0093W0024GridContainerRow_${catIdx} i.ArrowIcon`).first();
-    if (await arrow.isVisible().catch(() => false)) {
-      await arrow.click();
-      await _page.waitForTimeout(2800);
+  let currentOpenCatName = '';
 
-      // Extraer todas las filas del subcomponente W0093W0024W0034 (MOT.WebEquipamiento)
-      const equipmentRows = await _page.evaluate(() => {
-        const rows = [];
-        const nameSpans = Array.from(document.querySelectorAll('[id*="vEQUIPAMIENTONOMB_"]'));
-        for (const span of nameSpans) {
-          const m = span.id.match(/_(\d{4})$/);
-          if (!m) continue;
-          const idx = m[1];
-          const prefixMatch = span.id.match(/^span_(.*)vEQUIPAMIENTONOMB_\d{4}$/);
-          const prefix = prefixMatch ? prefixMatch[1] : 'W0093W0024W0034';
-          const eqInput = document.getElementById(`${prefix}vTEMPERATURAEQUIPO_${idx}`);
-          const prInput = document.getElementById(`${prefix}vTEMPERATURAPRODUCTO_${idx}`);
-          const apBtn   = document.getElementById(`${prefix}APROBAR_${idx}`);
-          const guidEl  = document.getElementById(`${prefix}vEQUIPAMIENTOGUID_${idx}`);
-
-          if (eqInput && prInput && eqInput.offsetParent !== null && !eqInput.disabled) {
-            rows.push({
-              idx,
-              prefix,
-              nombre: span.innerText.trim(),
-              guid: guidEl ? guidEl.value.trim() : '',
-              eqInputId: eqInput.id,
-              prInputId: prInput.id,
-              apBtnId: apBtn ? apBtn.id : '',
-            });
-          }
-        }
-        return rows;
-      });
-
-      log(`[Motor IA Temperatura] Categoría "${catName.trim()}": ${equipmentRows.length} equipos detectados para completar.`);
-
-      const tempHistory  = loadTempHistory();
-      const todayStr     = getTodayStrArg();
-      const yesterdayStr = getYesterdayStrArg();
-      if (!tempHistory.byDate) tempHistory.byDate = {};
-      if (!tempHistory.byDate[todayStr]) tempHistory.byDate[todayStr] = {};
-      if (!tempHistory.lastByEquipment) tempHistory.lastByEquipment = {};
-
-      for (const row of equipmentRows) {
-        // Clasificar con el Motor IA según el nombre del equipo, categoría e historial del día anterior
-        const aiDecision = aiClassifyAndComputeTemp(row.nombre, catName, {
-          history: tempHistory,
-          todayStr,
-          yesterdayStr,
-        });
-        let tempEqui = aiDecision.tempEquipo;
-        let tempProd = aiDecision.tempProducto;
-
-        // Si el usuario personalizó la temperatura en la web para este GUID o nombre, usar ese valor
-        const customByGuid = row.guid ? customTemps[row.guid] : null;
-        const customByName = Object.values(customTemps).find(v => v && v.nombre === row.nombre);
-        const customEntry  = customByGuid || customByName;
-
-        if (customEntry) {
-          if (customEntry.equipo !== undefined && customEntry.equipo !== '') tempEqui = String(customEntry.equipo);
-          if (customEntry.producto !== undefined && customEntry.producto !== '') tempProd = String(customEntry.producto);
-        }
-
-        log(`[Motor IA -> ${row.nombre}] Perfil: ${aiDecision.profileId} (${aiDecision.minC}°C a ${aiDecision.maxC}°C) | Ayer: ${aiDecision.prevEquipo}°C/${aiDecision.prevProducto}°C => Hoy: ${tempEqui}°C/${tempProd}°C`);
-
-        await _page.fill(`#${row.eqInputId}`, String(tempEqui)).catch(() => {});
-        await _page.fill(`#${row.prInputId}`, String(tempProd)).catch(() => {});
-        await _page.waitForTimeout(200);
-
-        if (row.apBtnId) {
-          const btn = _page.locator(`#${row.apBtnId}`).first();
-          if (await btn.isVisible().catch(() => false)) {
-            await btn.click().catch(() => {});
-            await _page.waitForTimeout(650);
-            totalAprobados++;
-          }
-        }
-
-        // Guardar en el historial del día para que mañana aplique variación leve respecto a hoy
-        tempHistory.byDate[todayStr][row.nombre] = {
-          equipo: String(tempEqui),
-          producto: String(tempProd),
-          updatedAt: new Date().toISOString(),
-        };
-        tempHistory.lastByEquipment[row.nombre] = {
-          equipo: String(tempEqui),
-          producto: String(tempProd),
-          date: todayStr,
-        };
-      }
-
-      saveTempHistory(tempHistory);
+  for (let step = 0; step < 30; step++) {
+    const catSpan = _page.locator('#span_W0093W0024SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC_0001').first();
+    if (!(await catSpan.isVisible().catch(() => false))) {
+      break; // Ya no quedan categorías pendientes: los 21 equipos fueron aprobados
     }
+
+    const catName = (await catSpan.innerText().catch(() => 'Categoría')).trim();
+
+    // Desplegar la categoría _0001 ÚNICAMENTE cuando cambia de categoría (ej. al iniciar Murales,
+    // o cuando Murales termina y Freezers/Cámaras pasan a ocupar _0001). Mientras se aprueban equipos
+    // dentro de la misma categoría, el acordeón permanece abierto y NO se debe volver a clickear la flecha.
+    if (catName !== currentOpenCatName) {
+      const arrow = _page.locator('#span_W0093W0024vDETAILWEBCOMPONENT_0001, #W0093W0024GridContainerRow_0001 i.ArrowIcon').first();
+      if (await arrow.isVisible().catch(() => false)) {
+        await arrow.click({ timeout: 3000 }).catch(() => {});
+        await _page.waitForTimeout(1800);
+        currentOpenCatName = catName;
+      }
+    }
+
+    const rowData = await _page.evaluate(() => {
+      const span = document.getElementById('span_W0093W0024W0034vEQUIPAMIENTONOMB_0001');
+      const eqIn = document.getElementById('W0093W0024W0034vTEMPERATURAEQUIPO_0001');
+      const prIn = document.getElementById('W0093W0024W0034vTEMPERATURAPRODUCTO_0001');
+      const apBt = document.getElementById('W0093W0024W0034APROBAR_0001');
+      const guid = document.getElementById('W0093W0024W0034vEQUIPAMIENTOGUID_0001');
+      if (!span || !eqIn || !prIn || !apBt) return null;
+      return {
+        nombre: span.innerText.trim(),
+        guid: guid ? guid.value.trim() : '',
+      };
+    });
+
+    if (!rowData || !rowData.nombre) break;
+
+    const aiDecision = aiClassifyAndComputeTemp(rowData.nombre, catName, {
+      history: tempHistory,
+      todayStr,
+      yesterdayStr,
+    });
+    let tempEqui = aiDecision.tempEquipo;
+    let tempProd = aiDecision.tempProducto;
+
+    const customByGuid = rowData.guid ? customTemps[rowData.guid] : null;
+    const customByName = Object.values(customTemps).find(v => v && v.nombre === rowData.nombre);
+    const customEntry  = customByGuid || customByName;
+
+    if (customEntry) {
+      if (customEntry.equipo !== undefined && customEntry.equipo !== '') tempEqui = String(customEntry.equipo);
+      if (customEntry.producto !== undefined && customEntry.producto !== '') tempProd = String(customEntry.producto);
+    }
+
+    log(`[Motor IA -> ${rowData.nombre} (${catName})] Perfil: ${aiDecision.profileId} (${aiDecision.minC}°C a ${aiDecision.maxC}°C) | Ayer: ${aiDecision.prevEquipo}°C/${aiDecision.prevProducto}°C => Hoy: ${tempEqui}°C/${tempProd}°C`);
+
+    await _page.fill('#W0093W0024W0034vTEMPERATURAEQUIPO_0001', String(tempEqui), { timeout: 3000 }).catch(() => {});
+    await _page.fill('#W0093W0024W0034vTEMPERATURAPRODUCTO_0001', String(tempProd), { timeout: 3000 }).catch(() => {});
+    await _page.waitForTimeout(150);
+
+    const apBtn = _page.locator('#W0093W0024W0034APROBAR_0001').first();
+    if (await apBtn.isVisible().catch(() => false)) {
+      await apBtn.click({ timeout: 3000 }).catch(() => {});
+      await _page.waitForTimeout(1500);
+      totalAprobados++;
+    }
+
+    tempHistory.byDate[todayStr][rowData.nombre] = {
+      equipo: String(tempEqui),
+      producto: String(tempProd),
+      updatedAt: new Date().toISOString(),
+    };
+    tempHistory.lastByEquipment[rowData.nombre] = {
+      equipo: String(tempEqui),
+      producto: String(tempProd),
+      date: todayStr,
+    };
   }
+
+  saveTempHistory(tempHistory);
 
   log(`✓ [Motor IA Temperatura] Control completado para "${task.nombre}" (${totalAprobados} equipos aprobados con legajo ${legajo}).`);
   return {
@@ -1103,53 +1148,37 @@ function isOmittedStoreTask(task) {
 }
 
 /**
- * Completa una tarea que requiere Legajo de Responsable (Orden y Limpieza MOT.WebLimpieza u otra con vRESPONSABLE)
+ * Completa una tarea que requiere Legajo de Responsable (Orden y Limpieza MOT.WebLimpieza)
  * ingresando el legajo 23250 en #W0093W0054vRESPONSABLE y presionando #W0093W0054BTNCONFIRMAR.
  */
 async function executeLimpiezaControlOnMot(task, options = {}) {
   const legajo = options.responsable || DEFAULT_LEGAJO;
   log(`Confirmando tarea con Legajo en MOT: "${task.nombre}" (Legajo: ${legajo})...`);
 
-  // Navegar desde la grilla activa para conservar el token encriptado GeneXus de la sesión actual
-  if (_page.url().includes('tareastienda')) {
-    const linkLocator = _page.locator(`#span_MAESTROTAREANOMBRE_${task.rowIndex} a`).first();
-    if (await linkLocator.isVisible().catch(() => false)) {
-      await linkLocator.click();
-      await _page.waitForTimeout(2500);
-    } else if (task.detailLink) {
-      const fullUrl = task.detailLink.startsWith('http')
-        ? task.detailLink
-        : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
-      await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-      await _page.waitForTimeout(2500);
-    }
-  } else if (task.detailLink) {
-    const fullUrl = task.detailLink.startsWith('http')
-      ? task.detailLink
-      : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
-    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-    await _page.waitForTimeout(2500);
+  if (!task.detailLink) {
+    throw new Error(`La tarea "${task.nombre}" no posee link de detalle en MOT.`);
   }
 
-  const respInput = _page.locator('#W0093W0054vRESPONSABLE, input[id*="vRESPONSABLE"]').first();
+  const fullUrl = task.detailLink.startsWith('http')
+    ? task.detailLink
+    : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  await _page.waitForTimeout(2200);
+
+  // Selector exacto de MOT.WebLimpieza descubierto en DOM: #W0093W0054vRESPONSABLE + #W0093W0054BTNCONFIRMAR
+  const respInput = _page.locator('#W0093W0054vRESPONSABLE').first();
   if (await respInput.isVisible().catch(() => false)) {
     await respInput.fill('');
     await respInput.fill(String(legajo));
-    await _page.waitForTimeout(300);
+    await respInput.press('Tab').catch(() => {});
+    await _page.waitForTimeout(600);
 
-    // Si tiene botón Validar Responsable, presionarlo también
-    const valBtn = _page.locator('input[id*="BTNVALIDARRESP"]').first();
-    if (await valBtn.isVisible().catch(() => false)) {
-      await valBtn.click();
-      await _page.waitForTimeout(1200);
-    }
-
-    const confirmBtn = _page.locator('#W0093W0054BTNCONFIRMAR, input[id*="BTNCONFIRMAR"]').first();
+    const confirmBtn = _page.locator('#W0093W0054BTNCONFIRMAR').first();
     if (await confirmBtn.isVisible().catch(() => false)) {
       await confirmBtn.click();
-      await _page.waitForTimeout(2500);
+      await _page.waitForTimeout(2200);
     }
-    log(`✓ Tarea "${task.nombre}" confirmada con legajo ${legajo}.`);
+    log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
     return { ok: true, msg: `Tarea confirmada con legajo ${legajo}.` };
   }
 
@@ -1162,7 +1191,7 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     return { ok: true, msg: 'Tarea marcada como cumplida desde detalle.' };
   }
 
-  throw new Error('No se encontró el campo de Responsable ni el botón de cumplimiento para esta tarea.');
+  throw new Error('No se encontró el campo #W0093W0054vRESPONSABLE ni el botón de cumplimiento para esta tarea.');
 }
 
 /**
@@ -1364,13 +1393,20 @@ async function markDueTasks(markedToday = new Set()) {
     }
 
     for (const task of tasks) {
-      // Si ya tiene un estado cumplido/cerrado en el servidor MOT, registrarlo y omitir
-      if (task.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(task.estadoCode)) {
+      const key = `${task.nombre}|${task.horarioInicio}-${task.horarioCierre}`;
+
+      // 1. Detección proactiva de tareas ya cumplidas en el APK oficial o servidor MOT
+      if ((task.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(task.estadoCode)) || (task.horaCumplimiento && task.horaCumplimiento !== '00:00')) {
+        if (!markedToday.has(key)) {
+          markedToday.add(key);
+          markedToday.add(task.nombre);
+          const horaTxt = task.horaCumplimiento ? ` a las ${task.horaCumplimiento} hs` : '';
+          log(`📱 [APK Oficial Detectado] Tarea "${task.nombre}" ya cumplida en el APK oficial (${task.estadoTexto || task.estadoCode}${horaTxt}). Omitiendo re-ejecución.`);
+        }
         continue;
       }
 
-      const key = `${task.nombre}|${task.horarioInicio}-${task.horarioCierre}`;
-      if (markedToday.has(key)) continue;
+      if (markedToday.has(key) || markedToday.has(task.nombre)) continue;
 
       if (!shouldMark(task.horarioInicio, task.horarioCierre)) continue;
 

@@ -365,6 +365,30 @@ function getTodayStorageKey() {
   return `mot_624_marks_${arg.getFullYear()}_${arg.getMonth() + 1}_${arg.getDate()}`
 }
 
+function persistMarksToStorage(tasks: MotTask[]) {
+  if (typeof window === 'undefined') return
+  try {
+    const key = getTodayStorageKey()
+    const existing = JSON.parse(localStorage.getItem(key) || '{}')
+    let changed = false
+    for (const t of tasks) {
+      if (t.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(t.estadoCode)) {
+        if (!existing[t.rowIndex] || existing[t.rowIndex].estadoCode !== t.estadoCode || !existing[t.rowIndex].horaCumplimiento) {
+          existing[t.rowIndex] = {
+            estadoCode: t.estadoCode,
+            estadoTexto: t.estadoTexto || (t.estadoCode === 'C' ? 'a tiempo' : t.estadoCode === 'FT' ? 'fuera de hora' : t.estadoCode),
+            horaCumplimiento: t.horaCumplimiento || '',
+          }
+          changed = true
+        }
+      }
+    }
+    if (changed) {
+      localStorage.setItem(key, JSON.stringify(existing))
+    }
+  } catch (_) {}
+}
+
 function mergeWithSavedMarks(list: MotTask[]): MotTask[] {
   if (typeof window === 'undefined') return list
   try {
@@ -372,8 +396,12 @@ function mergeWithSavedMarks(list: MotTask[]): MotTask[] {
     if (!raw) return list
     const savedMap = JSON.parse(raw) as Record<string, { estadoCode: MotTask['estadoCode']; estadoTexto: string; horaCumplimiento: string }>
     return list.map(t => {
+      // Si la tarea ya viene cumplida desde el servidor MOT oficial, tiene prioridad absoluta
+      if (t.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(t.estadoCode)) {
+        return t
+      }
       const s = savedMap[t.rowIndex]
-      if (s && !t.estadoCode) {
+      if (s && s.estadoCode) {
         return { ...t, estadoCode: s.estadoCode, estadoTexto: s.estadoTexto, horaCumplimiento: s.horaCumplimiento }
       }
       return t
@@ -385,8 +413,8 @@ function mergeWithSavedMarks(list: MotTask[]): MotTask[] {
 
 export default function MotBotPage() {
   const [data, setData]               = useState<MotStatus | null>(null)
-  const [tasks, setTasks]             = useState<MotTask[]>(BASELINE_TAREAS_624)
-  const [stats, setStats]             = useState<MotStats | null>(() => computeClientStats(BASELINE_TAREAS_624))
+  const [tasks, setTasks]             = useState<MotTask[]>(() => mergeWithSavedMarks(BASELINE_TAREAS_624))
+  const [stats, setStats]             = useState<MotStats | null>(() => computeClientStats(mergeWithSavedMarks(BASELINE_TAREAS_624)))
   const [tiendaInfo, setTiendaInfo]   = useState<{ id: string; nombre: string; fecha: string; horario: string } | null>({
     id: '624',
     nombre: 'Tienda 00624 AR',
@@ -441,6 +469,8 @@ export default function MotBotPage() {
       const j = await r.json()
       if (j.ok) {
         const incoming: MotTask[] = (j.tasks && j.tasks.length > 0) ? j.tasks : BASELINE_TAREAS_624
+        // Persistir en localStorage todas las tareas marcadas en el servidor MOT / APK oficial
+        persistMarksToStorage(incoming)
         const merged = mergeWithSavedMarks(incoming)
         setTasks(merged)
         setStats(computeClientStats(merged))
