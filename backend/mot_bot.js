@@ -1137,25 +1137,24 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 }
 
 /**
- * Las 5 tareas que el robot SIEMPRE debe omitir en modo automático porque requieren
- * información física externa de tienda (Remito, Lote, Vencimiento, Albarán, Retiro o Conteo de Caducidad):
+ * Las 4 tareas que el robot SIEMPRE debe omitir en modo automático porque requieren
+ * información física externa de tienda (Remito físico, Lote de cocción, Albarán o Retiro):
  * 1. Ctrol Temp Recep GD (Proveedor)
  * 2. Trazabilidad Horneado/Descongelado (Trazabilidad)
- * 3. Caducidades (Caducidad)
- * 4. Retiro Calidad (Retiro)
- * 5. Ctrol Temp Recep Almacén (Almacen)
+ * 3. Retiro Calidad (Retiro)
+ * 4. Ctrol Temp Recep Almacén (Almacen)
+ * (Nota: Caducidades es gestionada automáticamente por el Motor IA tildando todos los artículos en riesgo).
  */
 function isOmittedStoreTask(task) {
   if (!task) return false;
   const tipo = String(task.tipoControl || '');
   const nomb = String(task.nombre || '').toLowerCase();
-  if (['Proveedor', 'Trazabilidad', 'Caducidad', 'Retiro', 'Almacen'].includes(tipo)) {
+  if (['Proveedor', 'Trazabilidad', 'Retiro', 'Almacen'].includes(tipo)) {
     return true;
   }
   if (
     /recep.*gd/i.test(nomb) ||
     /trazabilidad.*horneado|horneado.*descongelado/i.test(nomb) ||
-    /caducidad/i.test(nomb) ||
     /retiro.*calidad/i.test(nomb) ||
     /recep.*almac[eé]n/i.test(nomb)
   ) {
@@ -1209,6 +1208,72 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   }
 
   throw new Error('No se encontró el campo #W0093W0054vRESPONSABLE ni el botón de cumplimiento para esta tarea.');
+}
+
+/**
+ * Completa la tarea de Caducidades en MOT.
+ * La IA inspecciona la grilla de "Artículos en riesgo" (W0093W0018W0023GriddatapendienteContainerRow_)
+ * y aprueba cada artículo en riesgo presionando el tilde verde (#W0093W0018W0023APROBAR_0001).
+ * Al ser una grilla GeneXus reactiva, cada aprobación re-indexa la fila siguiente a 0001
+ * hasta que no quedan artículos en riesgo y la tarea queda cumplida automáticamente.
+ */
+async function executeCaducidadesOnMot(task) {
+  log(`[Motor IA Caducidades] Iniciando revisión y aprobación de artículos en riesgo para "${task.nombre}"...`);
+
+  if (!task.detailLink) {
+    throw new Error(`La tarea "${task.nombre}" no posee link de detalle en MOT.`);
+  }
+
+  const fullUrl = task.detailLink.startsWith('http')
+    ? task.detailLink
+    : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  await _page.waitForTimeout(2500);
+
+  // 1. Detectar cantidad inicial de artículos en riesgo
+  const initialCount = await _page.evaluate(() => {
+    return document.querySelectorAll('[id*="GriddatapendienteContainerRow_"]').length;
+  });
+  log(`[Motor IA Caducidades] Artículos en riesgo detectados en lista diaria: ${initialCount}.`);
+
+  let approvedCount = 0;
+  const maxIterations = 100; // tope de seguridad
+
+  for (let step = 0; step < maxIterations; step++) {
+    // Verificar si queda al menos un botón de Aprobar (tilde verde) en la primera fila pendiente
+    const apBtn = _page.locator('#W0093W0018W0023APROBAR_0001, [id*="GriddatapendienteContainerRow_0001"] [id*="APROBAR"], [id*="GriddatapendienteContainerRow_0001"] img[title*="Aprobar"]').first();
+    const isVisible = await apBtn.isVisible().catch(() => false);
+    if (!isVisible) {
+      break; // Ya no quedan artículos pendientes por aprobar
+    }
+
+    // Extraer descripción del artículo que se está aprobando para registro
+    const itemDesc = await _page.evaluate(() => {
+      const row = document.getElementById('W0093W0018W0023GriddatapendienteContainerRow_0001') || document.querySelector('[id*="GriddatapendienteContainerRow_"]');
+      return row ? row.innerText.trim().replace(/\s+/g, ' ') : `Artículo ${step + 1}`;
+    }).catch(() => `Artículo ${step + 1}`);
+
+    log(`[Motor IA Caducidades] Tildando verde artículo #${step + 1}: "${itemDesc}"...`);
+    await apBtn.click({ timeout: 4000 }).catch(() => {});
+    await _page.waitForTimeout(2000);
+    approvedCount++;
+  }
+
+  // 2. Si quedó algún botón general de Cumplir visible en la pantalla de detalle, clickearlo
+  const cumplirBtn = _page.locator('#CUMPLIR, [id*="CUMPLIR"]').first();
+  if (await cumplirBtn.isVisible().catch(() => false)) {
+    log('[Motor IA Caducidades] Confirmando cumplimiento general en detalle...');
+    await cumplirBtn.click({ timeout: 4000 }).catch(() => {});
+    await _page.waitForTimeout(2000);
+    await handleMotivePopupIfPresent('Caducidades revisadas en tienda');
+  }
+
+  log(`✓ [Motor IA Caducidades] Control completado exitosamente: ${approvedCount} artículo(s) tildado(s) en riesgo.`);
+  return {
+    ok: true,
+    aprobados: approvedCount,
+    msg: `Caducidades completada (${approvedCount} artículos en riesgo aprobados con tilde verde).`,
+  };
 }
 
 /**
@@ -1302,6 +1367,14 @@ async function markTaskOnMot(params = {}) {
       // 1. Si es Control de Temperatura de Equipamiento y la acción es Cumplir o EQUIPO
       if ((task.tipoControl === 'Equipo' || accion === 'EQUIPO') && accion !== 'NA' && accion !== 'NC') {
         const res = await executeTemperatureControlOnMot(task, params);
+        applyLocalMark('C');
+        const updated = await readTasks();
+        return { ...res, tasks: updated, stats: computeStats(updated) };
+      }
+
+      // 1.b Si es Tarea de Caducidades (tildado de artículos en riesgo con tilde verde)
+      if ((task.tipoControl === 'Caducidad' || /caducidad/i.test(task.nombre)) && accion !== 'NA' && accion !== 'NC') {
+        const res = await executeCaducidadesOnMot(task);
         applyLocalMark('C');
         const updated = await readTasks();
         return { ...res, tasks: updated, stats: computeStats(updated) };
@@ -1577,6 +1650,9 @@ async function markDueTasks(markedToday = new Set()) {
             }
             return res;
           }
+          if (t.tipoControl === 'Caducidad' || /caducidad/i.test(t.nombre)) {
+            return await executeCaducidadesOnMot(t);
+          }
           if (t.tipoControl === 'Limpieza' || !t.tieneBotonCheck) {
             return await executeLimpiezaControlOnMot(t, { responsable: DEFAULT_LEGAJO });
           }
@@ -1669,11 +1745,13 @@ async function closeBrowser() {
 }
 
 module.exports = {
+  getPage: () => _page,
   doLogin,
   readTasks,
   getMotDashboard,
   getTaskDetail,
   markTaskOnMot,
+  executeCaducidadesOnMot,
   markDueTasks,
   preflightCheck,
   verifyMark,

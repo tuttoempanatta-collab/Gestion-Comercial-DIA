@@ -1172,7 +1172,7 @@ export default function MotBotPage() {
                         </span>
 
                         {!st.done && task.horarioInicio && (
-                          ['Proveedor', 'Trazabilidad', 'Caducidad', 'Retiro', 'Almacen'].includes(task.tipoControl) ? (
+                          ['Proveedor', 'Trazabilidad', 'Retiro', 'Almacen'].includes(task.tipoControl) ? (
                             <span
                               title="Esta tarea requiere información externa en tienda (Remito, Lote, Vencimiento, Albarán o Retiro) y el Robot la omite siempre"
                               className="flex items-center gap-1 font-mono text-[11px] text-rose-300 bg-rose-950/40 px-2.5 py-1 rounded-lg border border-rose-500/30"

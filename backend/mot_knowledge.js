@@ -20,7 +20,7 @@ const RULES = {
   // Equipos esperados por categoría en Tienda 624
   EXPECTED_EQUIPMENT: { Murales: 12, Freezers: 7, 'Cámaras': 2 },
   // Tareas reservadas a la tienda (el robot nunca las marca)
-  OMITTED_PATTERNS: ['recep', 'trazabilidad', 'caducidad', 'retiro calidad'],
+  OMITTED_PATTERNS: ['recep', 'trazabilidad', 'retiro calidad'],
 };
 
 function readJson(file, fallback) {
