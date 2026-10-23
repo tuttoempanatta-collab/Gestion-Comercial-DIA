@@ -390,9 +390,11 @@ function shouldMark(startTimeStr, closeTimeStr) {
     return diff >= 0 && diff <= MARK_AFTER_START_MINUTES;
   }
   const nowMin    = nowMinutes();
-  const closeMin  = timeToMinutes(closeTimeStr);
   const targetMin = getTargetMarkMinutes(startTimeStr, closeTimeStr);
-  return nowMin >= targetMin && nowMin <= closeMin;
+  // Se marca si ya transcurrieron 10 minutos desde su horario de inicio:
+  // Si está dentro de la ventana se marca a tiempo ('C'); si por un reinicio o corte del servidor
+  // se pasó la hora de cierre, se marca igual ('FT' fuera de hora) para nunca dejar la tarea abandonada o sin cumplir.
+  return nowMin >= targetMin;
 }
 
 /**

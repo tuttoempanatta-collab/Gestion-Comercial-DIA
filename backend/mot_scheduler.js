@@ -196,6 +196,17 @@ function initAutoGuardian() {
       console.error('[MOT-Guardian] Error en chequeo de horario:', err.message);
     });
   }, 30 * 1000);
+
+  // Keep-alive anti-hibernación para Render: ping cada 4 min en franja operativa (05:30-22:40 hs)
+  const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://gestion-comercial-dia.onrender.com';
+  setInterval(() => {
+    if (isWithinOperatingWindow()) {
+      try {
+        const https = require('https');
+        https.get(`${RENDER_EXTERNAL_URL}/health`, (res) => {}).on('error', () => {});
+      } catch (_) {}
+    }
+  }, 4 * 60 * 1000);
 }
 
 // ─── Control del scheduler ────────────────────────────────────────────────────
