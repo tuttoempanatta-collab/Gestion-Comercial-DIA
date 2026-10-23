@@ -525,6 +525,39 @@ app.get('/api/mot-bot/status', (req, res) => {
   res.json(motScheduler.getStatus());
 });
 
+// GET lista completa de tareas, porcentajes y equipamiento desde MOT original
+app.get('/api/mot-bot/tasks', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
+    const data = await motScheduler.fetchDashboard(forceRefresh);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET detalle completo de una tarea (bloque, descripción, procedimientos) desde MOT.WebVerTarea
+app.get('/api/mot-bot/task-detail', async (req, res) => {
+  try {
+    const { row } = req.query;
+    if (!row) throw new Error('Se requiere el parámetro row (ej: 0001).');
+    const data = await motScheduler.fetchTaskDetail(String(row));
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST marcar una tarea en el MOT original desde nuestra web (C, NC, NA, LIMPIEZA, EQUIPO)
+app.post('/api/mot-bot/mark-task', async (req, res) => {
+  try {
+    const result = await motScheduler.markSingleTask(req.body || {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POST arrancar el scheduler
 app.post('/api/mot-bot/start', async (req, res) => {
   try {
@@ -555,7 +588,7 @@ app.post('/api/mot-bot/reset', async (req, res) => {
   }
 });
 
-// POST iniciar login manual (abre navegador visible)
+// POST iniciar login manual
 app.post('/api/mot-bot/login', async (req, res) => {
   try {
     const result = await motScheduler.doManualLogin();

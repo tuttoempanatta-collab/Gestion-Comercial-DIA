@@ -1,33 +1,43 @@
 /**
  * mot_scheduler.js
  * Scheduler que corre cada 60 segundos y llama al bot de marcación MOT.
- * Expone funciones para controlar el ciclo desde la API REST.
+ * Además expone las funciones de sincronización en vivo de tareas, detalle y marcación manual/directa.
  */
 
-const { doLogin, markDueTasks, closeBrowser, getLogs, isLoggedIn, sessionExists, captureDebugScreenshot } = require('./mot_bot');
+const {
+  doLogin,
+  getMotDashboard,
+  getTaskDetail,
+  markTaskOnMot,
+  markDueTasks,
+  closeBrowser,
+  getLogs,
+  isLoggedIn,
+  sessionExists,
+  captureDebugScreenshot
+} = require('./mot_bot');
 
 // ─── Estado del scheduler ─────────────────────────────────────────────────────
 let _interval    = null;
-let _status      = 'stopped';   // 'stopped' | 'running' | 'error'
+let _status      = 'stopped';   // 'stopped' | 'running' | 'error' | 'logging_in'
 let _lastError   = null;
 let _startedAt   = null;
 let _nextRunAt   = null;
-let _needsLogin  = false;       // true si hay que hacer el primer login manual
+let _needsLogin  = false;
 
 // Historial de marcaciones del día (se reinicia a medianoche)
 let _markedToday   = new Set();
 let _todayStr      = todayString();
-const _marcaciones = [];         // historial persistente en memoria
+const _marcaciones = [];
 
 function todayString() {
-  return new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+  return new Date().toISOString().slice(0, 10);
 }
 
-// Reiniciar el Set de marcaciones al cambiar de día
 function checkDayRollover() {
   const today = todayString();
   if (today !== _todayStr) {
-    _todayStr   = today;
+    _todayStr    = today;
     _markedToday = new Set();
     console.log('[MOT-Scheduler] Nuevo día detectado. Reseteando marcaciones.');
   }
@@ -41,15 +51,9 @@ async function runCycle() {
   _nextRunAt = new Date(Date.now() + 60 * 1000).toISOString();
 
   try {
-    // Si no está logueado, intentar restore de sesión
     if (!isLoggedIn()) {
-      if (!sessionExists()) {
-        console.log('[MOT-Scheduler] No hay sesión guardada. Intentando login automático headless...');
-        await doLogin(true); // Intento de login automático sin GUI
-      } else {
-        console.log('[MOT-Scheduler] Re-logueando con sesión guardada...');
-        await doLogin(true); // headless, usa storageState
-      }
+      console.log('[MOT-Scheduler] Iniciando/restaurando sesión MOT...');
+      await doLogin(true);
     }
 
     _needsLogin = false;
@@ -62,12 +66,10 @@ async function runCycle() {
 
     _status    = 'running';
     _lastError = null;
-
   } catch (err) {
     console.error('[MOT-Scheduler] Error en ciclo:', err.message);
     _lastError = err.message;
     _status    = 'error';
-    // Tomar screenshot para diagnóstico
     await captureDebugScreenshot('error').catch(() => {});
   }
 }
@@ -85,11 +87,7 @@ async function start() {
   _lastError = null;
 
   console.log('[MOT-Scheduler] Iniciando...');
-
-  // Primera ejecución inmediata
   await runCycle();
-
-  // Luego cada 60 segundos
   _interval = setInterval(runCycle, 60 * 1000);
 }
 
@@ -104,30 +102,65 @@ async function stop() {
   console.log('[MOT-Scheduler] Detenido.');
 }
 
-/**
- * Forzar un intento de login automático (headless: true).
- * Esto permite al usuario disparar el login desde la web de Vercel
- * sin depender de una ventana gráfica (que Render no soporta).
- */
 async function doManualLogin() {
   const isCloud = process.env.RENDER || process.env.NODE_ENV === 'production';
   console.log(`[MOT-Scheduler] Forzando login (headless: ${!!isCloud})...`);
   _status = 'logging_in';
   try {
-    await doLogin(!!isCloud); // true en Render (oculto), false local (visible)
+    await doLogin(true); // Usa el flujo automático con Google OAuth y sesión guardada
     _needsLogin = false;
-    _status     = 'running';
+    _status     = _interval ? 'running' : 'stopped';
     _lastError  = null;
-    console.log('[MOT-Scheduler] Login automático completado. Sesión guardada.');
-    // Arrancar ciclo automático si no está corriendo
-    if (!_interval) await start();
+    console.log('[MOT-Scheduler] Login completado. Sesión guardada.');
     return { ok: true };
   } catch (err) {
     _status    = 'error';
     _lastError = err.message;
-    console.error('[MOT-Scheduler] Error en login manual:', err.message);
+    console.error('[MOT-Scheduler] Error en login:', err.message);
     return { ok: false, error: err.message };
   }
+}
+
+/**
+ * Obtiene el dashboard completo de tareas del MOT original.
+ */
+async function fetchDashboard(forceRefresh = false) {
+  try {
+    const data = await getMotDashboard(forceRefresh);
+    _lastError = null;
+    return data;
+  } catch (err) {
+    _lastError = err.message;
+    throw err;
+  }
+}
+
+/**
+ * Obtiene el detalle de una tarea puntual en MOT.WebVerTarea.
+ */
+async function fetchTaskDetail(rowIndex) {
+  return await getTaskDetail(rowIndex);
+}
+
+/**
+ * Marca una tarea manualmente desde nuestra interfaz web y la registra también en el historial del día.
+ */
+async function markSingleTask(params) {
+  checkDayRollover();
+  const res = await markTaskOnMot(params);
+  const taskName = params.nombre || `Fila ${params.rowIndex}`;
+  const closeHour = params.horarioCierre || '';
+  if (taskName && closeHour) {
+    _markedToday.add(`${taskName}|${closeHour}`);
+  }
+  _marcaciones.unshift({
+    tarea: `${taskName} (${params.accion || 'C'})`,
+    horarioCierre: closeHour || 'Manual Web',
+    estado: 'marcado',
+    ts: new Date().toISOString(),
+  });
+  if (_marcaciones.length > 200) _marcaciones.splice(200);
+  return res;
 }
 
 function getStatus() {
@@ -140,14 +173,10 @@ function getStatus() {
     lastError:   _lastError,
     markedToday: Array.from(_markedToday),
     marcaciones: _marcaciones.slice(0, 50),
-    botLogs:     getLogs().slice(0, 30),
+    botLogs:     getLogs().slice(0, 50),
   };
 }
 
-/**
- * Reinicia completamente el bot a 0%.
- * Útil para limpiar el estado de error o el historial sin reiniciar el servidor.
- */
 async function reset() {
   console.log('[MOT-Scheduler] Reiniciando bot a 0%...');
   if (_interval) {
@@ -161,18 +190,23 @@ async function reset() {
   _needsLogin  = false;
   _markedToday = new Set();
   _marcaciones.length = 0;
-  
+
   const motBot = require('./mot_bot');
   if (motBot.clearLogs) motBot.clearLogs();
   if (motBot.closeBrowser) {
-    try {
-      await motBot.closeBrowser();
-    } catch (e) {
-      console.log('Error cerrando browser al reiniciar:', e);
-    }
+    try { await motBot.closeBrowser(); } catch (_) {}
   }
-  
+
   return { ok: true };
 }
 
-module.exports = { start, stop, reset, doManualLogin, getStatus };
+module.exports = {
+  start,
+  stop,
+  reset,
+  doManualLogin,
+  fetchDashboard,
+  fetchTaskDetail,
+  markSingleTask,
+  getStatus,
+};

@@ -1,38 +1,94 @@
 /**
  * mot_bot.js
- * Bot de automatización para mot.supermercadosdia.com.ar
- * Marca tareas con check ✓ exactamente 10 minutos antes del horario de cierre.
+ * Módulo integral de sincronización, lectura y marcación para mot.supermercadosdia.com.ar
+ * Basado en la ingeniería inversa del APK oficial (MOT.MenuLateral) y la web GeneXus 16 de MOT DIA.
+ * Permite:
+ *   1. Listar en vivo todas las tareas de la tienda (con sus GUIDs, horarios, estados, horas de cumplimiento y tipos de control).
+ *   2. Marcar cualquier tarea desde nuestra web (Cumplir 'C'/'FT', No Cumplir 'NC' con motivo, No Aplica 'NA',
+ *      Confirmación de Limpieza con legajo, y Control de Temperatura de Equipamiento) enviando la señal exacta al MOT original.
+ *   3. Ejecutar el ciclo automático del bot 10 minutos antes del horario de cierre de cada tarea.
  */
 
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
 
-const MOT_URL     = 'https://mot.supermercadosdia.com.ar/com.mot.login';
-const MOT_HOME    = 'https://mot.supermercadosdia.com.ar/com.mot.home';
-const MOT_TAREAS  = 'https://mot.supermercadosdia.com.ar/com.mot.mot.tareastienda';
+const MOT_BASE_URL = 'https://mot.supermercadosdia.com.ar/';
+const MOT_URL      = 'https://mot.supermercadosdia.com.ar/com.mot.login';
+const MOT_HOME     = 'https://mot.supermercadosdia.com.ar/com.mot.home';
+const MOT_TAREAS   = 'https://mot.supermercadosdia.com.ar/com.mot.mot.tareastienda';
 
 const SESSION_DIR  = path.join(__dirname, 'playwright_data', 'mot_session');
 const SESSION_FILE = path.join(SESSION_DIR, 'storage_state.json');
 
-const MOT_EMAIL    = process.env.MOT_EMAIL    || 't00624ar@tores.diagroup.com';
-const MOT_PASSWORD = process.env.MOT_PASSWORD || 't00624ar';
+const MOT_EMAIL      = process.env.MOT_EMAIL      || 't00624ar@stores.diagroup.com';
+const MOT_PASSWORD   = process.env.MOT_PASSWORD   || 'Tienda-/624';
+const DEFAULT_LEGAJO = process.env.MOT_LEGAJO     || '23250';
 
-// Umbral en minutos antes del cierre para marcar
+// Umbral en minutos antes del cierre para marcar automáticamente
 const MARK_BEFORE_MINUTES = 10;
 
+// Equipamiento oficial de Tienda 624 extraído de MOT.WebEquipo (W0093W0024vSDTCTGEQUIPAMIENTOS)
+const DEFAULT_EQUIPAMIENTO_TIENDA_624 = [
+  {
+    CtgCtrlTempGUID: '0a454807-a229-434e-9ab4-0f81c0b3f000',
+    CtgCtrlTempDesc: 'Murales',
+    Equipamiento: [
+      { EquipamientoGUID: '8888cc03-4a56-4f8c-b076-45166757a847', EquipamientoNomb: 'Mural 01', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '0ef4b18b-b64e-4dfa-98b6-5d9177ff3a41', EquipamientoNomb: 'Mural 02', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'd8c66335-75cf-40e4-b8de-9146f6985341', EquipamientoNomb: 'Mural 03', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'c583f33e-3045-4702-8e97-1025b3707818', EquipamientoNomb: 'Mural 04', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'e69501fe-61f1-4139-9a04-97e3273f1528', EquipamientoNomb: 'Mural 05', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '5e1e9690-2923-4683-92b4-aef485082e8e', EquipamientoNomb: 'Mural 06', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '9921780b-f201-4efe-97d4-e74208c3745c', EquipamientoNomb: 'Mural 07', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '6d3d1544-68e1-446a-819a-1182bb80f32c', EquipamientoNomb: 'Mural 08', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'c90671ae-455d-4b40-96c6-2e69d2a04e68', EquipamientoNomb: 'Mural 09', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '3ad1efcd-61d3-413b-8682-7b687d0b21df', EquipamientoNomb: 'Mural 4ta Gama 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '93fee0ab-6d54-4ddf-8fe2-6dea6f82cfa4', EquipamientoNomb: 'Mural Carne 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'd8516e84-9299-42e7-898b-2d9cd1f4e211', EquipamientoNomb: 'Mural Pollo 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+    ]
+  },
+  {
+    CtgCtrlTempGUID: 'b7d8bd26-441c-4e89-9706-30ec8be01f3a',
+    CtgCtrlTempDesc: 'Freezers',
+    Equipamiento: [
+      { EquipamientoGUID: '32342830-723d-450d-8d0b-812fa63e62e4', EquipamientoNomb: 'Freezer 01', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '941257b2-bf06-4991-a4e8-2923dea05036', EquipamientoNomb: 'Freezer 02', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'b215ba0c-ef39-4d65-915f-b5a5911079d0', EquipamientoNomb: 'Freezer 03', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '4bb84e5f-9c45-4010-bd9d-e2ca9e280b4a', EquipamientoNomb: 'Freezer 04', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'a27c6a8a-9d06-4d52-82a4-4d8ba79527da', EquipamientoNomb: 'Freezer 05', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '23ff38ff-92cc-4375-be4a-2c05d07ab359', EquipamientoNomb: 'Freezer Comercial', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: '8de7b451-4962-4127-80fd-1c9eee5ca349', EquipamientoNomb: 'Freezer Remonte/Punto Caliente 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+    ]
+  },
+  {
+    CtgCtrlTempGUID: 'c09b4e98-ec20-46ed-b188-53ace98afaa3',
+    CtgCtrlTempDesc: 'Cámaras',
+    Equipamiento: [
+      { EquipamientoGUID: '2e0c35a9-7560-4ad4-8056-f90f5459806d', EquipamientoNomb: 'Cámara 1', TemperaturaEquipo: '', TemperaturaProducto: '' },
+      { EquipamientoGUID: 'c5b0d55e-928c-4ff6-8909-c9f75f6e44c7', EquipamientoNomb: 'Cámara Carne', TemperaturaEquipo: '', TemperaturaProducto: '' },
+    ]
+  }
+];
+
 // ─── Estado interno del bot ───────────────────────────────────────────────────
-let _browser  = null;
-let _context  = null;
-let _page     = null;
-let _loggedIn = false;
+let _browser     = null;
+let _context     = null;
+let _page        = null;
+let _loggedIn    = false;
+let _tareasUrl   = null; // URL encriptada de Tareas extraída del menú lateral (vDVELOP_MENU_MPAGE)
+let _busy        = false;
+let _cachedTasks = [];
+let _lastSyncAt  = null;
+let _cachedDate  = '';
+let _tiendaId    = '624';
 
 const botLog = [];
 
 function log(msg, level = 'info') {
   const entry = { timestamp: new Date().toISOString(), msg, level };
   botLog.unshift(entry);
-  if (botLog.length > 100) botLog.pop();
+  if (botLog.length > 150) botLog.pop();
   console.log(`[MOT-Bot][${level.toUpperCase()}] ${msg}`);
 }
 
@@ -40,32 +96,124 @@ function getLogs()    { return botLog; }
 function clearLogs()  { botLog.length = 0; }
 function isLoggedIn() { return _loggedIn; }
 
-// ─── Helpers de tiempo ────────────────────────────────────────────────────────
+// Mutex simple para evitar que una acción manual y el scheduler usen _page a la vez
+async function withLock(fn) {
+  let waited = 0;
+  while (_busy && waited < 45000) {
+    await new Promise(r => setTimeout(r, 250));
+    waited += 250;
+  }
+  _busy = true;
+  try {
+    return await fn();
+  } finally {
+    _busy = false;
+  }
+}
 
-/**
- * Convierte "HH:MM" en minutos desde medianoche (número).
- */
+// ─── Helpers de tiempo y clasificación ────────────────────────────────────────
+
 function timeToMinutes(timeStr) {
+  if (!timeStr || !timeStr.includes(':')) return 0;
   const [h, m] = timeStr.split(':').map(Number);
   return h * 60 + m;
 }
 
-/**
- * Devuelve los minutos actuales desde medianoche (hora local AR, UTC-3).
- */
 function nowMinutes() {
   const now = new Date();
   return now.getHours() * 60 + now.getMinutes();
 }
 
-/**
- * Devuelve true si la tarea debe marcarse ahora
- * (cierre - ahora está entre 0 y MARK_BEFORE_MINUTES minutos, inclusive).
- */
 function shouldMark(closeTimeStr) {
   const closeMin = timeToMinutes(closeTimeStr);
   const diff     = closeMin - nowMinutes();
   return diff >= 0 && diff <= MARK_BEFORE_MINUTES;
+}
+
+/**
+ * Clasifica el tipo de control de la tarea igual que MaestroTareaDetalle en el APK/Web de MOT.
+ */
+function classifyTaskType(nombre, tieneBotonesDirectos) {
+  const n = (nombre || '').toLowerCase();
+  if (n.includes('control de temperatura')) return 'Equipo';
+  if (n.includes('temp recep almac')) return 'Almacen';
+  if (n.includes('temp recep gd')) return 'Proveedor';
+  if (n.includes('caducidad')) return 'Caducidad';
+  if (n.includes('retiro calidad')) return 'Retiro';
+  if (n.includes('trazabilidad')) return 'Trazabilidad';
+  if (n.includes('limpieza')) return 'Limpieza';
+  if (tieneBotonesDirectos) return 'Directa';
+  return 'Limpieza';
+}
+
+/**
+ * Calcula las estadísticas de cumplimiento idénticas a MOT.GetPorcentajesTiendas / WCGraficosCumplimiento.
+ */
+function computeStats(tasks) {
+  const total = tasks.length;
+  if (total === 0) {
+    return {
+      total: 0,
+      cumplidas: 0,
+      fueraDeHora: 0,
+      noCumplidas: 0,
+      noAplica: 0,
+      pendientes: 0,
+      vencidas: 0,
+      porcCumplidas: 0,
+      porcFueraDeHora: 0,
+      porcNoCumplidas: 0,
+      porcNoAplica: 0,
+      porcPendientes: 0,
+      porcVencidas: 0,
+    };
+  }
+
+  const nowMin = nowMinutes();
+  let cumplidas   = 0;
+  let fueraDeHora = 0;
+  let noCumplidas = 0;
+  let noAplica    = 0;
+  let pendientes  = 0;
+  let vencidas    = 0;
+
+  for (const t of tasks) {
+    const code = (t.estadoCode || '').toUpperCase();
+    const txt  = (t.estadoTexto || '').toLowerCase();
+    if (code === 'C' || txt.includes('a tiempo')) {
+      cumplidas++;
+    } else if (code === 'FT' || txt.includes('fuera de hora')) {
+      fueraDeHora++;
+    } else if (code === 'NC' || txt.includes('no cumplida')) {
+      noCumplidas++;
+    } else if (code === 'NA' || txt.includes('no aplica')) {
+      noAplica++;
+    } else {
+      const closeMin = timeToMinutes(t.horarioCierre);
+      if (closeMin > 0 && nowMin > closeMin) {
+        vencidas++;
+      } else {
+        pendientes++;
+      }
+    }
+  }
+
+  const pct = (n) => Math.round((n / total) * 100);
+  return {
+    total,
+    cumplidas,
+    fueraDeHora,
+    noCumplidas,
+    noAplica,
+    pendientes,
+    vencidas,
+    porcCumplidas: pct(cumplidas),
+    porcFueraDeHora: pct(fueraDeHora),
+    porcNoCumplidas: pct(noCumplidas),
+    porcNoAplica: pct(noAplica),
+    porcPendientes: pct(pendientes),
+    porcVencidas: pct(vencidas),
+  };
 }
 
 // ─── Sesión persistente ───────────────────────────────────────────────────────
@@ -90,422 +238,759 @@ function saveSessionData(jsonObj) {
   log('Archivo de sesión importado y guardado en disco.');
 }
 
-// ─── Login ────────────────────────────────────────────────────────────────────
-
-/**
- * Realiza el login completo con Google.
- * headless: false en la primera ejecución para que el usuario pueda
- * resolver CAPTCHAs y autenticación de dos factores.
- */
-async function doLogin(headless = true) {
-  log(`Iniciando login Google (headless=${headless})...`);
-
-  if (_browser) {
-    try { await _browser.close(); } catch (_) {}
-  }
-
-  ensureSessionDir();
-
-  const contextOptions = {
-    viewport: { width: 1280, height: 800 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    locale: 'es-AR',
-  };
-
-  if (sessionExists()) {
-    contextOptions.storageState = SESSION_FILE;
-    log('Restaurando sesión previa desde disco...');
-  }
-
-  // Si ya hay un browser abierto, reutilizarlo; de lo contrario lanzar uno nuevo.
-  if (!_browser) {
-    _browser = await chromium.launch({
-      headless,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--lang=es-AR'],
-      slowMo: headless ? 0 : 150,
-    });
-    _context = await _browser.newContext(contextOptions);
-  }
-  // Crear una nueva página (pestaña) para el login
-  _page = await _context.newPage();
-
-  // Navegar al sitio MOT de forma segura
+function isMotHost(urlStr) {
   try {
-    await _page.goto(MOT_URL, { waitUntil: 'commit', timeout: 45000 });
-  } catch (err) {
-    log(`Aviso: Goto lento o timeout. Intentando continuar...`);
-  }
-  await _page.waitForTimeout(4000); // Esperar que renderice el botón de Google
-
-  // Verificar si ya está logueado (redirigió a home)
-  if (_page.url().includes('com.mot.home') || _page.url().includes('com.mot.tareas')) {
-    _loggedIn = true;
-    log('Sesión restaurada correctamente. Ya logueado.');
-    await saveSession();
-    return true;
-  }
-
-  // ── Click en "Inicie con G+" ──────────────────────────────────────────────
-  log('Página de login detectada. Buscando botón Google...');
-  try {
-    // Selector específico para MOT DIA (#vIMAGEAUTHTYPE_0001) + genéricos de respaldo
-    const googleBtn = _page.locator('#vIMAGEAUTHTYPE_0001, img[src*="Google" i], img[src*="google" i], a:has-text("G+")').first();
-    await googleBtn.waitFor({ state: 'visible', timeout: 10000 });
-    await googleBtn.click();
-    log('Botón Google clickeado.');
-  } catch (e) {
-    // Intentar por xpath si no se encontró por selector
-    log('Selector genérico falló, intentando por href de oauth...', 'warn');
-    const links = await _page.$$('a');
-    let clicked = false;
-    for (const link of links) {
-      const href  = await link.getAttribute('href') || '';
-      const txt   = await link.innerText().catch(() => '');
-      const cls   = await link.getAttribute('class') || '';
-      if (href.includes('google') || href.includes('oauth') || txt.toLowerCase().includes('g') || cls.includes('google')) {
-        await link.click();
-        clicked = true;
-        log(`Enlace Google encontrado y clickeado (href: ${href.slice(0, 60)})`);
-        break;
-      }
-    }
-    if (!clicked) throw new Error('No se encontró el botón de login con Google.');
-  }
-
-  if (!headless) {
-    log('Modo visible: Por favor completa el login manualmente en la ventana de Chrome.');
-    log('Tienes hasta 3 minutos. Resolvé cualquier captcha o paso de seguridad...');
-    try {
-      await _page.waitForURL(/com\.mot\.(home|tareas)/, { timeout: 180000 });
-      _loggedIn = true;
-      log('Login manual completado con éxito.');
-      await saveSession();
-      return true;
-    } catch (e) {
-      throw new Error('Se agotó el tiempo de 3 minutos para el login manual.');
-    }
-  }
-
-  // ── Esperar redirección a Google OAuth o a Home directamente ──────────────
-  log('Esperando página de Google (o redirección automática)...');
-  try {
-    await _page.waitForURL(/accounts\.google\.com|com\.mot\.(home|tareas)/, { timeout: 15000 });
-  } catch(e) {
-    throw new Error(`Timeout esperando redirección. URL actual: ${_page.url()}`);
-  }
-  await _page.waitForTimeout(1500);
-
-  // Si nos redirigió directamente a la app de DIA, la sesión ya estaba activa en Google
-  if (_page.url().includes('com.mot.home') || _page.url().includes('com.mot.tareas')) {
-    _loggedIn = true;
-    log('Sesión auto-aprobada por Google. Ya logueado.');
-    await saveSession();
-    return true;
-  }
-
-  // Si llegamos acá, estamos en accounts.google.com
-  // ── Email ─────────────────────────────────────────────────────────────────
-  log('Ingresando email...');
-  const emailInput = _page.locator('input[type="email"]');
-  await emailInput.waitFor({ timeout: 10000 });
-  await emailInput.fill(MOT_EMAIL);
-  await _page.keyboard.press('Enter');
-  await _page.waitForTimeout(2000);
-
-  // ── Contraseña ────────────────────────────────────────────────────────────
-  log('Ingresando contraseña...');
-  const passInput = _page.locator('input[type="password"]').first();
-  await passInput.waitFor({ timeout: 10000 });
-  await passInput.fill(MOT_PASSWORD);
-  await _page.keyboard.press('Enter');
-
-  // ── Esperar redirección de vuelta al sitio MOT ────────────────────────────
-  log('Esperando redirección post-login...');
-  await _page.waitForURL(/mot\.supermercadosdia\.com\.ar/, { timeout: 30000 });
-  await _page.waitForTimeout(2000);
-
-  if (_page.url().includes('com.mot.home') || !_page.url().includes('login')) {
-    _loggedIn = true;
-    log('Login completado exitosamente.');
-    await saveSession();
-    return true;
-  }
-
-  throw new Error(`Login fallido. URL actual: ${_page.url()}`);
-}
-
-// ─── Lectura y marcación de tareas ────────────────────────────────────────────
-
-/**
- * Navega a la sección Tareas y lee todas las tareas disponibles.
- * Devuelve un array de { nombre, horarioInicio, horarioCierre, tieneBotonCheck, elemento }
- */
-async function readTasks() {
-  log('Navegando a sección Tareas...');
-  
-  // Si no estamos ya en la página de tareas, navegar
-  if (!_page.url().includes('tareastienda')) {
-    // Intentar hacer click en el menú "Tareas" de la barra lateral
-    try {
-      await _page.goto(MOT_TAREAS, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    } catch (e) {
-      log('Navegación directa a Tareas falló, intentando por menú...', 'warn');
-      // Como alternativa, buscar el enlace en el sidebar
-      await _page.click('text=Tareas', { timeout: 5000 });
-    }
-    await _page.waitForTimeout(3000);
-  }
-
-  // Esperar que aparezca la lista de tareas
-  await _page.waitForSelector('li, .task-item, [class*="tarea"], [class*="task"]', { timeout: 15000 }).catch(() => {
-    log('Selector de tareas no encontrado, intentando con estructura genérica...', 'warn');
-  });
-
-  // Capturar el HTML para analizar la estructura real
-  const tasks = await _page.evaluate((markBefore) => {
-    const results = [];
-
-    // Buscar todos los elementos que tengan un rango de tiempo (HH:MM - HH:MM)
-    const timePattern = /(\d{2}:\d{2})\s*[-–]\s*(\d{2}:\d{2})/;
-
-    // Recorrer todos los elementos del DOM buscando combinaciones nombre+horario+botón
-    const items = Array.from(document.querySelectorAll('li, .row, [class*="item"], [class*="tarea"], [class*="task"]'));
-
-    for (const item of items) {
-      const text  = item.innerText || '';
-      const match = text.match(timePattern);
-      if (!match) continue;
-
-      // Extraer horario
-      const horarioInicio  = match[1];
-      const horarioCierre  = match[2];
-
-      // Nombre: primera línea de texto o título rojo
-      const lines  = text.split('\n').map(l => l.trim()).filter(Boolean);
-      let nombre = lines[0] || 'Sin nombre';
-
-      // Identificar si es una tarea "cliqueable" por título (color rojo)
-      // Buscamos si hay un elemento con color rojo o un link
-      const redTitle = item.querySelector('[style*="color: rgb(204, 0, 0)"], [style*="color: red"], a');
-      const esCliqueable = !!redTitle || text.toLowerCase().includes('control');
-
-      // Verificar si tiene botón de check directo (circulares)
-      const hasDirectButtons = item.querySelectorAll('button, svg circle, [class*="check"]').length >= 2;
-
-      results.push({
-        nombre,
-        horarioInicio,
-        horarioCierre,
-        tieneBotonCheck: hasDirectButtons,
-        esCliqueable,
-        textoCompleto: text.slice(0, 100)
-      });
-    }
-
-    return results;
-  }, MARK_BEFORE_MINUTES);
-
-  log(`Tareas leídas: ${tasks.length} (cliqueables: ${tasks.filter(t => t.esCliqueable).length})`);
-  return tasks;
-}
-
-/**
- * Maneja específicamente la tarea de Control de Temperatura.
- */
-async function handleTemperatureTask(task) {
-  log(`Iniciando procesamiento de: ${task.nombre}`);
-  
-  try {
-    // 1. Click en el título para abrir la tarea
-    await _page.click(`text="${task.nombre}"`, { timeout: 10000 });
-    await _page.waitForLoadState('networkidle');
-    await _page.waitForTimeout(3000);
-    
-    // 2. Ingresar Legajo Responsable
-    const responsableInput = _page.locator('input[id*="RESPONSABLE"], input[placeholder*="Legajo"]');
-    await responsableInput.waitFor({ state: 'visible', timeout: 5000 });
-    await responsableInput.fill('23250');
-    
-    // 3. Click en Validar
-    await _page.click('input[value="Validar"], button:has-text("Validar")');
-    await _page.waitForTimeout(3000);
-    
-    log('Responsable validado. Procesando categorías...');
-
-    // 4. Identificar y procesar cada categoría (Murales, Freezers, Cámaras)
-    const categorias = ['Murales', 'Freezers', 'Cámaras'];
-    
-    for (const catName of categorias) {
-      log(`Buscando categoría: ${catName}...`);
-      const catHeader = _page.locator(`.Categoria, .card-header, div:has-text("${catName}")`).filter({ hasText: catName }).first();
-      
-      if (await catHeader.isVisible()) {
-        await catHeader.click().catch(() => {}); // Intentar expandir
-        await _page.waitForTimeout(1500);
-        
-        // 5. Llenar filas dentro de la categoría
-        const rows = await _page.locator('tr, .row-equipo, .grid-row').all();
-        log(`Encontradas ${rows.length} filas en ${catName}.`);
-        
-        for (const row of rows) {
-          const rowText = await row.innerText();
-          if (!rowText || rowText.includes('Temperatura')) continue; // Saltar cabeceras
-          
-          // Buscar inputs en esta fila
-          const inputs = await row.locator('input[type="text"], input[type="number"]').all();
-          if (inputs.length < 2) continue;
-          
-          // Generar valores aleatorios según reglas del usuario
-          const tempEqui = (Math.random() * (0.8 - 0.1) + 0.1).toFixed(1);
-          let tempProd  = (Math.random() * (3.0 - 1.0) + 1.0).toFixed(1);
-          
-          // Excepción Mural Pollo: no superar 1.8
-          if (rowText.toLowerCase().includes('pollo')) {
-            tempProd = (Math.random() * (1.7 - 0.5) + 0.5).toFixed(1);
-          }
-          
-          log(`  Llenando ${rowText.split('\n')[0].trim()}: Equi=${tempEqui}, Prod=${tempProd}`);
-          
-          await inputs[0].fill(tempEqui);
-          await _page.waitForTimeout(300);
-          await inputs[1].fill(tempProd);
-          await _page.waitForTimeout(300);
-          
-          // Click en el botón verde de confirmación (✓) de la fila
-          const checkBtn = row.locator('img[src*="check"], .btn-success, [class*="verde"], .fa-check').first();
-          if (await checkBtn.isVisible()) {
-            await checkBtn.click();
-            await _page.waitForTimeout(500);
-          }
-        }
-      }
-    }
-
-    log('Todas las temperaturas ingresadas. Finalizando tarea...');
-    
-    // 6. Click en Finalizar / Guardar (Botón final de la página)
-    const finishBtn = _page.locator('button:has-text("Finalizar"), button:has-text("Guardar"), input[value="Finalizar"]');
-    if (await finishBtn.isVisible()) {
-      await finishBtn.click();
-      await _page.waitForTimeout(3000);
-    }
-
-    log(`Tarea "${task.nombre}" completada exitosamente.`);
-    return true;
-  } catch (e) {
-    log(`Error procesando tarea de temperatura: ${e.message}`, 'error');
+    const u = new URL(urlStr);
+    return u.hostname.includes('supermercadosdia.com.ar') && !u.pathname.includes('login');
+  } catch (_) {
     return false;
   }
 }
 
-/**
- * Intenta marcar (click en ✓) las tareas que están dentro de la ventana de tiempo.
- * Devuelve un array de resultados de marcación.
- */
-async function markDueTasks(markedToday = new Set()) {
-  const results = [];
+// ─── Login ────────────────────────────────────────────────────────────────────
 
-  if (!_loggedIn || !_page) {
-    log('Bot no logueado, omitiendo ciclo.', 'warn');
-    return results;
+async function ensureBrowser(headless = true) {
+  ensureSessionDir();
+  if (!_browser || !_context || !_page || _page.isClosed()) {
+    if (_browser) {
+      try { await _browser.close(); } catch (_) {}
+    }
+    const contextOptions = {
+      viewport: { width: 1280, height: 800 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      locale: 'es-AR',
+    };
+    if (sessionExists()) {
+      contextOptions.storageState = SESSION_FILE;
+    }
+    _browser = await chromium.launch({
+      headless,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--lang=es-AR'
+      ],
+      slowMo: headless ? 0 : 100,
+    });
+    _context = await _browser.newContext(contextOptions);
+    _page = await _context.newPage();
+  }
+}
+
+/**
+ * Extrae el link encriptado de Tareas del menú lateral (vDVELOP_MENU_MPAGE o DOM a[href*="tareastienda"]).
+ */
+async function extractTareasUrlFromPage() {
+  if (!_page) return null;
+  const href = await _page.evaluate(() => {
+    const a = document.querySelector('a[href*="tareastienda"]');
+    if (a && a.getAttribute('href')) return a.getAttribute('href');
+    const gxInput = document.querySelector('input[name="GXState"]');
+    if (gxInput && gxInput.value) {
+      try {
+        const gx = JSON.parse(gxInput.value);
+        const menu = gx.vDVELOP_MENU_MPAGE || [];
+        for (const item of menu) {
+          if (item.link && item.link.includes('tareastienda')) return item.link;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }).catch(() => null);
+
+  if (href) {
+    _tareasUrl = href.startsWith('http') ? href : `${MOT_BASE_URL}${href.replace(/^\//, '')}`;
+  }
+  return _tareasUrl;
+}
+
+/**
+ * Realiza el login completo con Google OAuth en mot.supermercadosdia.com.ar.
+ */
+async function doLogin(headless = true) {
+  log(`Iniciando login MOT con cuenta Google (${MOT_EMAIL}, headless=${headless})...`);
+
+  if (_browser) {
+    try { await _browser.close(); } catch (_) {}
+    _browser = null;
+    _context = null;
+    _page    = null;
   }
 
-  // Verificar que la sesión sigue activa
+  await ensureBrowser(headless);
+
   try {
+    await _page.goto(MOT_HOME, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  } catch (err) {
+    log(`Aviso: Goto inicial lento (${err.message}). Continuando...`, 'warn');
+  }
+  await _page.waitForTimeout(2500);
+
+  // Verificar si la sesión guardada ya nos dejó en Home o Tareas
+  if (isMotHost(_page.url())) {
+    _loggedIn = true;
+    await extractTareasUrlFromPage();
+    log('Sesión MOT activa restaurada desde disco.');
+    await saveSession();
+    return true;
+  }
+
+  // Asegurar que estamos en la página de login
+  if (!_page.url().includes('com.mot.login')) {
+    await _page.goto(MOT_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await _page.waitForTimeout(2500);
+  }
+
+  // Seleccionar "Tienda" por si acaso y hacer click en "O inicie con G+" (#vIMAGEAUTHTYPE_0001)
+  await _page.selectOption('#vTIPO', '1').catch(() => {});
+  log('Clickeando botón Google (#vIMAGEAUTHTYPE_0001)...');
+  const googleBtn = _page.locator('#vIMAGEAUTHTYPE_0001, img[src*="GAMButtonGoogle" i], img[title*="MOT DIA" i]').first();
+  await googleBtn.waitFor({ state: 'visible', timeout: 12000 });
+  await googleBtn.click();
+  await _page.waitForTimeout(4000);
+
+  // Si Google redirigió automáticamente de vuelta a MOT sin pedir credenciales
+  if (isMotHost(_page.url())) {
+    _loggedIn = true;
+    await extractTareasUrlFromPage();
+    log('Sesión auto-aprobada por Google. Ya logueado en MOT.');
+    await saveSession();
+    return true;
+  }
+
+  // Paso 1 en Google: Selector de cuentas (Account Chooser) si aparece
+  const accountItem = _page.locator(`[data-identifier="${MOT_EMAIL}"], [data-identifier*="t00624ar"], [data-identifier]`).first();
+  if (await accountItem.isVisible().catch(() => false)) {
+    log(`Seleccionando cuenta ${MOT_EMAIL} en el selector de Google...`);
+    await accountItem.click();
+    await _page.waitForTimeout(3500);
+  }
+
+  // Paso 2 en Google: Campo de Email (si no estaba en el Account Chooser)
+  const emailInput = _page.locator('input[type="email"]').first();
+  if (await emailInput.isVisible().catch(() => false)) {
+    log(`Ingresando email ${MOT_EMAIL}...`);
+    await emailInput.fill(MOT_EMAIL);
+    await _page.keyboard.press('Enter');
+    await _page.waitForTimeout(3500);
+  }
+
+  // Paso 3 en Google: Campo de Contraseña
+  const passInput = _page.locator('input[type="password"], input[name="Passwd"]').first();
+  if (await passInput.isVisible().catch(() => false)) {
+    log('Ingresando contraseña de Google...');
+    await passInput.fill(MOT_PASSWORD);
+    await _page.keyboard.press('Enter');
+    await _page.waitForTimeout(6000);
+  }
+
+  // Paso 4 en Google: Pantalla de consentimiento OAuth (Continuar / Permitir)
+  if (_page.url().includes('accounts.google.com') && _page.url().includes('consent')) {
+    const allowBtn = _page.locator('button:has-text("Continuar"), button:has-text("Permitir"), button:has-text("Continue"), button:has-text("Allow")').first();
+    if (await allowBtn.isVisible().catch(() => false)) {
+      log('Aceptando pantalla de consentimiento OAuth...');
+      await allowBtn.click();
+      await _page.waitForTimeout(5000);
+    }
+  }
+
+  // Si estamos en modo visible y requiere algún paso extra
+  if (!headless && !isMotHost(_page.url())) {
+    log('Esperando que completes el login en la ventana de Chrome (máx 2 min)...');
+    await _page.waitForURL(u => isMotHost(u.toString()), { timeout: 120000 });
+  }
+
+  if (isMotHost(_page.url())) {
+    _loggedIn = true;
+    await extractTareasUrlFromPage();
+    log('Login en MOT completado exitosamente.');
+    await saveSession();
+    return true;
+  }
+
+  throw new Error(`No se pudo completar el login. URL actual: ${_page.url()}`);
+}
+
+/**
+ * Navega de forma segura a la página de Tareas usando el parámetro encriptado del menú lateral.
+ */
+async function navigateToTareasPage() {
+  await ensureBrowser(true);
+
+  if (!_loggedIn) {
+    await doLogin(true);
+  }
+
+  // Si no tenemos aún la URL encriptada de Tareas, obtenerla desde Home o desde la página actual
+  if (!_tareasUrl) {
+    await extractTareasUrlFromPage();
+  }
+  if (!_tareasUrl) {
+    await _page.goto(MOT_HOME, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await _page.waitForTimeout(2000);
     if (_page.url().includes('login')) {
-      log('Sesión expirada detectada, re-logueando...', 'warn');
       _loggedIn = false;
       await doLogin(true);
     }
-  } catch (e) {
-    log(`Error verificando sesión: ${e.message}`, 'error');
+    await extractTareasUrlFromPage();
+  }
+
+  const targetUrl = _tareasUrl || MOT_TAREAS;
+  await _page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  await _page.waitForTimeout(2500);
+
+  if (_page.url().includes('login')) {
+    log('Sesión expirada al abrir Tareas, re-logueando...', 'warn');
     _loggedIn = false;
-    return results;
+    await doLogin(true);
+    const retryUrl = _tareasUrl || MOT_TAREAS;
+    await _page.goto(retryUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await _page.waitForTimeout(2500);
   }
 
-  // Navegar/refrescar la página de tareas
-  try {
-    await _page.goto(MOT_TAREAS, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    await _page.waitForTimeout(2000);
-  } catch (e) {
-    log(`Error navegando a Tareas: ${e.message}`, 'error');
-    return results;
+  // Si cayó en "La tienda no posee tareas" porque faltaba el parámetro encriptado, recuperar desde sidebar
+  const hasNoData = await _page.locator('.GridNoDataText').isVisible().catch(() => false);
+  if (hasNoData) {
+    const freshHref = await extractTareasUrlFromPage();
+    if (freshHref && freshHref !== targetUrl) {
+      await _page.goto(freshHref, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await _page.waitForTimeout(2500);
+    }
   }
+}
 
-  // Leer tareas actuales
-  let tasks = [];
-  try {
-    tasks = await readTasks();
-  } catch (e) {
-    log(`Error leyendo tareas: ${e.message}`, 'error');
-    return results;
-  }
+// ─── Lectura completa de Tareas (idéntica a MOT.ListaDeTareasTienda) ─────────
 
-  // Evaluar cuáles deben marcarse
-  for (const task of tasks) {
-    if (!task.tieneBotonCheck && !task.esCliqueable) {
-      log(`Omitiendo tarea sin botón ni link: "${task.nombre}"`, 'info');
-      continue;
-    }
+/**
+ * Lee las 54 tareas de la tienda directamente desde el DOM y GXState de com.mot.mot.tareastienda.
+ */
+async function readTasks() {
+  await navigateToTareasPage();
 
-    // Generar clave única para evitar doble-marcación
-    const key = `${task.nombre}|${task.horarioCierre}`;
-    if (markedToday.has(key)) {
-      continue; // ya marcada hoy
-    }
-
-    if (!shouldMark(task.horarioCierre)) {
-      continue; // aún no es el momento
-    }
-
-    // ── Es el momento de marcar esta tarea ───────────────────────────────
-    log(`Marcando: "${task.nombre}" (cierre: ${task.horarioCierre})`);
+  const extracted = await _page.evaluate(() => {
+    const rows = [];
+    const gxInput = document.querySelector('input[name="GXState"]');
+    let gx = {};
     try {
-      let success = false;
-      let reason = '';
+      if (gxInput && gxInput.value) gx = JSON.parse(gxInput.value);
+    } catch (_) {}
 
-      if (task.nombre.toLowerCase().includes('temperatura') || task.nombre.toLowerCase().includes('temp')) {
-        success = await handleTemperatureTask(task);
-        if (!success) reason = 'Error en el proceso de temperatura';
-      } else {
-        // Marcación directa
-        const clickResult = await _page.evaluate((taskName) => {
-          const timePattern = /(\d{2}:\d{2})\s*[-–]\s*(\d{2}:\d{2})/;
-          const allItems = Array.from(document.querySelectorAll('li, .row, [class*="item"], [class*="tarea"]'));
-          for (const item of allItems) {
-            const text = item.innerText || '';
-            if (text.includes(taskName) && timePattern.test(text)) {
-              const buttons  = Array.from(item.querySelectorAll('button, a[role="button"], [class*="btn"], [class*="check"], img, svg'));
-              const checkBtn = buttons[0]; 
-              if (checkBtn) {
-                checkBtn.click();
-                return { clicked: true };
-              }
-              return { clicked: false, reason: 'No se encontró botón' };
+    const fecha     = gx.vDATE || gx.vTODAY || '';
+    const tiendaId  = String(gx.vTNDAMAEID || '624');
+    const titleText = document.querySelector('#TEXTBLOCKTITLE_MPAGE')?.innerText?.trim() || document.title || 'Tareas';
+
+    const domRows = Array.from(document.querySelectorAll('[id^="GridtareasContainerRow_"]'));
+    for (const rowEl of domRows) {
+      const r = rowEl.getAttribute('data-gxrow') || rowEl.id.replace('GridtareasContainerRow_', '');
+      const getSpan = (prefix) => document.getElementById(`span_${prefix}_${r}`)?.innerText?.trim() || '';
+
+      const nombreEl        = document.getElementById(`span_MAESTROTAREANOMBRE_${r}`);
+      const nombre          = nombreEl?.innerText?.trim() || '';
+      const linkEl          = nombreEl?.querySelector('a');
+      const detailLink      = linkEl ? linkEl.getAttribute('href') : '';
+      const horario         = getSpan('vHORA');
+      const [hIni, hFin]    = horario.split('-').map(s => (s || '').trim());
+
+      const btnsContainer   = document.getElementById(`TABLEBTNSCUMPLIMIENTO_${r}`);
+      const tieneBotones    = btnsContainer ? (btnsContainer.style.display !== 'none') : false;
+
+      const estadoTextoRaw  = getSpan('vTAREAESTADO');
+      const horaCumplRaw    = getSpan('ACTIVIDADTAREAHORACUMPLIMIENTO');
+      const maestroGUID     = getSpan('MAESTROTAREAGUID');
+      const actividadGUID   = getSpan('ACTIVIDADGUID');
+      const actividadFecha  = getSpan('ACTIVIDADFECHA');
+      const horaD           = getSpan('ACTIVIDADTAREAHORAD') || hIni || '';
+      const horaH           = getSpan('ACTIVIDADTAREAHORAH') || hFin || '';
+
+      // Determinar código de estado ('C', 'FT', 'NC', 'NA', '')
+      let estadoCode = '';
+      const estLower = estadoTextoRaw.toLowerCase();
+      if (estLower.includes('a tiempo')) estadoCode = 'C';
+      else if (estLower.includes('fuera de hora')) estadoCode = 'FT';
+      else if (estLower.includes('no cumplida')) estadoCode = 'NC';
+      else if (estLower.includes('no aplica')) estadoCode = 'NA';
+
+      rows.push({
+        rowIndex: r,
+        nombre,
+        horario,
+        horarioInicio: hIni || horaD,
+        horarioCierre: hFin || horaH,
+        maestroTareaGUID: maestroGUID,
+        actividadGUID,
+        tiendaId,
+        fecha: actividadFecha || fecha,
+        estadoCode,
+        estadoTexto: estadoTextoRaw || 'pendiente',
+        horaCumplimiento: (horaCumplRaw && horaCumplRaw !== '00:00') ? horaCumplRaw : '',
+        tieneBotonCheck: tieneBotones,
+        esCliqueable: !!detailLink,
+        detailLink,
+      });
+    }
+
+    return { fecha, tiendaId, titleText, rows };
+  });
+
+  const tasks = extracted.rows.map(t => ({
+    ...t,
+    tipoControl: classifyTaskType(t.nombre, t.tieneBotonCheck),
+  }));
+
+  _cachedTasks = tasks;
+  _lastSyncAt  = new Date().toISOString();
+  _cachedDate  = extracted.fecha || new Date().toLocaleDateString('es-AR');
+  _tiendaId    = extracted.tiendaId || '624';
+
+  log(`Tareas sincronizadas desde MOT: ${tasks.length} tareas (Tienda ${_tiendaId}, Fecha ${_cachedDate}).`);
+  return tasks;
+}
+
+/**
+ * Devuelve el dashboard completo de MOT (tareas, estadísticas, equipamiento, tienda).
+ */
+async function getMotDashboard(forceRefresh = false) {
+  return await withLock(async () => {
+    if (forceRefresh || _cachedTasks.length === 0) {
+      await readTasks();
+    }
+    const stats = computeStats(_cachedTasks);
+    return {
+      ok: true,
+      tienda: {
+        id: _tiendaId,
+        nombre: `Tienda 00${_tiendaId} AR`,
+        email: MOT_EMAIL,
+        legajoDefault: DEFAULT_LEGAJO,
+        fecha: _cachedDate,
+        horario: '07:00 a 22:30',
+      },
+      lastSyncAt: _lastSyncAt,
+      loggedIn: _loggedIn,
+      stats,
+      tasks: _cachedTasks,
+      equipamiento: DEFAULT_EQUIPAMIENTO_TIENDA_624,
+    };
+  });
+}
+
+// ─── Inspección de Detalle de una Tarea (MOT.WebVerTarea) ────────────────────
+
+async function getTaskDetail(rowIndex) {
+  return await withLock(async () => {
+    if (_cachedTasks.length === 0) {
+      await readTasks();
+    }
+    const task = _cachedTasks.find(t => t.rowIndex === rowIndex);
+    if (!task) throw new Error(`Tarea fila ${rowIndex} no encontrada.`);
+    if (!task.detailLink) {
+      return { ok: true, task, detail: null };
+    }
+
+    await ensureBrowser(true);
+    const fullUrl = task.detailLink.startsWith('http')
+      ? task.detailLink
+      : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+
+    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await _page.waitForTimeout(2000);
+
+    const detail = await _page.evaluate(() => {
+      const gxInput = document.querySelector('input[name="GXState"]');
+      let gx = {};
+      try { if (gxInput?.value) gx = JSON.parse(gxInput.value); } catch (_) {}
+
+      const bloqueMap = { A: 'Apertura', D: 'Diaria', C: 'Cierre', L: 'Logística', E: 'Entrada Personal', S: 'Salida Personal' };
+      let bloqueCode = 'D';
+      try {
+        const bv = JSON.parse(gx.MAESTROTAREABLOQUE_Values || '{}');
+        if (bv.s) bloqueCode = bv.s;
+      } catch (_) {}
+
+      const descripcionHorario = document.getElementById('span_vDESCRIPCIONHORARIO')?.innerText?.trim()
+        || document.getElementById('vDESCRIPCIONHORARIO')?.value || '';
+      const diasDeSemana = document.getElementById('span_vDIASDESEMANA')?.innerText?.trim()
+        || document.getElementById('vDIASDESEMANA')?.value || 'Todos';
+      const descripcion = document.getElementById('span_MAESTROTAREADESCRIPCION')?.innerText?.trim() || '';
+
+      // Procedimientos
+      const procedimientos = Array.from(document.querySelectorAll('[id^="span_W0087MAESTROTAREAPROCEDNOMBRE_"]'))
+        .map(el => el.innerText.trim())
+        .filter(Boolean);
+
+      // Equipamiento si existe
+      const equipamiento = gx.W0093W0024vSDTCTGEQUIPAMIENTOS || null;
+
+      return {
+        titulo: gx.DVPANEL_TABLECONTENT_Title || '',
+        bloque: bloqueMap[bloqueCode] || bloqueCode,
+        descripcionHorario,
+        diasDeSemana,
+        descripcion,
+        procedimientos,
+        detalleTipoServer: gx.W0093vDETALLETAREA || gx.MAESTROTAREADETALLE || '',
+        tieneBotonesCumplimiento: gx.TABLEBTNSCUMPLIMIENTO_Visible === 1 || gx.TABLEBTNSCUMPLIMIENTO_Visible === '1',
+        equipamiento,
+      };
+    });
+
+    return { ok: true, task, detail };
+  });
+}
+
+// ─── Marcación de Tareas en el MOT Original ──────────────────────────────────
+
+/**
+ * Completa una tarea de Control de Temperatura de Equipamiento (MOT.WebEquipo)
+ * ingresando el legajo responsable y las temperaturas de Murales, Freezers y Cámaras.
+ */
+async function executeTemperatureControlOnMot(task, options = {}) {
+  const legajo = options.responsable || DEFAULT_LEGAJO;
+  const customTemps = options.temperaturas || {}; // { [EquipamientoGUID]: { equipo, producto } }
+
+  log(`Iniciando Control de Temperatura en MOT para "${task.nombre}" (Legajo: ${legajo})...`);
+
+  const fullUrl = task.detailLink.startsWith('http')
+    ? task.detailLink
+    : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+
+  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  await _page.waitForTimeout(2500);
+
+  // 1. Validar Legajo Responsable (#W0093W0024vRESPONSABLE + #W0093W0024BTNVALIDARRESP)
+  const respInput = _page.locator('#W0093W0024vRESPONSABLE, input[id*="vRESPONSABLE"]').first();
+  await respInput.waitFor({ state: 'visible', timeout: 10000 });
+  await respInput.fill('');
+  await respInput.fill(String(legajo));
+
+  const valBtn = _page.locator('#W0093W0024BTNVALIDARRESP, input[value="Validar"]').first();
+  await valBtn.click();
+  await _page.waitForTimeout(2500);
+
+  // 2. Recorrer las 3 categorías (0001 = Murales, 0002 = Freezers, 0003 = Cámaras)
+  for (const catIdx of ['0001', '0002', '0003']) {
+    const catName = await _page.locator(`#span_W0093W0024SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC_${catIdx}`).innerText().catch(() => `Categoría ${catIdx}`);
+    log(`Expandiendo categoría: ${catName} (${catIdx})...`);
+
+    const arrow = _page.locator(`#span_W0093W0024vDETAILWEBCOMPONENT_${catIdx} i, #span_W0093W0024vDETAILWEBCOMPONENT_${catIdx}, #W0093W0024GridContainerRow_${catIdx}`).first();
+    if (await arrow.isVisible().catch(() => false)) {
+      await arrow.click();
+      await _page.waitForTimeout(2500);
+
+      // Buscar filas dentro del detalle expandido (WCD_W0093W0024GRID)
+      const detailInputs = await _page.evaluate((customMap) => {
+        const filled = [];
+        // Buscar todas las filas de equipamiento que tengan inputs editables visibles
+        const allInputs = Array.from(document.querySelectorAll('#W0093EQUIPO input[type="text"], #W0093EQUIPO input[type="number"]'))
+          .filter(el => !el.id.includes('vRESPONSABLE') && el.offsetParent !== null && !el.disabled);
+
+        return allInputs.map(i => i.id);
+      }, customTemps);
+
+      if (detailInputs.length >= 2) {
+        for (let i = 0; i + 1 < detailInputs.length; i += 2) {
+          const idEqui = detailInputs[i];
+          const idProd = detailInputs[i + 1];
+
+          // Determinar nombre del equipo cercano para aplicar regla de Pollo / Freezer
+          const rowContext = await _page.evaluate((inputId) => {
+            const el = document.getElementById(inputId);
+            const row = el?.closest('tr, .row, [data-gxrow]');
+            return row ? row.innerText : '';
+          }, idEqui);
+
+          let tempEqui = (Math.random() * (0.8 - 0.1) + 0.1).toFixed(1);
+          let tempProd = (Math.random() * (3.0 - 1.0) + 1.0).toFixed(1);
+
+          if (rowContext.toLowerCase().includes('pollo')) {
+            tempProd = (Math.random() * (1.7 - 0.5) + 0.5).toFixed(1);
+          } else if (rowContext.toLowerCase().includes('freezer') || catIdx === '0002') {
+            tempEqui = (-18.5 - Math.random() * 2.5).toFixed(1);
+            tempProd = (-18.0 - Math.random() * 2.0).toFixed(1);
+          }
+
+          // Si el usuario envió temperaturas personalizadas desde la web
+          for (const [guid, vals] of Object.entries(customTemps)) {
+            if (rowContext.includes(guid) || (vals.nombre && rowContext.includes(vals.nombre))) {
+              if (vals.equipo !== undefined && vals.equipo !== '') tempEqui = String(vals.equipo);
+              if (vals.producto !== undefined && vals.producto !== '') tempProd = String(vals.producto);
             }
           }
-          return { clicked: false, reason: 'Tarea no encontrada' };
-        }, task.nombre);
-        success = clickResult.clicked;
-        reason = clickResult.reason;
-      }
 
-      if (success) {
-        markedToday.add(key);
-        results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'marcado', ts: new Date().toISOString() });
-        log(`✓ Marcada exitosamente: "${task.nombre}"`);
-        await _page.waitForTimeout(1500);
-      } else {
-        results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: reason, ts: new Date().toISOString() });
-        log(`✗ Falló la marcación de "${task.nombre}": ${reason}`, 'warn');
+          await _page.fill(`#${idEqui}`, String(tempEqui)).catch(() => {});
+          await _page.fill(`#${idProd}`, String(tempProd)).catch(() => {});
+          await _page.waitForTimeout(200);
+        }
+
+        // Click en todos los botones de aprobar temperatura (icorrecto.png) visibles
+        const approveBtns = await _page.locator('#W0093EQUIPO img[src*="icorrecto"], #W0093EQUIPO [id*="APROBAR"]').all();
+        for (const btn of approveBtns) {
+          if (await btn.isVisible().catch(() => false)) {
+            await btn.click().catch(() => {});
+            await _page.waitForTimeout(400);
+          }
+        }
       }
-    } catch (e) {
-      results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: e.message, ts: new Date().toISOString() });
-      log(`Error crítico marcando "${task.nombre}": ${e.message}`, 'error');
     }
   }
 
-  return results;
+  log(`Control de Temperatura procesado para "${task.nombre}".`);
+  return { ok: true, msg: `Control de temperatura enviado con legajo ${legajo}.` };
+}
+
+/**
+ * Completa una tarea de Orden y Limpieza (MOT.WebLimpieza)
+ * ingresando el legajo en #W0093W0054vRESPONSABLE y presionando #W0093W0054BTNCONFIRMAR.
+ */
+async function executeLimpiezaControlOnMot(task, options = {}) {
+  const legajo = options.responsable || DEFAULT_LEGAJO;
+  log(`Confirmando tarea de Limpieza en MOT: "${task.nombre}" (Legajo: ${legajo})...`);
+
+  const fullUrl = task.detailLink.startsWith('http')
+    ? task.detailLink
+    : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+
+  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  await _page.waitForTimeout(2500);
+
+  const respInput = _page.locator('#W0093W0054vRESPONSABLE, input[id*="W0054vRESPONSABLE"]').first();
+  if (await respInput.isVisible().catch(() => false)) {
+    await respInput.fill('');
+    await respInput.fill(String(legajo));
+    await _page.waitForTimeout(300);
+
+    const confirmBtn = _page.locator('#W0093W0054BTNCONFIRMAR, input[id*="BTNCONFIRMAR"]').first();
+    await confirmBtn.click();
+    await _page.waitForTimeout(2500);
+    log(`✓ Tarea de Limpieza "${task.nombre}" confirmada con legajo ${legajo}.`);
+    return { ok: true, msg: `Limpieza confirmada con legajo ${legajo}.` };
+  }
+
+  // Fallback: si por alguna razón tiene botón CUMPLIR visible en el detalle
+  const cumplirDetail = _page.locator('#CUMPLIR').first();
+  if (await cumplirDetail.isVisible().catch(() => false)) {
+    await cumplirDetail.click();
+    await _page.waitForTimeout(2000);
+    await handleMotivePopupIfPresent(options.motivo || 'Realizado en tienda');
+    return { ok: true, msg: 'Tarea marcada como cumplida desde detalle.' };
+  }
+
+  throw new Error('No se encontró el campo de Responsable ni el botón de cumplimiento para esta tarea.');
+}
+
+/**
+ * Si MOT abre el popup com.mot.mot.wcingresarmotivoincumplimiento (para 'FT' fuera de hora o 'NC' no cumplida),
+ * ingresa el motivo y confirma automáticamente.
+ */
+async function handleMotivePopupIfPresent(motivoTexto = 'Operación de tienda') {
+  await _page.waitForTimeout(1200);
+  // En GeneXus WorkWithPlus los popups se abren dentro de un iframe (.gx-popup-content iframe o iframe[src*="wcingresarmotivoincumplimiento"])
+  const frames = _page.frames();
+  for (const frame of frames) {
+    if (frame.url().includes('wcingresarmotivoincumplimiento')) {
+      log(`Popup de motivo detectado (${frame.url()}). Completando motivo: "${motivoTexto}"...`);
+      const textInput = frame.locator('textarea, input[type="text"]').first();
+      if (await textInput.isVisible().catch(() => false)) {
+        await textInput.fill(motivoTexto);
+        await _page.waitForTimeout(300);
+      }
+      const confirmBtn = frame.locator('input[type="button"][value*="Confirmar" i], input[type="button"][value*="Aceptar" i], input[type="button"][value*="Guardar" i], input[id*="BTNENTER"], button:has-text("Confirmar")').first();
+      if (await confirmBtn.isVisible().catch(() => false)) {
+        await confirmBtn.click();
+        await _page.waitForTimeout(2000);
+        log('Motivo confirmado en popup MOT.');
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Marca cualquier tarea en el servidor MOT original (llamado tanto desde nuestra Web UI como desde el Scheduler).
+ * @param {Object} params
+ *   - rowIndex: '0001'..'0054' (opcional si se pasa maestroTareaGUID o nombre)
+ *   - maestroTareaGUID: GUID de la tarea (opcional)
+ *   - nombre: Nombre de la tarea (opcional)
+ *   - accion: 'C' (Cumplir) | 'NC' (No Cumplir) | 'NA' (No Aplica) | 'LIMPIEZA' | 'EQUIPO'
+ *   - motivo: Texto de motivo (para 'NC' o 'FT' fuera de hora)
+ *   - responsable: Legajo (default '23250')
+ *   - temperaturas: Mapa opcional de temperaturas
+ */
+async function markTaskOnMot(params = {}) {
+  return await withLock(async () => {
+    const tasks = await readTasks();
+    const task = tasks.find(t =>
+      (params.rowIndex && t.rowIndex === params.rowIndex) ||
+      (params.maestroTareaGUID && t.maestroTareaGUID === params.maestroTareaGUID) ||
+      (params.nombre && t.nombre === params.nombre)
+    );
+
+    if (!task) {
+      throw new Error(`No se encontró la tarea especificada en MOT (${params.nombre || params.rowIndex}).`);
+    }
+
+    const accion = (params.accion || 'C').toUpperCase();
+    const motivo = params.motivo || 'Operación en tienda';
+    log(`Ejecutando acción [${accion}] sobre tarea [${task.rowIndex}] "${task.nombre}" (tipo: ${task.tipoControl})...`);
+
+    // 1. Si es Control de Temperatura de Equipamiento y la acción es Cumplir o EQUIPO
+    if ((task.tipoControl === 'Equipo' || accion === 'EQUIPO') && accion !== 'NA' && accion !== 'NC') {
+      const res = await executeTemperatureControlOnMot(task, params);
+      const updated = await readTasks();
+      return { ...res, tasks: updated, stats: computeStats(updated) };
+    }
+
+    // 2. Si es Tarea de Limpieza y la acción es Cumplir o LIMPIEZA
+    if ((task.tipoControl === 'Limpieza' || accion === 'LIMPIEZA') && !task.tieneBotonCheck && accion !== 'NA' && accion !== 'NC') {
+      const res = await executeLimpiezaControlOnMot(task, params);
+      const updated = await readTasks();
+      return { ...res, tasks: updated, stats: computeStats(updated) };
+    }
+
+    // 3. Si tiene botones directos en la grilla principal (#CUMPLIR_XXXX, #NOCUMPLIR_XXXX, #NOAPLICA_XXXX)
+    const r = task.rowIndex;
+    let btnSelector = `#CUMPLIR_${r}`;
+    if (accion === 'NC') btnSelector = `#NOCUMPLIR_${r}`;
+    else if (accion === 'NA') btnSelector = `#NOAPLICA_${r}`;
+
+    const btn = _page.locator(btnSelector).first();
+    if (await btn.isVisible().catch(() => false)) {
+      await btn.click();
+      await _page.waitForTimeout(1800);
+      await handleMotivePopupIfPresent(motivo);
+      await _page.waitForTimeout(1500);
+      const updated = await readTasks();
+      log(`✓ Señal [${accion}] enviada en grilla para "${task.nombre}".`);
+      return {
+        ok: true,
+        msg: `Tarea "${task.nombre}" marcada en MOT.`,
+        tasks: updated,
+        stats: computeStats(updated),
+      };
+    }
+
+    // 4. Si los botones no estaban visibles en la grilla, abrir el detalle webvertarea y marcar adentro
+    if (task.detailLink) {
+      const fullUrl = task.detailLink.startsWith('http')
+        ? task.detailLink
+        : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+      await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await _page.waitForTimeout(2000);
+
+      let detailBtnSel = '#CUMPLIR';
+      if (accion === 'NC') detailBtnSel = '#NOCUMPLIR';
+      else if (accion === 'NA') detailBtnSel = '#NOAPLICA';
+
+      const detailBtn = _page.locator(detailBtnSel).first();
+      if (await detailBtn.isVisible().catch(() => false)) {
+        await detailBtn.click();
+        await _page.waitForTimeout(1800);
+        await handleMotivePopupIfPresent(motivo);
+        const updated = await readTasks();
+        return {
+          ok: true,
+          msg: `Tarea "${task.nombre}" marcada desde su panel de detalle en MOT.`,
+          tasks: updated,
+          stats: computeStats(updated),
+        };
+      }
+
+      // Si dentro del detalle es una tarea con Responsable (Limpieza)
+      if (await _page.locator('#W0093W0054vRESPONSABLE').isVisible().catch(() => false)) {
+        const res = await executeLimpiezaControlOnMot(task, params);
+        const updated = await readTasks();
+        return { ...res, tasks: updated, stats: computeStats(updated) };
+      }
+    }
+
+    throw new Error(`La tarea "${task.nombre}" (${task.tipoControl}) ya fue marcada o requiere carga manual de datos específicos en tienda.`);
+  });
+}
+
+// ─── Ciclo automático del Bot (10 min antes del cierre) ──────────────────────
+
+async function markDueTasks(markedToday = new Set()) {
+  return await withLock(async () => {
+    const results = [];
+
+    if (!_loggedIn || !_page) {
+      log('Bot no logueado, iniciando sesión automática...', 'warn');
+      await doLogin(true);
+    }
+
+    let tasks = [];
+    try {
+      tasks = await readTasks();
+    } catch (e) {
+      log(`Error leyendo tareas en ciclo automático: ${e.message}`, 'error');
+      return results;
+    }
+
+    for (const task of tasks) {
+      // Si ya tiene un estado cumplido/cerrado en el servidor MOT, registrarlo y omitir
+      if (task.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(task.estadoCode)) {
+        continue;
+      }
+
+      const key = `${task.nombre}|${task.horarioCierre}`;
+      if (markedToday.has(key)) continue;
+
+      if (!shouldMark(task.horarioCierre)) continue;
+
+      // Solo auto-marcar tareas Directas, Limpieza y Equipo
+      if (!['Directa', 'Limpieza', 'Equipo'].includes(task.tipoControl)) {
+        continue;
+      }
+
+      log(`[Auto-Bot] Marcando 10m antes del cierre: "${task.nombre}" (cierre: ${task.horarioCierre}, tipo: ${task.tipoControl})`);
+      try {
+        let success = false;
+        let reason  = '';
+
+        if (task.tipoControl === 'Equipo') {
+          await executeTemperatureControlOnMot(task, { responsable: DEFAULT_LEGAJO });
+          success = true;
+        } else if (task.tipoControl === 'Limpieza' && !task.tieneBotonCheck) {
+          await executeLimpiezaControlOnMot(task, { responsable: DEFAULT_LEGAJO });
+          success = true;
+        } else {
+          // Volver a asegurarnos de estar en la grilla de tareas si salimos a un detalle
+          if (!_page.url().includes('tareastienda')) {
+            await navigateToTareasPage();
+          }
+          const btn = _page.locator(`#CUMPLIR_${task.rowIndex}`).first();
+          if (await btn.isVisible().catch(() => false)) {
+            await btn.click();
+            await _page.waitForTimeout(1800);
+            await handleMotivePopupIfPresent('Cumplimiento en tienda');
+            success = true;
+          } else {
+            reason = 'Botón Cumplir no visible en grilla';
+          }
+        }
+
+        if (success) {
+          markedToday.add(key);
+          results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'marcado', ts: new Date().toISOString() });
+          log(`✓ [Auto-Bot] Marcada exitosamente: "${task.nombre}"`);
+        } else {
+          results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: reason, ts: new Date().toISOString() });
+          log(`✗ [Auto-Bot] No se pudo marcar "${task.nombre}": ${reason}`, 'warn');
+        }
+      } catch (e) {
+        results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: e.message, ts: new Date().toISOString() });
+        log(`Error marcando "${task.nombre}": ${e.message}`, 'error');
+      }
+    }
+
+    if (results.length > 0) {
+      await readTasks().catch(() => {});
+    }
+
+    return results;
+  });
 }
 
 // ─── Captura de pantalla para debug ──────────────────────────────────────────
@@ -535,6 +1020,10 @@ async function closeBrowser() {
 
 module.exports = {
   doLogin,
+  readTasks,
+  getMotDashboard,
+  getTaskDetail,
+  markTaskOnMot,
   markDueTasks,
   closeBrowser,
   captureDebugScreenshot,
@@ -544,4 +1033,6 @@ module.exports = {
   sessionExists,
   saveSessionData,
   MARK_BEFORE_MINUTES,
+  DEFAULT_LEGAJO,
+  DEFAULT_EQUIPAMIENTO_TIENDA_624,
 };
