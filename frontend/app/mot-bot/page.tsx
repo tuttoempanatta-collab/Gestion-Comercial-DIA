@@ -306,16 +306,21 @@ export default function MotBotPage() {
   }, [])
 
   // Inicializar valores seguros de temperatura cuando se carga el equipamiento
+  // Reglas de rango:
+  // - Mural de Pollo: 0 a 1.9 °C
+  // - Demás Murales: 0 a 4.0 °C
+  // - Freezers: -18 a -22 °C
   const generateSafeTemperatures = useCallback((cats: EquipamientoCategoria[]) => {
     const next: Record<string, { equipo: string; producto: string; nombre: string }> = {}
     for (const cat of cats) {
       const isFreezer = cat.CtgCtrlTempDesc.toLowerCase().includes('freezer')
       for (const item of cat.Equipamiento) {
         const isPollo = item.EquipamientoNomb.toLowerCase().includes('pollo')
-        let eq = (Math.random() * (0.8 - 0.1) + 0.1).toFixed(1)
-        let pr = (Math.random() * (3.0 - 1.0) + 1.0).toFixed(1)
+        let eq = (Math.random() * (3.5 - 0.2) + 0.2).toFixed(1)
+        let pr = (Math.random() * (3.8 - 0.5) + 0.5).toFixed(1)
         if (isPollo) {
-          pr = (Math.random() * (1.7 - 0.5) + 0.5).toFixed(1)
+          eq = (Math.random() * (1.6 - 0.1) + 0.1).toFixed(1)
+          pr = (Math.random() * (1.9 - 0.2) + 0.2).toFixed(1)
         } else if (isFreezer) {
           eq = (-18.5 - Math.random() * 2.5).toFixed(1)
           pr = (-18.0 - Math.random() * 2.0).toFixed(1)
@@ -970,8 +975,14 @@ export default function MotBotPage() {
                         <div key={eq.EquipamientoGUID} className="p-3 flex items-center justify-between gap-2 hover:bg-slate-900/40">
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-white truncate">{eq.EquipamientoNomb}</p>
-                            {eq.EquipamientoNomb.toLowerCase().includes('pollo') && (
-                              <span className="text-[10px] text-amber-400">Máx prod: 1.8°C</span>
+                            {eq.EquipamientoNomb.toLowerCase().includes('pollo') ? (
+                              <span className="text-[10px] text-amber-400 font-medium">Rango: 0 a 1.9°C</span>
+                            ) : cat.CtgCtrlTempDesc.toLowerCase().includes('mural') ? (
+                              <span className="text-[10px] text-sky-400/80">Rango: 0 a 4°C</span>
+                            ) : cat.CtgCtrlTempDesc.toLowerCase().includes('freezer') ? (
+                              <span className="text-[10px] text-indigo-400/80">Rango: -18 a -22°C</span>
+                            ) : (
+                              <span className="text-[10px] text-emerald-400/80">Rango: 0 a 4°C</span>
                             )}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">

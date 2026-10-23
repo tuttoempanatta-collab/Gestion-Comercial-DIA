@@ -700,11 +700,16 @@ async function executeTemperatureControlOnMot(task, options = {}) {
             return row ? row.innerText : '';
           }, idEqui);
 
-          let tempEqui = (Math.random() * (0.8 - 0.1) + 0.1).toFixed(1);
-          let tempProd = (Math.random() * (3.0 - 1.0) + 1.0).toFixed(1);
+          // Rango oficial:
+          // - Mural Pollo: 0.0°C a 1.9°C
+          // - Demás Murales: 0.0°C a 4.0°C
+          // - Freezers: -18.0°C a -22.0°C
+          let tempEqui = (Math.random() * (3.5 - 0.2) + 0.2).toFixed(1);
+          let tempProd = (Math.random() * (3.8 - 0.5) + 0.5).toFixed(1);
 
           if (rowContext.toLowerCase().includes('pollo')) {
-            tempProd = (Math.random() * (1.7 - 0.5) + 0.5).toFixed(1);
+            tempEqui = (Math.random() * (1.6 - 0.1) + 0.1).toFixed(1);
+            tempProd = (Math.random() * (1.9 - 0.2) + 0.2).toFixed(1);
           } else if (rowContext.toLowerCase().includes('freezer') || catIdx === '0002') {
             tempEqui = (-18.5 - Math.random() * 2.5).toFixed(1);
             tempProd = (-18.0 - Math.random() * 2.0).toFixed(1);
