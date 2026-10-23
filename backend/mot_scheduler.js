@@ -1,58 +1,107 @@
 /**
  * mot_scheduler.js
- * Scheduler que corre cada 60 segundos y llama al bot de marcación MOT.
- * Además expone las funciones de sincronización en vivo de tareas, detalle y marcación manual/directa.
+ * Scheduler autónomo 24/7 que despierta automáticamente al robot todos los días a las 05:30 AM (Hora Argentina),
+ * queda en espera activa marcando cada tarea 10 minutos después de su horario de inicio,
+ * y se apaga/entra en reposo nocturno automáticamente a las 22:40 hs hasta las 05:30 AM del día siguiente.
+ * No requiere dejar abierta la página web ni el APK.
  */
 
 const {
   doLogin,
+  readTasks,
   getMotDashboard,
   getTaskDetail,
   markTaskOnMot,
   markDueTasks,
   closeBrowser,
+  log,
   getLogs,
   isLoggedIn,
   sessionExists,
+  getNowArgentina,
   captureDebugScreenshot
 } = require('./mot_bot');
 
-// ─── Estado del scheduler ─────────────────────────────────────────────────────
-let _interval    = null;
-let _status      = 'stopped';   // 'stopped' | 'running' | 'error' | 'logging_in'
-let _lastError   = null;
-let _startedAt   = null;
-let _nextRunAt   = null;
-let _needsLogin  = false;
+// ─── Configuración de Horario Automático Diario (Hora Argentina UTC-3) ───────
+const DAILY_WAKE_TIME  = '05:30'; // Se despierta solo todos los días a las 05:30 AM
+const DAILY_SLEEP_TIME = '22:40'; // Cierra y descansa a las 22:40 hs (última tarea cierra 22:35)
+const WAKE_MINUTES     = 5 * 60 + 30;   // 330 min (05:30)
+const SLEEP_MINUTES    = 22 * 60 + 40;  // 1360 min (22:40)
 
-// Historial de marcaciones del día (se reinicia a medianoche)
+// ─── Estado del scheduler ─────────────────────────────────────────────────────
+let _interval            = null;
+let _guardianInterval    = null;
+let _status              = 'sleeping'; // 'running' | 'sleeping' | 'stopped' | 'error' | 'logging_in'
+let _lastError           = null;
+let _startedAt           = null;
+let _nextRunAt           = null;
+let _needsLogin          = false;
+let _autoScheduleEnabled = true;       // Guardia automática 05:30 - 22:40 hs activa por defecto
+let _pausedManuallyToday = false;      // Si el usuario pausó manualmente dentro de la franja 05:30-22:40
+let _forcedNightRun      = false;      // Si el usuario forzó encendido manual fuera de horario (22:40-05:30)
+let _isRunningCycle      = false;
+
+// Historial de marcaciones del día (se reinicia a medianoche de Argentina)
 let _markedToday   = new Set();
-let _todayStr      = todayString();
+let _todayStr      = todayStringArg();
 const _marcaciones = [];
 
-function todayString() {
-  return new Date().toISOString().slice(0, 10);
+function todayStringArg() {
+  const nowArg = getNowArgentina();
+  const yyyy = nowArg.getFullYear();
+  const mm   = String(nowArg.getMonth() + 1).padStart(2, '0');
+  const dd   = String(nowArg.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getArgentinaHHMM() {
+  const nowArg = getNowArgentina();
+  const hh = String(nowArg.getHours()).padStart(2, '0');
+  const mm = String(nowArg.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function getArgentinaMinutes() {
+  const nowArg = getNowArgentina();
+  return nowArg.getHours() * 60 + nowArg.getMinutes();
+}
+
+function isWithinOperatingWindow() {
+  const mins = getArgentinaMinutes();
+  return mins >= WAKE_MINUTES && mins < SLEEP_MINUTES;
 }
 
 function checkDayRollover() {
-  const today = todayString();
+  const today = todayStringArg();
   if (today !== _todayStr) {
-    _todayStr    = today;
-    _markedToday = new Set();
-    console.log('[MOT-Scheduler] Nuevo día detectado. Reseteando marcaciones.');
+    _todayStr            = today;
+    _markedToday         = new Set();
+    _pausedManuallyToday = false;
+    log(`📅 Nuevo día detectado en Argentina (${today}). Contador de marcaciones diarias reiniciado.`);
   }
 }
 
-// ─── Ciclo principal ──────────────────────────────────────────────────────────
+// ─── Ciclo principal (corre cada 60s mientras está despierto) ─────────────────
 
 async function runCycle() {
-  checkDayRollover();
-  console.log('[MOT-Scheduler] Ejecutando ciclo...');
-  _nextRunAt = new Date(Date.now() + 60 * 1000).toISOString();
+  if (_isRunningCycle) return;
+  _isRunningCycle = true;
 
   try {
+    checkDayRollover();
+
+    // Verificar si llegó la hora de cierre diario (22:40 hs) y no fue forzado en horario nocturno
+    if (_autoScheduleEnabled && !isWithinOperatingWindow() && !_forcedNightRun) {
+      await enterNightSleep('Horario de cierre diario alcanzado (22:40 hs).');
+      return;
+    }
+
+    const argTime = getArgentinaHHMM();
+    console.log(`[MOT-Scheduler] Ejecutando ciclo (${argTime} hs AR)...`);
+    _nextRunAt = new Date(Date.now() + 60 * 1000).toISOString();
+
     if (!isLoggedIn()) {
-      console.log('[MOT-Scheduler] Iniciando/restaurando sesión MOT...');
+      log(`🌅 [Auto-Bot] Conectando sesión automática en MOT (${argTime} hs)...`);
       await doLogin(true);
     }
 
@@ -71,35 +120,126 @@ async function runCycle() {
     _lastError = err.message;
     _status    = 'error';
     await captureDebugScreenshot('error').catch(() => {});
+  } finally {
+    _isRunningCycle = false;
   }
+}
+
+// ─── Transición a Reposo Nocturno (22:40 hs a 05:30 hs) ──────────────────────
+
+async function enterNightSleep(reason = 'Reposo nocturno automático') {
+  if (_interval) {
+    clearInterval(_interval);
+    _interval = null;
+  }
+  _forcedNightRun = false;
+  _nextRunAt      = null;
+  _status         = 'sleeping';
+  await closeBrowser();
+  log(`🌙 [Auto-Sleep] ${reason} Robot en reposo nocturno. Se despertará solo a las ${DAILY_WAKE_TIME} hs.`);
+}
+
+// ─── Demonio Guardián 24/7 (Verifica horario 05:30 AM y 22:40 HS) ────────────
+
+async function checkGuardianSchedule() {
+  checkDayRollover();
+  if (!_autoScheduleEnabled) return;
+
+  const inWindow = isWithinOperatingWindow();
+  const argTime  = getArgentinaHHMM();
+
+  if (inWindow) {
+    // Estamos entre las 05:30 y las 22:40 hs
+    _forcedNightRun = false;
+    if (!_interval && !_pausedManuallyToday && !_isRunningCycle) {
+      log(`🌅 [Auto-Despertar ${DAILY_WAKE_TIME} hs] Hora Argentina ${argTime}. Despertando robot automáticamente en espera activa hasta las ${DAILY_SLEEP_TIME} hs.`);
+      await start({ autoWoken: true });
+    }
+  } else {
+    // Estamos fuera de horario (>= 22:40 hs o < 05:30 hs)
+    _pausedManuallyToday = false;
+    if (_interval && !_forcedNightRun) {
+      await enterNightSleep(`Hora de cierre alcanzada (${argTime} hs AR >= ${DAILY_SLEEP_TIME} hs).`);
+    } else if (!_interval && _status === 'stopped') {
+      _status = 'sleeping';
+    }
+  }
+}
+
+function initAutoGuardian() {
+  if (_guardianInterval) return;
+  const argTime  = getArgentinaHHMM();
+  const inWindow = isWithinOperatingWindow();
+
+  log(`⏰ Guardián Automático MOT configurado: Despierta ${DAILY_WAKE_TIME} hs | Cierra ${DAILY_SLEEP_TIME} hs (Hora actual AR: ${argTime} hs).`);
+
+  if (inWindow) {
+    start({ autoWoken: true }).catch(err => {
+      console.error('[MOT-Guardian] Error al auto-iniciar en franja operativa:', err.message);
+    });
+  } else {
+    _status = 'sleeping';
+    log(`🌙 Horario nocturno detectado (${argTime} hs AR). El robot permanece en reposo y se despertará solo a las ${DAILY_WAKE_TIME} hs.`);
+  }
+
+  _guardianInterval = setInterval(() => {
+    checkGuardianSchedule().catch(err => {
+      console.error('[MOT-Guardian] Error en chequeo de horario:', err.message);
+    });
+  }, 30 * 1000);
 }
 
 // ─── Control del scheduler ────────────────────────────────────────────────────
 
-async function start() {
+async function start(options = {}) {
+  const { autoWoken = false, manual = false } = options;
+
   if (_interval) {
     console.log('[MOT-Scheduler] Ya está corriendo.');
     return;
+  }
+
+  if (manual) {
+    _pausedManuallyToday = false;
+    if (!isWithinOperatingWindow()) {
+      _forcedNightRun = true;
+      log(`⚡ Inicio manual activado fuera de franja horaria (${getArgentinaHHMM()} hs AR).`);
+    } else {
+      log(`▶️ Robot activado manualmente (${getArgentinaHHMM()} hs AR). Operará hasta las ${DAILY_SLEEP_TIME} hs.`);
+    }
   }
 
   _status    = 'running';
   _startedAt = new Date().toISOString();
   _lastError = null;
 
-  console.log('[MOT-Scheduler] Iniciando...');
+  console.log(`[MOT-Scheduler] Iniciando (${autoWoken ? 'Auto-Despertar 05:30' : 'Manual'})...`);
   await runCycle();
   _interval = setInterval(runCycle, 60 * 1000);
 }
 
-async function stop() {
+async function stop(options = {}) {
+  const { manual = true } = options;
   if (_interval) {
     clearInterval(_interval);
     _interval = null;
   }
-  _status    = 'stopped';
-  _nextRunAt = null;
+  _forcedNightRun = false;
+  _nextRunAt      = null;
+
+  if (manual && isWithinOperatingWindow()) {
+    _pausedManuallyToday = true;
+    _status = 'stopped';
+    log(`⏸️ Robot pausado manualmente a las ${getArgentinaHHMM()} hs. Volverá a despertar mañana a las ${DAILY_WAKE_TIME} hs (o al reactivarlo).`);
+  } else if (!isWithinOperatingWindow() && _autoScheduleEnabled) {
+    _status = 'sleeping';
+    log(`🌙 Robot en modo reposo nocturno. Despertará automáticamente a las ${DAILY_WAKE_TIME} hs.`);
+  } else {
+    _status = 'stopped';
+    log('⏹️ Robot detenido.');
+  }
+
   await closeBrowser();
-  console.log('[MOT-Scheduler] Detenido.');
 }
 
 async function doManualLogin() {
@@ -107,9 +247,9 @@ async function doManualLogin() {
   console.log(`[MOT-Scheduler] Forzando login (headless: ${!!isCloud})...`);
   _status = 'logging_in';
   try {
-    await doLogin(true); // Usa el flujo automático con Google OAuth y sesión guardada
+    await doLogin(true);
     _needsLogin = false;
-    _status     = _interval ? 'running' : 'stopped';
+    _status     = _interval ? 'running' : (isWithinOperatingWindow() ? 'stopped' : 'sleeping');
     _lastError  = null;
     console.log('[MOT-Scheduler] Login completado. Sesión guardada.');
     return { ok: true };
@@ -151,7 +291,7 @@ async function markSingleTask(params) {
   const taskName = params.nombre || `Fila ${params.rowIndex}`;
   const closeHour = params.horarioCierre || '';
   if (taskName && closeHour) {
-    _markedToday.add(`${taskName}|${closeHour}`);
+    _markedToday.add(`${taskName}|${params.horarioInicio || ''}-${closeHour}`);
   }
   _marcaciones.unshift({
     tarea: `${taskName} (${params.accion || 'C'})`,
@@ -165,15 +305,21 @@ async function markSingleTask(params) {
 
 function getStatus() {
   return {
-    status:      _status,
-    needsLogin:  _needsLogin,
-    loggedIn:    isLoggedIn(),
-    startedAt:   _startedAt,
-    nextRunAt:   _nextRunAt,
-    lastError:   _lastError,
-    markedToday: Array.from(_markedToday),
-    marcaciones: _marcaciones.slice(0, 50),
-    botLogs:     getLogs().slice(0, 50),
+    status:               _status,
+    needsLogin:           _needsLogin,
+    loggedIn:             isLoggedIn(),
+    startedAt:            _startedAt,
+    nextRunAt:            _nextRunAt,
+    lastError:            _lastError,
+    autoScheduleEnabled:  _autoScheduleEnabled,
+    wakeTime:             DAILY_WAKE_TIME,
+    sleepTime:            DAILY_SLEEP_TIME,
+    serverTimeArg:        getArgentinaHHMM(),
+    isWithinActiveHours:  isWithinOperatingWindow(),
+    pausedManuallyToday:  _pausedManuallyToday,
+    markedToday:          Array.from(_markedToday),
+    marcaciones:          _marcaciones.slice(0, 50),
+    botLogs:              getLogs().slice(0, 50),
   };
 }
 
@@ -183,13 +329,15 @@ async function reset() {
     clearInterval(_interval);
     _interval = null;
   }
-  _status      = 'stopped';
-  _lastError   = null;
-  _startedAt   = null;
-  _nextRunAt   = null;
-  _needsLogin  = false;
-  _markedToday = new Set();
-  _marcaciones.length = 0;
+  _status              = isWithinOperatingWindow() ? 'stopped' : 'sleeping';
+  _lastError           = null;
+  _startedAt           = null;
+  _nextRunAt           = null;
+  _needsLogin          = false;
+  _pausedManuallyToday = false;
+  _forcedNightRun      = false;
+  _markedToday         = new Set();
+  _marcaciones.length  = 0;
 
   const motBot = require('./mot_bot');
   if (motBot.clearLogs) motBot.clearLogs();
@@ -201,6 +349,8 @@ async function reset() {
 }
 
 module.exports = {
+  initAutoGuardian,
+  checkGuardianSchedule,
   start,
   stop,
   reset,

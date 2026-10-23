@@ -60,15 +60,26 @@ app.get('/api/db-status', async (req, res) => {
   }
 });
 
-// Keep-Alive endpoint for automated ping (keeps Render and Supabase awake)
+// Keep-Alive endpoint for automated ping (keeps Render and Supabase awake + wakes MOT Bot at 05:30 AR)
 app.get('/api/keep-alive', async (req, res) => {
   try {
     const start = Date.now();
     const result = await pool.query('SELECT 1 as alive, CURRENT_TIMESTAMP as time');
     const dbStatus = await getDbStatus();
+    if (motScheduler.checkGuardianSchedule) {
+      await motScheduler.checkGuardianSchedule();
+    }
+    const motStatus = motScheduler.getStatus();
     res.json({
       status: 'active',
       uptime: process.uptime(),
+      motBot: {
+        status: motStatus.status,
+        wakeTime: motStatus.wakeTime,
+        sleepTime: motStatus.sleepTime,
+        serverTimeArg: motStatus.serverTimeArg,
+        isWithinActiveHours: motStatus.isWithinActiveHours,
+      },
       db: {
         provider: dbStatus.provider,
         isSqlite: dbStatus.isSqlite,
@@ -561,7 +572,7 @@ app.post('/api/mot-bot/mark-task', async (req, res) => {
 // POST arrancar el scheduler
 app.post('/api/mot-bot/start', async (req, res) => {
   try {
-    await motScheduler.start();
+    await motScheduler.start({ manual: true });
     res.json({ ok: true, status: motScheduler.getStatus() });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -571,8 +582,8 @@ app.post('/api/mot-bot/start', async (req, res) => {
 // POST detener el scheduler
 app.post('/api/mot-bot/stop', async (req, res) => {
   try {
-    await motScheduler.stop();
-    res.json({ ok: true });
+    await motScheduler.stop({ manual: true });
+    res.json({ ok: true, status: motScheduler.getStatus() });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -616,4 +627,8 @@ app.post('/api/mot-bot/session', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  // Iniciar el Guardián Automático Diario del Robot MOT (05:30 AM a 22:40 HS Hora Argentina)
+  if (motScheduler.initAutoGuardian) {
+    motScheduler.initAutoGuardian();
+  }
 });

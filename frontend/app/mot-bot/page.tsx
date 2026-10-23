@@ -37,12 +37,17 @@ import { API_URL } from '@/lib/api'
 import BASELINE_TAREAS_RAW from './mot_tasks_624.json'
 
 type MotStatus = {
-  status: 'stopped' | 'running' | 'error' | 'needs_login' | 'logging_in'
+  status: 'stopped' | 'running' | 'sleeping' | 'error' | 'needs_login' | 'logging_in'
   needsLogin: boolean
   loggedIn: boolean
   startedAt: string | null
   nextRunAt: string | null
   lastError: string | null
+  autoScheduleEnabled?: boolean
+  wakeTime?: string
+  sleepTime?: string
+  serverTimeArg?: string
+  isWithinActiveHours?: boolean
   markedToday: string[]
   marcaciones: Marcacion[]
   botLogs: BotLog[]
@@ -123,8 +128,9 @@ type TaskDetailData = {
 
 function StatusBadge({ status }: { status: MotStatus['status'] }) {
   const map: Record<string, { label: string; color: string; dot: string }> = {
-    running:     { label: 'Bot Activo',    color: 'text-emerald-400', dot: 'bg-emerald-400 animate-pulse' },
-    stopped:     { label: 'Bot Detenido',  color: 'text-slate-400',   dot: 'bg-slate-500' },
+    running:     { label: 'Bot Activo / En Espera (05:30 a 22:40 hs)', color: 'text-emerald-400', dot: 'bg-emerald-400 animate-pulse' },
+    sleeping:    { label: '🌙 Reposo Nocturno (Despierta solo 05:30 hs)', color: 'text-indigo-300', dot: 'bg-indigo-400 animate-pulse' },
+    stopped:     { label: 'Bot Pausado',   color: 'text-slate-400',   dot: 'bg-slate-500' },
     error:       { label: 'Error',         color: 'text-red-400',     dot: 'bg-red-500 animate-pulse' },
     needs_login: { label: 'Sin sesión',    color: 'text-amber-400',   dot: 'bg-amber-400 animate-pulse' },
     logging_in:  { label: 'Logueando...',  color: 'text-blue-400',    dot: 'bg-blue-400 animate-spin' },
@@ -747,6 +753,12 @@ export default function MotBotPage() {
                 </h1>
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-500/20 text-red-300 border border-red-500/30">
                   Fecha: {tiendaInfo?.fecha || 'Hoy'}
+                </span>
+                <span
+                  title="El servidor despierta solo al robot todos los días a las 05:30 AM y lo apaga a las 22:40 hs sin necesidad de dejar la web abierta"
+                  className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
+                >
+                  <Clock size={12} /> Auto-Agenda: {data?.wakeTime || '05:30'} a {data?.sleepTime || '22:40'} hs (24/7)
                 </span>
                 {isLoggedIn ? (
                   <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">

@@ -2,8 +2,10 @@ name: Supabase & Backend Keep-Alive Bot
 
 on:
   schedule:
-    # Corre cada 12 horas (a las 04:00 y 16:00 UTC) para garantizar actividad continua
-    - cron: '0 4,16 * * *'
+    # Despertador exacto del Robot MOT a las 05:30 AM Hora Argentina (08:30 UTC)
+    - cron: '30 8 * * *'
+    # Pings periódicos cada 10 minutos durante la jornada operativa (05:30 a 22:40 AR = 08:30 a 01:40 UTC)
+    - cron: '*/10 0-1,8-23 * * *'
   workflow_dispatch:
     inputs:
       backend_url:
