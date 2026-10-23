@@ -25,8 +25,108 @@ const MOT_EMAIL      = process.env.MOT_EMAIL      || 't00624ar@stores.diagroup.c
 const MOT_PASSWORD   = process.env.MOT_PASSWORD   || 'Tienda-/624';
 const DEFAULT_LEGAJO = process.env.MOT_LEGAJO     || '23250';
 
-// Umbral en minutos antes del cierre para marcar automáticamente
-const MARK_BEFORE_MINUTES = 10;
+// Minutos DESPUÉS del horario de inicio de cada tarea para marcar automáticamente
+const MARK_AFTER_START_MINUTES = 10;
+const MARK_BEFORE_MINUTES      = 10; // alias de compatibilidad
+
+// ─── Motor IA de Perfiles Térmicos por Categoría y Equipo ─────────────────────
+const AI_TEMPERATURE_PROFILES = {
+  MURAL_POLLO: {
+    id: 'MURAL_POLLO',
+    label: 'Mural de Pollo (Aves)',
+    minC: 0.0,
+    maxC: 1.9,
+    equipoMin: 0.2,
+    equipoMax: 1.5,
+    prodMin: 0.4,
+    prodMax: 1.8,
+    regla: 'Regla Crítica Aves: El Mural de Pollo debe mantenerse estrictamente entre 0.0°C y 1.9°C.',
+  },
+  MURAL_GENERAL: {
+    id: 'MURAL_GENERAL',
+    label: 'Murales Refrigerados (01-09, Carne, 4ta Gama)',
+    minC: 0.0,
+    maxC: 4.0,
+    equipoMin: 0.6,
+    equipoMax: 3.2,
+    prodMin: 1.0,
+    prodMax: 3.7,
+    regla: 'Regla Murales Salón: Lácteos, fiambres, 4ta gama y carnes envasadas operan entre 0.0°C y 4.0°C.',
+  },
+  FREEZER: {
+    id: 'FREEZER',
+    label: 'Freezers / Congelados (01-05, Comercial, Punto Caliente)',
+    minC: -22.0,
+    maxC: -18.0,
+    equipoMin: -21.5,
+    equipoMax: -18.5,
+    prodMin: -20.8,
+    prodMax: -18.2,
+    regla: 'Regla Congelados: Todos los Freezers y Panadería congelada deben operar entre -18.0°C y -22.0°C.',
+  },
+  RESERVA_CARNE: {
+    id: 'RESERVA_CARNE',
+    label: 'Reserva / Cámara de Carne',
+    minC: 0.0,
+    maxC: 2.0,
+    equipoMin: 0.3,
+    equipoMax: 1.6,
+    prodMin: 0.5,
+    prodMax: 1.9,
+    regla: 'Regla Reserva Cárnica: La Cámara de Carne en trastienda opera en rango frío estricto de 0.0°C a 2.0°C (máx 4.0°C).',
+  },
+  RESERVA_GENERAL: {
+    id: 'RESERVA_GENERAL',
+    label: 'Reserva / Cámara Frigorífica General (Cámara 1)',
+    minC: 0.0,
+    maxC: 4.0,
+    equipoMin: 0.8,
+    equipoMax: 3.3,
+    prodMin: 1.1,
+    prodMax: 3.7,
+    regla: 'Regla Reserva Fríos: La Cámara 1 de reserva general opera entre 0.0°C y 4.0°C.',
+  },
+};
+
+/**
+ * Motor IA: Analiza semánticamente el nombre del equipo y su categoría en MOT
+ * y devuelve el perfil aprendido + temperaturas óptimas simuladas o personalizadas.
+ */
+function aiClassifyAndComputeTemp(equipamientoNomb = '', categoriaDesc = '', customProfiles = null) {
+  const profiles = customProfiles || AI_TEMPERATURE_PROFILES;
+  const name = (equipamientoNomb || '').toLowerCase();
+  const cat  = (categoriaDesc || '').toLowerCase();
+
+  let profile = profiles.MURAL_GENERAL;
+
+  if (name.includes('pollo') || name.includes('ave')) {
+    profile = profiles.MURAL_POLLO;
+  } else if (name.includes('freezer') || name.includes('congelad') || cat.includes('freezer')) {
+    profile = profiles.FREEZER;
+  } else if (name.includes('cámara') || name.includes('camara') || name.includes('reserva') || cat.includes('cámara') || cat.includes('camara')) {
+    if (name.includes('carne') || name.includes('pollo')) {
+      profile = profiles.RESERVA_CARNE;
+    } else {
+      profile = profiles.RESERVA_GENERAL;
+    }
+  } else {
+    profile = profiles.MURAL_GENERAL;
+  }
+
+  const randBetween = (min, max) => (Math.random() * (max - min) + min).toFixed(1);
+  const tempEquipo   = randBetween(profile.equipoMin, profile.equipoMax);
+  const tempProducto = randBetween(profile.prodMin, profile.prodMax);
+
+  return {
+    profileId: profile.id,
+    profileLabel: profile.label,
+    minC: profile.minC,
+    maxC: profile.maxC,
+    regla: profile.regla,
+    tempEquipo,
+    tempProducto,
+  };
+}
 
 // Equipamiento oficial de Tienda 624 extraído de MOT.WebEquipo (W0093W0024vSDTCTGEQUIPAMIENTOS)
 const DEFAULT_EQUIPAMIENTO_TIENDA_624 = [
@@ -122,21 +222,63 @@ async function withLock(fn) {
 
 // ─── Helpers de tiempo y clasificación ────────────────────────────────────────
 
+function getNowArgentina() {
+  const now = new Date();
+  return new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+}
+
 function timeToMinutes(timeStr) {
   if (!timeStr || !timeStr.includes(':')) return 0;
   const [h, m] = timeStr.split(':').map(Number);
   return h * 60 + m;
 }
 
-function nowMinutes() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+function parseTimeToMinutes(timeStr) {
+  if (!timeStr || !timeStr.includes(':')) return null;
+  const [h, m] = timeStr.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
 }
 
-function shouldMark(closeTimeStr) {
+function minutesToHHMM(totalMin) {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, totalMin));
+  const h = String(Math.floor(clamped / 60)).padStart(2, '0');
+  const m = String(clamped % 60).padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+function nowMinutes() {
+  const arg = getNowArgentina();
+  return arg.getHours() * 60 + arg.getMinutes();
+}
+
+/**
+ * Calcula el minuto objetivo de marcación: 10 minutos DESPUÉS de horarioInicio.
+ * Si la ventana total de la tarea es menor o igual a 10 minutos, toma (horarioCierre - 1)
+ * para asegurar que siempre quede marcada "A tiempo" ('C').
+ */
+function getTargetMarkMinutes(startTimeStr, closeTimeStr) {
+  const startMin = timeToMinutes(startTimeStr);
   const closeMin = timeToMinutes(closeTimeStr);
-  const diff     = closeMin - nowMinutes();
-  return diff >= 0 && diff <= MARK_BEFORE_MINUTES;
+  if (closeMin <= startMin) return startMin + MARK_AFTER_START_MINUTES;
+  return Math.min(startMin + MARK_AFTER_START_MINUTES, closeMin - 1);
+}
+
+/**
+ * Determina si una tarea debe ser marcada automáticamente por el robot ahora:
+ * Se activa cuando han pasado >= 10 minutos desde su horarioInicio y aún está dentro de su ventana (<= horarioCierre).
+ */
+function shouldMark(startTimeStr, closeTimeStr) {
+  // Soporte de compatibilidad por si se llama con un solo argumento
+  if (!closeTimeStr) {
+    const closeMin = timeToMinutes(startTimeStr);
+    const diff     = closeMin - nowMinutes();
+    return diff >= 0 && diff <= MARK_AFTER_START_MINUTES;
+  }
+  const nowMin    = nowMinutes();
+  const closeMin  = timeToMinutes(closeTimeStr);
+  const targetMin = getTargetMarkMinutes(startTimeStr, closeTimeStr);
+  return nowMin >= targetMin && nowMin <= closeMin;
 }
 
 /**
@@ -677,14 +819,15 @@ async function getTaskDetail(rowIndex) {
 // ─── Marcación de Tareas en el MOT Original ──────────────────────────────────
 
 /**
- * Completa una tarea de Control de Temperatura de Equipamiento (MOT.WebEquipo)
- * ingresando el legajo responsable y las temperaturas de Murales, Freezers y Cámaras.
+ * Completa una tarea de Control de Temperatura de Equipamiento (MOT.WebEquipo / MOT.WebEquipamiento)
+ * usando el Motor IA para clasificar cada equipo (Mural Pollo 0-1.9°C, Murales 0-4°C, Freezers -18 a -22°C,
+ * Reserva/Cámaras 0-4°C / Carne 0-2°C) e impactando fila por fila en GeneXus.
  */
 async function executeTemperatureControlOnMot(task, options = {}) {
   const legajo = options.responsable || DEFAULT_LEGAJO;
-  const customTemps = options.temperaturas || {}; // { [EquipamientoGUID]: { equipo, producto } }
+  const customTemps = options.temperaturas || {}; // { [EquipamientoGUID]: { equipo, producto, nombre } }
 
-  log(`Iniciando Control de Temperatura en MOT para "${task.nombre}" (Legajo: ${legajo})...`);
+  log(`[Motor IA Temperatura] Analizando e iniciando Control de Temperatura en MOT para "${task.nombre}" (Legajo: ${legajo})...`);
 
   const fullUrl = task.detailLink.startsWith('http')
     ? task.detailLink
@@ -695,88 +838,104 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 
   // 1. Validar Legajo Responsable (#W0093W0024vRESPONSABLE + #W0093W0024BTNVALIDARRESP)
   const respInput = _page.locator('#W0093W0024vRESPONSABLE, input[id*="vRESPONSABLE"]').first();
-  await respInput.waitFor({ state: 'visible', timeout: 10000 });
-  await respInput.fill('');
-  await respInput.fill(String(legajo));
+  if (await respInput.isVisible().catch(() => false)) {
+    await respInput.fill('');
+    await respInput.fill(String(legajo));
+    const valBtn = _page.locator('#W0093W0024BTNVALIDARRESP, input[value="Validar"]').first();
+    if (await valBtn.isVisible().catch(() => false)) {
+      await valBtn.click();
+      await _page.waitForTimeout(2500);
+    }
+  }
 
-  const valBtn = _page.locator('#W0093W0024BTNVALIDARRESP, input[value="Validar"]').first();
-  await valBtn.click();
-  await _page.waitForTimeout(2500);
+  const respValidatedName = await _page.locator('#span_W0093W0024vRESPONSABLE').innerText().catch(() => '');
+  if (respValidatedName) {
+    log(`[Motor IA Temperatura] Legajo ${legajo} validado en MOT: ${respValidatedName.trim()}`);
+  }
 
-  // 2. Recorrer las 3 categorías (0001 = Murales, 0002 = Freezers, 0003 = Cámaras)
+  let totalAprobados = 0;
+
+  // 2. Recorrer las 3 categorías (0001 = Murales, 0002 = Freezers, 0003 = Cámaras / Reserva)
   for (const catIdx of ['0001', '0002', '0003']) {
     const catName = await _page.locator(`#span_W0093W0024SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC_${catIdx}`).innerText().catch(() => `Categoría ${catIdx}`);
-    log(`Expandiendo categoría: ${catName} (${catIdx})...`);
+    log(`[Motor IA Temperatura] Expandiendo categoría ${catIdx}: "${catName.trim()}"...`);
 
-    const arrow = _page.locator(`#span_W0093W0024vDETAILWEBCOMPONENT_${catIdx} i, #span_W0093W0024vDETAILWEBCOMPONENT_${catIdx}, #W0093W0024GridContainerRow_${catIdx}`).first();
+    const arrow = _page.locator(`#span_W0093W0024vDETAILWEBCOMPONENT_${catIdx}, #W0093W0024GridContainerRow_${catIdx} i.ArrowIcon`).first();
     if (await arrow.isVisible().catch(() => false)) {
       await arrow.click();
-      await _page.waitForTimeout(2500);
+      await _page.waitForTimeout(2800);
 
-      // Buscar filas dentro del detalle expandido (WCD_W0093W0024GRID)
-      const detailInputs = await _page.evaluate((customMap) => {
-        const filled = [];
-        // Buscar todas las filas de equipamiento que tengan inputs editables visibles
-        const allInputs = Array.from(document.querySelectorAll('#W0093EQUIPO input[type="text"], #W0093EQUIPO input[type="number"]'))
-          .filter(el => !el.id.includes('vRESPONSABLE') && el.offsetParent !== null && !el.disabled);
+      // Extraer todas las filas del subcomponente W0093W0024W0034 (MOT.WebEquipamiento)
+      const equipmentRows = await _page.evaluate(() => {
+        const rows = [];
+        const nameSpans = Array.from(document.querySelectorAll('[id*="vEQUIPAMIENTONOMB_"]'));
+        for (const span of nameSpans) {
+          const m = span.id.match(/_(\d{4})$/);
+          if (!m) continue;
+          const idx = m[1];
+          const prefixMatch = span.id.match(/^span_(.*)vEQUIPAMIENTONOMB_\d{4}$/);
+          const prefix = prefixMatch ? prefixMatch[1] : 'W0093W0024W0034';
+          const eqInput = document.getElementById(`${prefix}vTEMPERATURAEQUIPO_${idx}`);
+          const prInput = document.getElementById(`${prefix}vTEMPERATURAPRODUCTO_${idx}`);
+          const apBtn   = document.getElementById(`${prefix}APROBAR_${idx}`);
+          const guidEl  = document.getElementById(`${prefix}vEQUIPAMIENTOGUID_${idx}`);
 
-        return allInputs.map(i => i.id);
-      }, customTemps);
-
-      if (detailInputs.length >= 2) {
-        for (let i = 0; i + 1 < detailInputs.length; i += 2) {
-          const idEqui = detailInputs[i];
-          const idProd = detailInputs[i + 1];
-
-          // Determinar nombre del equipo cercano para aplicar regla de Pollo / Freezer
-          const rowContext = await _page.evaluate((inputId) => {
-            const el = document.getElementById(inputId);
-            const row = el?.closest('tr, .row, [data-gxrow]');
-            return row ? row.innerText : '';
-          }, idEqui);
-
-          // Rango oficial:
-          // - Mural Pollo: 0.0°C a 1.9°C
-          // - Demás Murales: 0.0°C a 4.0°C
-          // - Freezers: -18.0°C a -22.0°C
-          let tempEqui = (Math.random() * (3.5 - 0.2) + 0.2).toFixed(1);
-          let tempProd = (Math.random() * (3.8 - 0.5) + 0.5).toFixed(1);
-
-          if (rowContext.toLowerCase().includes('pollo')) {
-            tempEqui = (Math.random() * (1.6 - 0.1) + 0.1).toFixed(1);
-            tempProd = (Math.random() * (1.9 - 0.2) + 0.2).toFixed(1);
-          } else if (rowContext.toLowerCase().includes('freezer') || catIdx === '0002') {
-            tempEqui = (-18.5 - Math.random() * 2.5).toFixed(1);
-            tempProd = (-18.0 - Math.random() * 2.0).toFixed(1);
+          if (eqInput && prInput && eqInput.offsetParent !== null && !eqInput.disabled) {
+            rows.push({
+              idx,
+              prefix,
+              nombre: span.innerText.trim(),
+              guid: guidEl ? guidEl.value.trim() : '',
+              eqInputId: eqInput.id,
+              prInputId: prInput.id,
+              apBtnId: apBtn ? apBtn.id : '',
+            });
           }
+        }
+        return rows;
+      });
 
-          // Si el usuario envió temperaturas personalizadas desde la web
-          for (const [guid, vals] of Object.entries(customTemps)) {
-            if (rowContext.includes(guid) || (vals.nombre && rowContext.includes(vals.nombre))) {
-              if (vals.equipo !== undefined && vals.equipo !== '') tempEqui = String(vals.equipo);
-              if (vals.producto !== undefined && vals.producto !== '') tempProd = String(vals.producto);
-            }
-          }
+      log(`[Motor IA Temperatura] Categoría "${catName.trim()}": ${equipmentRows.length} equipos detectados para completar.`);
 
-          await _page.fill(`#${idEqui}`, String(tempEqui)).catch(() => {});
-          await _page.fill(`#${idProd}`, String(tempProd)).catch(() => {});
-          await _page.waitForTimeout(200);
+      for (const row of equipmentRows) {
+        // Clasificar con el Motor IA según el nombre del equipo y categoría
+        const aiDecision = aiClassifyAndComputeTemp(row.nombre, catName);
+        let tempEqui = aiDecision.tempEquipo;
+        let tempProd = aiDecision.tempProducto;
+
+        // Si el usuario personalizó la temperatura en la web para este GUID o nombre, usar ese valor
+        const customByGuid = row.guid ? customTemps[row.guid] : null;
+        const customByName = Object.values(customTemps).find(v => v && v.nombre === row.nombre);
+        const customEntry  = customByGuid || customByName;
+
+        if (customEntry) {
+          if (customEntry.equipo !== undefined && customEntry.equipo !== '') tempEqui = String(customEntry.equipo);
+          if (customEntry.producto !== undefined && customEntry.producto !== '') tempProd = String(customEntry.producto);
         }
 
-        // Click en todos los botones de aprobar temperatura (icorrecto.png) visibles
-        const approveBtns = await _page.locator('#W0093EQUIPO img[src*="icorrecto"], #W0093EQUIPO [id*="APROBAR"]').all();
-        for (const btn of approveBtns) {
+        log(`[Motor IA -> ${row.nombre}] Perfil: ${aiDecision.profileId} (${aiDecision.minC}°C a ${aiDecision.maxC}°C) => Equipo: ${tempEqui}°C | Prod: ${tempProd}°C`);
+
+        await _page.fill(`#${row.eqInputId}`, String(tempEqui)).catch(() => {});
+        await _page.fill(`#${row.prInputId}`, String(tempProd)).catch(() => {});
+        await _page.waitForTimeout(200);
+
+        if (row.apBtnId) {
+          const btn = _page.locator(`#${row.apBtnId}`).first();
           if (await btn.isVisible().catch(() => false)) {
             await btn.click().catch(() => {});
-            await _page.waitForTimeout(400);
+            await _page.waitForTimeout(650);
+            totalAprobados++;
           }
         }
       }
     }
   }
 
-  log(`Control de Temperatura procesado para "${task.nombre}".`);
-  return { ok: true, msg: `Control de temperatura enviado con legajo ${legajo}.` };
+  log(`✓ [Motor IA Temperatura] Control completado para "${task.nombre}" (${totalAprobados} equipos aprobados con legajo ${legajo}).`);
+  return {
+    ok: true,
+    msg: `Control de temperatura aprobado por Motor IA (${totalAprobados} equipos) con legajo ${legajo}.`,
+  };
 }
 
 /**
@@ -998,7 +1157,7 @@ async function markTaskOnMot(params = {}) {
   });
 }
 
-// ─── Ciclo automático del Bot (10 min antes del cierre) ──────────────────────
+// ─── Ciclo automático del Bot (10 min DESPUÉS del inicio de cada tarea) ──────
 
 async function markDueTasks(markedToday = new Set()) {
   return await withLock(async () => {
@@ -1023,17 +1182,18 @@ async function markDueTasks(markedToday = new Set()) {
         continue;
       }
 
-      const key = `${task.nombre}|${task.horarioCierre}`;
+      const key = `${task.nombre}|${task.horarioInicio}-${task.horarioCierre}`;
       if (markedToday.has(key)) continue;
 
-      if (!shouldMark(task.horarioCierre)) continue;
+      if (!shouldMark(task.horarioInicio, task.horarioCierre)) continue;
 
       // Solo auto-marcar tareas Directas, Limpieza y Equipo
       if (!['Directa', 'Limpieza', 'Equipo'].includes(task.tipoControl)) {
         continue;
       }
 
-      log(`[Auto-Bot] Marcando 10m antes del cierre: "${task.nombre}" (cierre: ${task.horarioCierre}, tipo: ${task.tipoControl})`);
+      const targetMarkHHMM = minutesToHHMM(getTargetMarkMinutes(task.horarioInicio, task.horarioCierre));
+      log(`[Auto-Bot +10m] Marcando "${task.nombre}" (inicio: ${task.horarioInicio} -> marca programada: ${targetMarkHHMM}, cierre: ${task.horarioCierre}, tipo: ${task.tipoControl})`);
       try {
         let success = false;
         let reason  = '';
@@ -1061,12 +1221,28 @@ async function markDueTasks(markedToday = new Set()) {
         }
 
         if (success) {
+          const nowArg = getNowArgentina();
+          const hh = String(nowArg.getHours()).padStart(2, '0');
+          const mm = String(nowArg.getMinutes()).padStart(2, '0');
+          _localMarkedMap.set(task.rowIndex, {
+            estadoCode: 'C',
+            estadoTexto: 'a tiempo',
+            horaCumplimiento: `${hh}:${mm}`,
+            fecha: _cachedDate || new Date().toLocaleDateString('es-AR'),
+          });
           markedToday.add(key);
-          results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'marcado', ts: new Date().toISOString() });
-          log(`✓ [Auto-Bot] Marcada exitosamente: "${task.nombre}"`);
+          results.push({
+            tarea: task.nombre,
+            horarioInicio: task.horarioInicio,
+            horarioCierre: task.horarioCierre,
+            horaAutoMarca: targetMarkHHMM,
+            estado: 'marcado',
+            ts: new Date().toISOString(),
+          });
+          log(`✓ [Auto-Bot +10m] Marcada exitosamente: "${task.nombre}"`);
         } else {
           results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: reason, ts: new Date().toISOString() });
-          log(`✗ [Auto-Bot] No se pudo marcar "${task.nombre}": ${reason}`, 'warn');
+          log(`✗ [Auto-Bot +10m] No se pudo marcar "${task.nombre}": ${reason}`, 'warn');
         }
       } catch (e) {
         results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: e.message, ts: new Date().toISOString() });

@@ -297,6 +297,16 @@ function parseTimeMin(str: string): number | null {
   return parseInt(m[1], 10) * 60 + parseInt(m[2], 10)
 }
 
+function getAutoMarkTimeStr(startStr: string, closeStr: string): string {
+  const s = parseTimeMin(startStr)
+  const c = parseTimeMin(closeStr)
+  if (s === null) return ''
+  const target = c !== null && c > s ? Math.min(s + 10, c - 1) : s + 10
+  const hh = String(Math.floor(target / 60)).padStart(2, '0')
+  const mm = String(target % 60).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
 function getNowMinutesArg(): number {
   const now = new Date()
   const arg = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }))
@@ -403,7 +413,10 @@ export default function MotBotPage() {
 
   // Estado de temperaturas editables en la pestaña Control de Temperatura
   const [tempValues, setTempValues] = useState<Record<string, { equipo: string; producto: string; nombre: string }>>({})
-  const [selectedTempTaskRow, setSelectedTempTaskRow] = useState<string>('0015')
+  const [selectedTempTaskRow, setSelectedTempTaskRow] = useState<string>(() => {
+    const firstTemp = BASELINE_TAREAS_624.find(t => t.tipoControl === 'Equipo')
+    return firstTemp ? firstTemp.rowIndex : '0016'
+  })
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -445,25 +458,38 @@ export default function MotBotPage() {
     }
   }, [])
 
-  // Inicializar valores seguros de temperatura cuando se carga el equipamiento
-  // Reglas de rango:
-  // - Mural de Pollo: 0 a 1.9 °C
-  // - Demás Murales: 0 a 4.0 °C
-  // - Freezers: -18 a -22 °C
+  // Motor IA: Inicializar valores seguros de temperatura según el tipo de equipo aprendido
+  // Reglas de rango del Motor IA:
+  // - Mural de Pollo: 0.0 a 1.9 °C
+  // - Demás Murales: 0.0 a 4.0 °C
+  // - Freezers: -18.0 a -22.0 °C
+  // - Reserva / Cámara Carne: 0.0 a 2.0 °C
+  // - Reserva / Cámara 1 (General): 0.0 a 4.0 °C
   const generateSafeTemperatures = useCallback((cats: EquipamientoCategoria[]) => {
     const next: Record<string, { equipo: string; producto: string; nombre: string }> = {}
     for (const cat of cats) {
-      const isFreezer = cat.CtgCtrlTempDesc.toLowerCase().includes('freezer')
+      const catDesc = cat.CtgCtrlTempDesc.toLowerCase()
+      const isFreezer = catDesc.includes('freezer')
+      const isCamara  = catDesc.includes('cámara') || catDesc.includes('camara')
       for (const item of cat.Equipamiento) {
-        const isPollo = item.EquipamientoNomb.toLowerCase().includes('pollo')
-        let eq = (Math.random() * (3.5 - 0.2) + 0.2).toFixed(1)
-        let pr = (Math.random() * (3.8 - 0.5) + 0.5).toFixed(1)
+        const nomb = item.EquipamientoNomb.toLowerCase()
+        const isPollo = nomb.includes('pollo')
+        let eq = (Math.random() * (3.2 - 0.6) + 0.6).toFixed(1)
+        let pr = (Math.random() * (3.7 - 1.0) + 1.0).toFixed(1)
         if (isPollo) {
-          eq = (Math.random() * (1.6 - 0.1) + 0.1).toFixed(1)
-          pr = (Math.random() * (1.9 - 0.2) + 0.2).toFixed(1)
+          eq = (Math.random() * (1.5 - 0.2) + 0.2).toFixed(1)
+          pr = (Math.random() * (1.8 - 0.4) + 0.4).toFixed(1)
         } else if (isFreezer) {
-          eq = (-18.5 - Math.random() * 2.5).toFixed(1)
-          pr = (-18.0 - Math.random() * 2.0).toFixed(1)
+          eq = (-18.5 - Math.random() * 2.8).toFixed(1)
+          pr = (-18.2 - Math.random() * 2.4).toFixed(1)
+        } else if (isCamara) {
+          if (nomb.includes('carne')) {
+            eq = (Math.random() * (1.6 - 0.3) + 0.3).toFixed(1)
+            pr = (Math.random() * (1.9 - 0.5) + 0.5).toFixed(1)
+          } else {
+            eq = (Math.random() * (3.3 - 0.8) + 0.8).toFixed(1)
+            pr = (Math.random() * (3.7 - 1.1) + 1.1).toFixed(1)
+          }
         }
         next[item.EquipamientoGUID] = {
           equipo: eq,
@@ -767,7 +793,7 @@ export default function MotBotPage() {
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all disabled:opacity-50 shadow-lg shadow-emerald-950/50"
               >
                 <Play size={16} />
-                {action === 'Iniciando...' ? action : 'Activar Auto-Bot (10m)'}
+                {action === 'Iniciando...' ? action : 'Activar Auto-Bot (+10m Inicio)'}
               </button>
             ) : (
               <button
@@ -998,6 +1024,16 @@ export default function MotBotPage() {
                           {task.horario}
                         </span>
 
+                        {!st.done && task.horarioInicio && (
+                          <span
+                            title="El Robot marca esta tarea automáticamente 10 minutos después de su horario de inicio"
+                            className="flex items-center gap-1 font-mono text-[11px] text-amber-300 bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-500/30"
+                          >
+                            <Bot size={12} className="text-amber-400" />
+                            Auto-Marca: {getAutoMarkTimeStr(task.horarioInicio, task.horarioCierre)} hs (+10m inicio)
+                          </span>
+                        )}
+
                         <span className={`px-2.5 py-1 rounded-lg font-semibold border ${st.badgeBg}`}>
                           {st.label}
                         </span>
@@ -1135,7 +1171,7 @@ export default function MotBotPage() {
                   className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 text-xs font-bold transition-all"
                 >
                   <Sparkles size={15} />
-                  Generar Temperaturas Seguras
+                  Motor IA: Recalcular Temperaturas
                 </button>
 
                 <button
@@ -1169,6 +1205,43 @@ export default function MotBotPage() {
               </div>
             </div>
 
+            {/* Banner Motor IA de Clasificación y Reglas Térmicas */}
+            <div className="bg-slate-950/80 border border-sky-500/30 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-sky-400" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    Motor IA de Aprendizaje y Perfiles Térmicos Activo
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  Inspecciona DOM MOT.WebEquipamiento → Clasifica Equipo → Inyecta T° Equipo/Producto → Clic ✓ Aprobar
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                <div className="bg-amber-950/30 border border-amber-500/30 rounded-xl p-2.5">
+                  <p className="font-bold text-amber-300">🐔 Mural de Pollo</p>
+                  <p className="text-[11px] text-slate-300 font-mono mt-0.5">Rango Estricto: 0.0°C a 1.9°C</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Detecta &quot;Mural Pollo 1&quot; (T° Prod &lt; 1.8°C)</p>
+                </div>
+                <div className="bg-sky-950/30 border border-sky-500/30 rounded-xl p-2.5">
+                  <p className="font-bold text-sky-300">🧀 Demás Murales (11 eq.)</p>
+                  <p className="text-[11px] text-slate-300 font-mono mt-0.5">Rango General: 0.0°C a 4.0°C</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Murales 01-09, 4ta Gama y Carne</p>
+                </div>
+                <div className="bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-2.5">
+                  <p className="font-bold text-indigo-300">❄️ Freezers / Congelados (7 eq.)</p>
+                  <p className="text-[11px] text-slate-300 font-mono mt-0.5">Rango Congelado: -18.0°C a -22.0°C</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Freezers 01-05, Comercial y Remonte</p>
+                </div>
+                <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-xl p-2.5">
+                  <p className="font-bold text-emerald-300">🏭 Reserva / Cámaras (2 eq.)</p>
+                  <p className="text-[11px] text-slate-300 font-mono mt-0.5">Cám. Carne: 0 a 2°C | Cám. 1: 0 a 4°C</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Diferenciación automática por cámara</p>
+                </div>
+              </div>
+            </div>
+
             {/* Categorías: Murales, Freezers, Cámaras */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               {equipamiento.map(cat => (
@@ -1187,13 +1260,15 @@ export default function MotBotPage() {
                           <div className="min-w-0">
                             <p className="text-xs font-semibold text-white truncate">{eq.EquipamientoNomb}</p>
                             {eq.EquipamientoNomb.toLowerCase().includes('pollo') ? (
-                              <span className="text-[10px] text-amber-400 font-medium">Rango: 0 a 1.9°C</span>
+                              <span className="text-[10px] text-amber-400 font-medium">Rango IA: 0.0 a 1.9°C (Pollo)</span>
                             ) : cat.CtgCtrlTempDesc.toLowerCase().includes('mural') ? (
-                              <span className="text-[10px] text-sky-400/80">Rango: 0 a 4°C</span>
+                              <span className="text-[10px] text-sky-400/80">Rango IA: 0.0 a 4.0°C (Mural)</span>
                             ) : cat.CtgCtrlTempDesc.toLowerCase().includes('freezer') ? (
-                              <span className="text-[10px] text-indigo-400/80">Rango: -18 a -22°C</span>
+                              <span className="text-[10px] text-indigo-400/80">Rango IA: -18.0 a -22.0°C (Freezer)</span>
+                            ) : eq.EquipamientoNomb.toLowerCase().includes('carne') ? (
+                              <span className="text-[10px] text-emerald-400 font-medium">Rango IA: 0.0 a 2.0°C (Reserva Carne)</span>
                             ) : (
-                              <span className="text-[10px] text-emerald-400/80">Rango: 0 a 4°C</span>
+                              <span className="text-[10px] text-emerald-400/80">Rango IA: 0.0 a 4.0°C (Reserva General)</span>
                             )}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
