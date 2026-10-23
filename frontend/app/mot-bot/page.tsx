@@ -49,6 +49,7 @@ type MotStatus = {
   serverTimeArg?: string
   isWithinActiveHours?: boolean
   markedToday: string[]
+  alertas?: { tarea: string; estado: string; motivo: string; intentos: number | null; ts: string }[]
   marcaciones: Marcacion[]
   botLogs: BotLog[]
 }
@@ -970,6 +971,25 @@ export default function MotBotPage() {
           </div>
         )}
       </div>
+
+      {data?.alertas && data.alertas.length > 0 && (
+        <div className="rounded-2xl border border-red-500/40 bg-red-950/40 p-4 space-y-2">
+          <div className="flex items-center gap-2 text-red-300 font-bold text-sm">
+            <AlertTriangle size={16} />
+            {data.alertas.length} tarea(s) no se pudieron confirmar en MOT tras los reintentos: marcarlas manualmente desde la tienda
+          </div>
+          <ul className="text-xs text-red-200/90 space-y-1">
+            {data.alertas.map((a, i) => (
+              <li key={i}>
+                <span className="font-semibold">{a.tarea}</span>
+                {a.estado === 'ALERTA_CRITICA' ? ' · ALERTA CRÍTICA' : ''}
+                {a.motivo ? ` · ${a.motivo}` : ''}
+                {a.intentos ? ` · ${a.intentos} intento(s)` : ''}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ── PESTAÑAS DE NAVEGACIÓN (MODULOS DEL APK MOT) ── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">

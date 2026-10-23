@@ -328,6 +328,21 @@ async function markSingleTask(params) {
   return res;
 }
 
+function getTodayAlerts() {
+  try {
+    const mb = require('./mot_bot');
+    const day = mb.getAudit(mb.getTodayKey());
+    const latest = new Map();
+    // la entrada más reciente por tarea manda (la lista viene con la más nueva primero)
+    for (const e of day) if (!latest.has(e.tarea)) latest.set(e.tarea, e);
+    return Array.from(latest.values())
+      .filter(e => e.estado !== 'verificada')
+      .map(e => ({ tarea: e.tarea, estado: e.estado, motivo: e.motivo || '', intentos: e.intentos || null, ts: e.ts }));
+  } catch (_) {
+    return [];
+  }
+}
+
 function getStatus() {
   return {
     status:               _status,
@@ -344,6 +359,7 @@ function getStatus() {
     pausedManuallyToday:  _pausedManuallyToday,
     markedToday:          Array.from(_markedToday),
     marcaciones:          _marcaciones.slice(0, 50),
+    alertas:              getTodayAlerts(),
     botLogs:              getLogs().slice(0, 50),
   };
 }
