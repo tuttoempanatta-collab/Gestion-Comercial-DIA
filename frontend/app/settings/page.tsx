@@ -447,43 +447,168 @@ export default function SettingsPage() {
   const totalPages = Math.ceil(catalogTotal / 50)
 
   return (
-    <div className="flex flex-col gap-8 animate-fade-in max-w-5xl">
+    <div className="flex flex-col gap-8 animate-fade-in w-full">
       <header className="flex flex-col gap-2">
         <h2 className="text-3xl font-bold tracking-tight text-white">Configuración</h2>
-        <p className="text-slate-400">Gestiona las credenciales, el catálogo de productos y parámetros del sistema.</p>
+        <p className="text-slate-400">Gestiona las credenciales, la planificación semanal de turnos, el catálogo de productos y parámetros del sistema.</p>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div className="md:col-span-2 flex flex-col gap-6">
-
-          {/* ── Credentials ── */}
-          <div className="glass-card p-6 flex flex-col gap-6">
+      {/* ── SECCIÓN 1: PLANIFICADOR SEMANAL DE TURNOS (ANCHO COMPLETO) ── */}
+      <div className="glass-card p-6 flex flex-col gap-6 border-amber-950/40 bg-slate-900/60 w-full shadow-xl">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
             <h3 className="text-xl font-semibold text-white flex items-center gap-2">
-              <ShieldCheck className="text-blue-400" size={20} /> Credenciales del Portal
+              <Calendar className="text-amber-400" size={22} /> Planificador Semanal de Turnos (2 Semanas)
             </h3>
-            <div className="grid grid-cols-1 gap-4">
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-slate-400 flex items-center gap-2"><User size={14} /> Usuario (Legajo)</label>
-                <input type="text" className="input-field" value={settings.username} onChange={e => setSettings({...settings, username: e.target.value})} />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-slate-400 flex items-center gap-2"><Lock size={14} /> Contraseña</label>
-                <input type="password" className="input-field" value={settings.password} onChange={e => setSettings({...settings, password: e.target.value})} />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-slate-400 flex items-center gap-2"><Globe size={14} /> URL del Portal</label>
-                <input type="text" className="input-field" value={settings.portal_url} onChange={e => setSettings({...settings, portal_url: e.target.value})} />
-              </div>
-            </div>
-            <button className="btn-primary self-start mt-4 px-8" onClick={handleSave} disabled={isSaving}>
-              <Save size={18} />
-              {isSaving ? 'Guardando...' : 'Guardar Cambios'}
-            </button>
-            {message && <p className={`text-sm mt-2 ${message.includes('Error') ? 'text-red-400' : 'text-emerald-400'}`}>{message}</p>}
+            <p className="text-sm text-slate-400 mt-1 max-w-3xl">
+              Planifica con anticipación la semana en curso y la entrante. Cada Lunes a las 00:00 hs, la Semana Siguiente se convierte automáticamente en la Semana Actual.
+            </p>
           </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleCopyWeek}
+              disabled={isSavingSchedule}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-50 shadow-sm"
+              title="Clona todos los turnos de la semana actual a la semana siguiente"
+            >
+              <Copy size={15} className="text-amber-400" />
+              Duplicar Semana a Siguiente
+            </button>
+            <button
+              onClick={handleSaveSchedule}
+              disabled={isSavingSchedule}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-950/40 transition-colors disabled:opacity-50"
+            >
+              {isSavingSchedule ? <RefreshCw size={15} className="animate-spin" /> : <Save size={15} />}
+              Guardar Planificación
+            </button>
+          </div>
+        </div>
 
-          {/* ── Gestión de Legajos MOT (Turnos Mañana y Tarde) ── */}
-          <div className="glass-card p-6 flex flex-col gap-5 border-red-950/40 bg-slate-900/60">
+        {/* Pestañas de Semanas */}
+        <div className="flex flex-wrap items-center gap-3 border-b border-slate-800/80 pb-3">
+          <button
+            onClick={() => setSelectedWeekTab('current')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all ${
+              selectedWeekTab === 'current'
+                ? 'bg-amber-600 text-white shadow-lg shadow-amber-950/50'
+                : 'bg-slate-950/60 text-slate-400 hover:text-white border border-slate-800 hover:bg-slate-800/60'
+            }`}
+          >
+            <Sun size={16} />
+            <span>{currentWeek?.label || 'Semana Actual'}</span>
+            <span className="text-[11px] bg-black/40 px-2.5 py-0.5 rounded-full font-mono">En Curso</span>
+          </button>
+
+          <button
+            onClick={() => setSelectedWeekTab('next')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all ${
+              selectedWeekTab === 'next'
+                ? 'bg-purple-600 text-white shadow-lg shadow-purple-950/50'
+                : 'bg-slate-950/60 text-slate-400 hover:text-white border border-slate-800 hover:bg-slate-800/60'
+            }`}
+          >
+            <Moon size={16} />
+            <span>{nextWeek?.label || 'Semana Siguiente'}</span>
+            <span className="text-[11px] bg-black/40 px-2.5 py-0.5 rounded-full font-mono">Planificación</span>
+          </button>
+
+          {scheduleMsg && (
+            <span className="ml-auto text-sm text-emerald-400 font-medium animate-fade-in flex items-center gap-1.5 bg-emerald-950/50 border border-emerald-800/40 px-3 py-1.5 rounded-lg">
+              <Check size={16} /> {scheduleMsg}
+            </span>
+          )}
+        </div>
+
+        {/* Grilla de los 7 Días (Lunes a Domingo) */}
+        {(() => {
+          const activeWeek = selectedWeekTab === 'current' ? currentWeek : nextWeek
+          if (!activeWeek || !activeWeek.days) {
+            return (
+              <div className="py-12 text-center text-slate-500 text-sm">
+                <Loader2 size={24} className="animate-spin inline mr-2 text-amber-500" />
+                Cargando calendario semanal de turnos...
+              </div>
+            )
+          }
+          return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3.5">
+              {activeWeek.days.map(d => (
+                <div
+                  key={d.date}
+                  className={`flex flex-col gap-3 p-3.5 rounded-xl border transition-all ${
+                    d.isToday
+                      ? 'bg-gradient-to-b from-amber-950/40 to-slate-950/80 border-amber-500/80 shadow-lg shadow-amber-950/30'
+                      : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-950/80'
+                  }`}
+                >
+                  {/* Cabecera del día */}
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+                    <div className="flex flex-col">
+                      <span className={`text-sm font-bold ${d.isToday ? 'text-amber-400' : 'text-slate-100'}`}>
+                        {d.dayName}
+                      </span>
+                      <span className="text-xs font-mono text-slate-400">
+                        {d.formattedDate}
+                      </span>
+                    </div>
+                    {d.isToday && (
+                      <span className="text-[10px] bg-amber-500 text-black font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                        HOY
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Selector Turno Mañana */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-amber-300/90 flex items-center gap-1.5">
+                      <Sun size={12} className="text-amber-400" /> Mañana (≤14:30)
+                    </label>
+                    <select
+                      value={d.manana}
+                      onChange={e => handleDayShiftChange(selectedWeekTab, d.date, 'manana', e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 hover:border-slate-600 text-white text-xs font-mono rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-amber-500 font-semibold cursor-pointer transition-colors"
+                    >
+                      {legajosList.map(l => (
+                        <option key={`cal-m-${d.date}-${l.legajo}`} value={l.legajo}>
+                          {l.legajo} — {l.nombre || 'Personal'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Selector Turno Tarde */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-purple-300/90 flex items-center gap-1.5">
+                      <Moon size={12} className="text-purple-400" /> Tarde (≥15:00)
+                    </label>
+                    <select
+                      value={d.tarde}
+                      onChange={e => handleDayShiftChange(selectedWeekTab, d.date, 'tarde', e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 hover:border-slate-600 text-white text-xs font-mono rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-500 font-semibold cursor-pointer transition-colors"
+                    >
+                      {legajosList.map(l => (
+                        <option key={`cal-t-${d.date}-${l.legajo}`} value={l.legajo}>
+                          {l.legajo} — {l.nombre || 'Personal'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        })()}
+      </div>
+
+      {/* ── SECCIÓN 2: GRILLA RESPONSIVE 2 COLUMNAS ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        
+        {/* Columna Izquierda: Legajos MOT + Credenciales + Aviso de Seguridad */}
+        <div className="flex flex-col gap-6">
+
+          {/* Gestión de Legajos MOT (Turnos Mañana y Tarde) */}
+          <div className="glass-card p-6 flex flex-col gap-5 border-red-950/40 bg-slate-900/60 shadow-lg">
             <div className="flex items-center justify-between">
               <h3 className="text-xl font-semibold text-white flex items-center gap-2">
                 <Users className="text-red-400" size={20} /> Gestión de Legajos MOT (Turnos)
@@ -494,19 +619,19 @@ export default function SettingsPage() {
             </div>
 
             <p className="text-sm text-slate-300 leading-relaxed">
-              Configura los legajos utilizados para confirmar tareas en MOT. El robot asignará automáticamente el legajo de la <strong className="text-amber-400">Mañana (hasta 14:30 hs)</strong> o de la <strong className="text-purple-400">Tarde (desde 15:00 hs)</strong> según el horario de cada tarea.
+              Configura los legajos utilizados para confirmar tareas en MOT. El robot asignará automáticamente el legajo de la <strong className="text-amber-400">Mañana (hasta 14:30 hs)</strong> o de la <strong className="text-purple-400">Tarde (desde 15:00 hs)</strong> según el horario de cada tarea o la planificación semanal.
             </p>
 
             {/* Asignación Rápida de Turnos */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-semibold text-amber-400 flex items-center gap-1.5">
-                  <Sun size={14} /> Turno Mañana (hasta 14:30 hs)
+                  <Sun size={14} /> Turno Mañana (Predeterminado)
                 </label>
                 <select
                   value={legajoManana}
                   onChange={e => handleSaveShiftSelection(e.target.value, legajoTarde)}
-                  className="bg-slate-900 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-red-500 font-mono font-bold"
+                  className="bg-slate-900 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-red-500 font-mono font-bold cursor-pointer"
                 >
                   {legajosList.map(l => (
                     <option key={`m-${l.legajo}`} value={l.legajo}>
@@ -518,12 +643,12 @@ export default function SettingsPage() {
 
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-semibold text-purple-400 flex items-center gap-1.5">
-                  <Moon size={14} /> Turno Tarde (desde 15:00 hs)
+                  <Moon size={14} /> Turno Tarde (Predeterminado)
                 </label>
                 <select
                   value={legajoTarde}
                   onChange={e => handleSaveShiftSelection(legajoManana, e.target.value)}
-                  className="bg-slate-900 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-red-500 font-mono font-bold"
+                  className="bg-slate-900 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-red-500 font-mono font-bold cursor-pointer"
                 >
                   {legajosList.map(l => (
                     <option key={`t-${l.legajo}`} value={l.legajo}>
@@ -555,7 +680,7 @@ export default function SettingsPage() {
                 <button
                   onClick={handleAddLegajo}
                   disabled={isSavingLegajo || !newLegajoNum.trim()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-semibold transition-colors disabled:opacity-50 shrink-0"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-semibold transition-colors disabled:opacity-50 shrink-0 shadow-sm"
                 >
                   <Plus size={16} /> Agregar
                 </button>
@@ -600,169 +725,61 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* ── Planificador Semanal de Turnos (2 Semanas con Rollover Dinámico) ── */}
-          <div className="glass-card p-6 flex flex-col gap-6 border-amber-950/40 bg-slate-900/60">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-xl font-semibold text-white flex items-center gap-2">
-                  <Calendar className="text-amber-400" size={20} /> Planificador Semanal de Turnos (2 Semanas)
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Planifica con anticipación la semana en curso y la entrante. Cada Lunes a las 00:00 hs, la Semana Siguiente se convierte automáticamente en la Semana Actual.
-                </p>
+          {/* Credenciales del Portal */}
+          <div className="glass-card p-6 flex flex-col gap-6">
+            <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+              <ShieldCheck className="text-blue-400" size={20} /> Credenciales del Portal
+            </h3>
+            <div className="grid grid-cols-1 gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium text-slate-400 flex items-center gap-2"><User size={14} /> Usuario (Legajo)</label>
+                <input type="text" className="input-field" value={settings.username} onChange={e => setSettings({...settings, username: e.target.value})} />
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleCopyWeek}
-                  disabled={isSavingSchedule}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-50"
-                  title="Clona todos los turnos de la semana actual a la semana siguiente"
-                >
-                  <Copy size={14} className="text-amber-400" />
-                  Duplicar Semana a Siguiente
-                </button>
-                <button
-                  onClick={handleSaveSchedule}
-                  disabled={isSavingSchedule}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-950/40 transition-colors disabled:opacity-50"
-                >
-                  {isSavingSchedule ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-                  Guardar Planificación
-                </button>
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium text-slate-400 flex items-center gap-2"><Lock size={14} /> Contraseña</label>
+                <input type="password" className="input-field" value={settings.password} onChange={e => setSettings({...settings, password: e.target.value})} />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium text-slate-400 flex items-center gap-2"><Globe size={14} /> URL del Portal</label>
+                <input type="text" className="input-field" value={settings.portal_url} onChange={e => setSettings({...settings, portal_url: e.target.value})} />
               </div>
             </div>
-
-            {/* Pestañas de Semanas */}
-            <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-              <button
-                onClick={() => setSelectedWeekTab('current')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  selectedWeekTab === 'current'
-                    ? 'bg-amber-600 text-white shadow-md shadow-amber-950/50'
-                    : 'bg-slate-950/60 text-slate-400 hover:text-white border border-slate-800'
-                }`}
-              >
-                <Sun size={14} />
-                {currentWeek?.label || 'Semana Actual'}
-                <span className="text-[10px] bg-black/40 px-2 py-0.5 rounded-full font-mono">En Curso</span>
-              </button>
-
-              <button
-                onClick={() => setSelectedWeekTab('next')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  selectedWeekTab === 'next'
-                    ? 'bg-purple-600 text-white shadow-md shadow-purple-950/50'
-                    : 'bg-slate-950/60 text-slate-400 hover:text-white border border-slate-800'
-                }`}
-              >
-                <Moon size={14} />
-                {nextWeek?.label || 'Semana Siguiente'}
-                <span className="text-[10px] bg-black/40 px-2 py-0.5 rounded-full font-mono">Planificación</span>
-              </button>
-
-              {scheduleMsg && (
-                <span className="ml-auto text-xs text-emerald-400 font-medium animate-fade-in flex items-center gap-1">
-                  <Check size={14} /> {scheduleMsg}
-                </span>
-              )}
-            </div>
-
-            {/* Grilla de los 7 Días (Lunes a Domingo) */}
-            {(() => {
-              const activeWeek = selectedWeekTab === 'current' ? currentWeek : nextWeek
-              if (!activeWeek || !activeWeek.days) {
-                return (
-                  <div className="py-8 text-center text-slate-500 text-sm">
-                    Cargando calendario semanal de turnos...
-                  </div>
-                )
-              }
-              return (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
-                  {activeWeek.days.map(d => (
-                    <div
-                      key={d.date}
-                      className={`flex flex-col gap-2 p-3 rounded-xl border transition-all ${
-                        d.isToday
-                          ? 'bg-amber-950/30 border-amber-500 shadow-md shadow-amber-950/40'
-                          : 'bg-slate-950/50 border-slate-800 hover:border-slate-700'
-                      }`}
-                    >
-                      {/* Cabecera del día */}
-                      <div className="flex items-center justify-between pb-1.5 border-b border-slate-800/80">
-                        <div className="flex flex-col">
-                          <span className={`text-xs font-bold ${d.isToday ? 'text-amber-400' : 'text-slate-200'}`}>
-                            {d.dayName}
-                          </span>
-                          <span className="text-[11px] font-mono text-slate-400">
-                            {d.formattedDate}
-                          </span>
-                        </div>
-                        {d.isToday && (
-                          <span className="text-[9px] bg-amber-500 text-black font-extrabold px-1.5 py-0.5 rounded uppercase">
-                            HOY
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Selector Turno Mañana */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-semibold text-amber-300/80 flex items-center gap-1">
-                          <Sun size={10} /> Mañana (≤14:30)
-                        </label>
-                        <select
-                          value={d.manana}
-                          onChange={e => handleDayShiftChange(selectedWeekTab, d.date, 'manana', e.target.value)}
-                          className="bg-slate-900 border border-slate-700 text-white text-xs font-mono rounded px-2 py-1 focus:outline-none focus:border-amber-500 font-bold"
-                        >
-                          {legajosList.map(l => (
-                            <option key={`cal-m-${d.date}-${l.legajo}`} value={l.legajo}>
-                              {l.legajo} {l.nombre ? `(${l.nombre.slice(0, 10)})` : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Selector Turno Tarde */}
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-semibold text-purple-300/80 flex items-center gap-1">
-                          <Moon size={10} /> Tarde (≥15:00)
-                        </label>
-                        <select
-                          value={d.tarde}
-                          onChange={e => handleDayShiftChange(selectedWeekTab, d.date, 'tarde', e.target.value)}
-                          className="bg-slate-900 border border-slate-700 text-white text-xs font-mono rounded px-2 py-1 focus:outline-none focus:border-purple-500 font-bold"
-                        >
-                          {legajosList.map(l => (
-                            <option key={`cal-t-${d.date}-${l.legajo}`} value={l.legajo}>
-                              {l.legajo} {l.nombre ? `(${l.nombre.slice(0, 10)})` : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )
-            })()}
+            <button className="btn-primary self-start mt-2 px-8" onClick={handleSave} disabled={isSaving}>
+              <Save size={18} />
+              {isSaving ? 'Guardando...' : 'Guardar Cambios'}
+            </button>
+            {message && <p className={`text-sm mt-1 ${message.includes('Error') ? 'text-red-400' : 'text-emerald-400'}`}>{message}</p>}
           </div>
 
-          {/* ── Catalog Upload ── */}
+          {/* Aviso de Seguridad */}
+          <div className="glass-card border-amber-900/30 bg-amber-900/10 p-5 flex items-start gap-4">
+            <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={22} />
+            <div className="flex flex-col gap-1">
+              <h4 className="text-amber-200 font-bold text-sm">Aviso de Seguridad</h4>
+              <p className="text-amber-200/70 text-xs leading-relaxed">Las credenciales se almacenan de forma segura en la base de datos de Supabase para la autenticación automática del bot.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Columna Derecha: Catálogo + Info del Sistema + Supabase Status */}
+        <div className="flex flex-col gap-6">
+
+          {/* Catálogo de Productos */}
           <div className="glass-card p-6 flex flex-col gap-5">
             <div className="flex items-center justify-between">
               <h3 className="text-xl font-semibold text-white flex items-center gap-2">
                 <Database className="text-violet-400" size={20} /> Catálogo de Productos
               </h3>
               {catalogStatus && (
-                <span className="text-xs text-slate-500 bg-slate-800 px-3 py-1 rounded-full">
+                <span className="text-xs text-slate-400 bg-slate-800/80 border border-slate-700/60 px-3 py-1 rounded-full font-mono">
                   {(Number(catalogStatus.total) || 0).toLocaleString()} productos
                   {catalogStatus.lastUpdate && ` · ${new Date(catalogStatus.lastUpdate).toLocaleDateString('es-AR')}`}
                 </span>
               )}
             </div>
 
-            <p className="text-sm text-slate-400">
-              Importá el archivo <code className="bg-slate-800 px-1.5 py-0.5 rounded text-violet-300">catalog.db</code> desde tu dispositivo para actualizar precios y stock.
+            <p className="text-sm text-slate-400 leading-relaxed">
+              Importá el archivo <code className="bg-slate-800 px-1.5 py-0.5 rounded text-violet-300 font-mono">catalog.db</code> desde tu dispositivo para actualizar precios y stock.
               {hasFSA && savedHandleName && (
                 <span className="ml-2 text-emerald-400">✓ Archivo recordado: <strong>{savedHandleName}</strong></span>
               )}
@@ -813,7 +830,7 @@ export default function SettingsPage() {
                 Leyendo archivo e importando a Supabase... esto puede tardar unos segundos.
               </div>
             )}
-              {uploadResult && (
+            {uploadResult && (
               <div className="flex items-center gap-3 text-sm text-emerald-300 bg-emerald-900/20 rounded-lg p-3">
                 <CheckCircle2 size={16} className="shrink-0" />
                 ✅ <strong>{(Number(uploadResult.imported) || 0).toLocaleString()}</strong> productos importados correctamente.
@@ -824,83 +841,7 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {/* ── Catalog Items Table ── */}
-          {catalogStatus && catalogStatus.total > 0 && (
-            <div className="glass-card p-6 flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <Package className="text-violet-400" size={18} /> Items del Catálogo
-                </h3>
-                <span className="text-xs text-slate-500">{(Number(catalogTotal) || 0).toLocaleString()} resultados</span>
-              </div>
-
-              {/* Search */}
-              <div className="relative">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                <input
-                  type="text"
-                  placeholder="Buscar por código o descripción..."
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition-colors"
-                  value={catalogSearch}
-                  onChange={e => { setCatalogSearch(e.target.value); setCatalogPage(1) }}
-                />
-              </div>
-
-              {/* Table */}
-              <div className="overflow-x-auto rounded-lg border border-slate-800">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-slate-900/80 text-slate-400 text-left">
-                      <th className="px-4 py-3 font-medium">Código</th>
-                      <th className="px-4 py-3 font-medium">Descripción</th>
-                      <th className="px-4 py-3 font-medium text-right">Precio</th>
-                      <th className="px-4 py-3 font-medium text-right">Stock</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {isLoadingItems ? (
-                      <tr><td colSpan={4} className="text-center py-8 text-slate-500"><Loader2 size={20} className="animate-spin inline" /></td></tr>
-                    ) : catalogItems.length === 0 ? (
-                      <tr><td colSpan={4} className="text-center py-8 text-slate-600">Sin resultados</td></tr>
-                    ) : catalogItems.map(item => (
-                      <tr key={item.item_id} className="border-t border-slate-800/60 hover:bg-slate-800/30 transition-colors">
-                        <td className="px-4 py-2.5 font-mono text-violet-300">{item.item_id}</td>
-                        <td className="px-4 py-2.5 text-slate-200">{item.loyalty_description}</td>
-                        <td className="px-4 py-2.5 text-right text-emerald-400 font-medium">
-                          ${Number(item.price_amount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="px-4 py-2.5 text-right">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${Number(item.current_quantity) > 0 ? 'bg-emerald-900/40 text-emerald-400' : 'bg-red-900/40 text-red-400'}`}>
-                            {Number(item.current_quantity)} u.
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex justify-center gap-2 mt-2">
-                  <button onClick={() => setCatalogPage(p => Math.max(1, p - 1))} disabled={catalogPage === 1} className="px-3 py-1 rounded bg-slate-800 text-slate-300 text-sm disabled:opacity-40">‹</button>
-                  <span className="px-3 py-1 text-slate-400 text-sm">{catalogPage} / {totalPages}</span>
-                  <button onClick={() => setCatalogPage(p => Math.min(totalPages, p + 1))} disabled={catalogPage === totalPages} className="px-3 py-1 rounded bg-slate-800 text-slate-300 text-sm disabled:opacity-40">›</button>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="glass-card border-amber-900/30 bg-amber-900/10 p-6 flex items-start gap-4">
-            <AlertTriangle className="text-amber-500 shrink-0" size={24} />
-            <div className="flex flex-col gap-1">
-              <h4 className="text-amber-200 font-bold">Aviso de Seguridad</h4>
-              <p className="text-amber-200/60 text-sm">Las credenciales se almacenan de forma segura en la base de datos de Supabase.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-6">
+          {/* Información del Sistema */}
           <div className="glass-card p-6">
             <h4 className="font-bold text-white mb-4">Información del Sistema</h4>
             <div className="space-y-4 text-sm">
@@ -925,6 +866,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
+          {/* Estado de Supabase / SQLite */}
           {dbStatus?.isSqlite && (
             <div className="glass-card border-amber-500/40 bg-amber-950/20 p-5 flex flex-col gap-3">
               <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
@@ -956,6 +898,75 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      {/* ── SECCIÓN 3: ITEMS DEL CATÁLOGO (TABLA ANCHO COMPLETO) ── */}
+      {catalogStatus && catalogStatus.total > 0 && (
+        <div className="glass-card p-6 flex flex-col gap-4 w-full">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Package className="text-violet-400" size={18} /> Items del Catálogo
+            </h3>
+            <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full font-mono">
+              {(Number(catalogTotal) || 0).toLocaleString()} resultados
+            </span>
+          </div>
+
+          {/* Search */}
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Buscar por código o descripción..."
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition-colors"
+              value={catalogSearch}
+              onChange={e => { setCatalogSearch(e.target.value); setCatalogPage(1) }}
+            />
+          </div>
+
+          {/* Table */}
+          <div className="overflow-x-auto rounded-lg border border-slate-800">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-900/80 text-slate-400 text-left">
+                  <th className="px-4 py-3 font-medium">Código</th>
+                  <th className="px-4 py-3 font-medium">Descripción</th>
+                  <th className="px-4 py-3 font-medium text-right">Precio</th>
+                  <th className="px-4 py-3 font-medium text-right">Stock</th>
+                </tr>
+              </thead>
+              <tbody>
+                {isLoadingItems ? (
+                  <tr><td colSpan={4} className="text-center py-8 text-slate-500"><Loader2 size={20} className="animate-spin inline" /></td></tr>
+                ) : catalogItems.length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-8 text-slate-600">Sin resultados</td></tr>
+                ) : catalogItems.map(item => (
+                  <tr key={item.item_id} className="border-t border-slate-800/60 hover:bg-slate-800/30 transition-colors">
+                    <td className="px-4 py-2.5 font-mono text-violet-300">{item.item_id}</td>
+                    <td className="px-4 py-2.5 text-slate-200">{item.loyalty_description}</td>
+                    <td className="px-4 py-2.5 text-right text-emerald-400 font-medium">
+                      ${Number(item.price_amount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${Number(item.current_quantity) > 0 ? 'bg-emerald-900/40 text-emerald-400' : 'bg-red-900/40 text-red-400'}`}>
+                        {Number(item.current_quantity)} u.
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex justify-center gap-2 mt-2">
+              <button onClick={() => setCatalogPage(p => Math.max(1, p - 1))} disabled={catalogPage === 1} className="px-3 py-1 rounded bg-slate-800 text-slate-300 text-sm disabled:opacity-40">‹</button>
+              <span className="px-3 py-1 text-slate-400 text-sm">{catalogPage} / {totalPages}</span>
+              <button onClick={() => setCatalogPage(p => Math.min(totalPages, p + 1))} disabled={catalogPage === totalPages} className="px-3 py-1 rounded bg-slate-800 text-slate-300 text-sm disabled:opacity-40">›</button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
