@@ -1036,24 +1036,29 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 
   let currentOpenCatName = '';
 
-  for (let step = 0; step < 30; step++) {
+  for (let step = 0; step < 40; step++) {
     const catSpan = _page.locator('#span_W0093W0024SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC_0001').first();
     if (!(await catSpan.isVisible().catch(() => false))) {
-      break; // Ya no quedan categorías pendientes: los 21 equipos fueron aprobados
+      break; // Ya no quedan categorías pendientes: todos los equipos fueron aprobados
     }
 
     const catName = (await catSpan.innerText().catch(() => 'Categoría')).trim();
 
-    // Desplegar la categoría _0001 ÚNICAMENTE cuando cambia de categoría (ej. al iniciar Murales,
-    // o cuando Murales termina y Freezers/Cámaras pasan a ocupar _0001). Mientras se aprueban equipos
-    // dentro de la misma categoría, el acordeón permanece abierto y NO se debe volver a clickear la flecha.
-    if (catName !== currentOpenCatName) {
+    // Si la fila del primer equipo pendiente no está visible (acordeón colapsado por postback GeneXus),
+    // clickear la flecha de la categoría _0001 para desplegar los equipos:
+    let eqVisible = await _page.locator('#span_W0093W0024W0034vEQUIPAMIENTONOMB_0001').first().isVisible().catch(() => false);
+    if (!eqVisible) {
       const arrow = _page.locator('#span_W0093W0024vDETAILWEBCOMPONENT_0001, #W0093W0024GridContainerRow_0001 i.ArrowIcon').first();
       if (await arrow.isVisible().catch(() => false)) {
         await arrow.click({ timeout: 3000 }).catch(() => {});
         await _page.waitForTimeout(1800);
-        currentOpenCatName = catName;
       }
+      eqVisible = await _page.locator('#span_W0093W0024W0034vEQUIPAMIENTONOMB_0001').first().isVisible().catch(() => false);
+    }
+
+    if (!eqVisible) {
+      log(`[Motor IA Temperatura] No se pudo expandir la lista de equipos para categoría "${catName}". Pasando.`);
+      break;
     }
 
     const rowData = await _page.evaluate(() => {
