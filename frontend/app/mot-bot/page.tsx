@@ -464,14 +464,30 @@ export default function MotBotPage() {
 
   const fetchLegajos = useCallback(async () => {
     try {
-      const res = await fetch(API_URL('/api/mot-bot/legajos'))
+      const res = await fetch(API_URL('/api/mot-bot/schedule'))
       if (res.ok) {
         const d = await res.json()
         if (d.ok) {
-          if (Array.isArray(d.legajos) && d.legajos.length > 0) setLegajosList(d.legajos)
-          if (d.manana) setLegajoManana(d.manana)
-          if (d.tarde) setLegajoTarde(d.tarde)
-          setLegajo(isMorningShift() ? (d.manana || '23250') : (d.tarde || '23250'))
+          if (Array.isArray(d.legajosList) && d.legajosList.length > 0) setLegajosList(d.legajosList)
+          if (d.today) {
+            if (d.today.manana) setLegajoManana(d.today.manana)
+            if (d.today.tarde) setLegajoTarde(d.today.tarde)
+            setLegajo(isMorningShift() ? (d.today.manana || '23250') : (d.today.tarde || '23250'))
+          }
+          return
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const res2 = await fetch(API_URL('/api/mot-bot/legajos'))
+      if (res2.ok) {
+        const d2 = await res2.json()
+        if (d2.ok) {
+          if (Array.isArray(d2.legajos) && d2.legajos.length > 0) setLegajosList(d2.legajos)
+          if (d2.manana) setLegajoManana(d2.manana)
+          if (d2.tarde) setLegajoTarde(d2.tarde)
+          setLegajo(isMorningShift() ? (d2.manana || '23250') : (d2.tarde || '23250'))
         }
       }
     } catch (_) {}
@@ -482,11 +498,24 @@ export default function MotBotPage() {
     setLegajoTarde(newTarde)
     setLegajo(isMorningShift() ? newManana : newTarde)
     try {
-      await fetch(API_URL('/api/mot-bot/legajos/selection'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manana: newManana, tarde: newTarde })
-      })
+      const now = new Date()
+      const yyyy = now.getFullYear()
+      const mm = String(now.getMonth() + 1).padStart(2, '0')
+      const dd = String(now.getDate()).padStart(2, '0')
+      const todayIso = `${yyyy}-${mm}-${dd}`
+
+      await Promise.allSettled([
+        fetch(API_URL('/api/mot-bot/legajos/selection'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ manana: newManana, tarde: newTarde })
+        }),
+        fetch(API_URL('/api/mot-bot/schedule'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ schedule: { [todayIso]: { manana: newManana, tarde: newTarde } } })
+        })
+      ])
     } catch (_) {}
   }
 

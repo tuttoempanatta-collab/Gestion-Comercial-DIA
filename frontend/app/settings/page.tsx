@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Save, Lock, User, Globe, ShieldCheck, AlertTriangle, Database, Upload, RefreshCw, Search, Package, CheckCircle2, Loader2, Users, Plus, Trash2, Sun, Moon } from 'lucide-react'
+import { Save, Lock, User, Globe, ShieldCheck, AlertTriangle, Database, Upload, RefreshCw, Search, Package, CheckCircle2, Loader2, Users, Plus, Trash2, Sun, Moon, Calendar, Copy, Check } from 'lucide-react'
 import { API_URL } from '@/lib/api'
 
 // ── File System Access API helpers ──────────────────────────────────────────
@@ -49,6 +49,24 @@ interface CatalogStatus { total: number; lastUpdate: string | null }
 interface CatalogItem { item_id: string; loyalty_description: string; price_amount: number; current_quantity: number }
 interface DbStatus { provider: string; isSqlite: boolean; hasDatabaseUrl: boolean; error: string | null; active: boolean }
 
+interface ScheduleDay {
+  date: string
+  dayName: string
+  formattedDate: string
+  fullLabel: string
+  manana: string
+  tarde: string
+  isToday: boolean
+}
+
+interface WeekInfo {
+  id: string
+  label: string
+  startDate: string
+  endDate: string
+  days: ScheduleDay[]
+}
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState({ username: '', password: '', portal_url: '' })
   const [isSaving, setIsSaving] = useState(false)
@@ -82,6 +100,14 @@ export default function SettingsPage() {
   const [isSavingLegajo, setIsSavingLegajo] = useState(false)
   const [legajoMsg, setLegajoMsg] = useState('')
 
+  // Calendario Semanal Dinámico (2 Semanas)
+  const [selectedWeekTab, setSelectedWeekTab] = useState<'current' | 'next'>('current')
+  const [currentWeek, setCurrentWeek] = useState<WeekInfo | null>(null)
+  const [nextWeek, setNextWeek] = useState<WeekInfo | null>(null)
+  const [todayInfo, setTodayInfo] = useState<ScheduleDay | null>(null)
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false)
+  const [scheduleMsg, setScheduleMsg] = useState('')
+
   // Feature detection (client-only, avoids hydration mismatch)
   const [hasFSA, setHasFSA] = useState(false)
 
@@ -94,10 +120,102 @@ export default function SettingsPage() {
     fetchCatalogStatus()
     fetchDbStatus()
     fetchLegajos()
+    fetchSchedule()
     loadFileHandle().then(h => {
       if (h) { setSavedHandle(h); setSavedHandleName(h.name) }
     })
   }, [])
+
+  const fetchSchedule = async () => {
+    try {
+      const res = await fetch(API_URL('/api/mot-bot/schedule'))
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) {
+          setCurrentWeek(data.currentWeek)
+          setNextWeek(data.nextWeek)
+          setTodayInfo(data.today)
+          if (Array.isArray(data.legajosList) && data.legajosList.length > 0) {
+            setLegajosList(data.legajosList)
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  const handleDayShiftChange = (weekType: 'current' | 'next', date: string, shift: 'manana' | 'tarde', val: string) => {
+    const updateWeek = (prev: WeekInfo | null): WeekInfo | null => {
+      if (!prev) return null
+      return {
+        ...prev,
+        days: prev.days.map(d => (d.date === date ? { ...d, [shift]: val } : d)),
+      }
+    }
+    if (weekType === 'current') {
+      setCurrentWeek(updateWeek)
+    } else {
+      setNextWeek(updateWeek)
+    }
+  }
+
+  const handleSaveSchedule = async () => {
+    if (!currentWeek || !nextWeek) return
+    setIsSavingSchedule(true)
+    setScheduleMsg('')
+    try {
+      const scheduleMap: Record<string, { manana: string; tarde: string }> = {}
+      currentWeek.days.forEach(d => {
+        scheduleMap[d.date] = { manana: d.manana, tarde: d.tarde }
+      })
+      nextWeek.days.forEach(d => {
+        scheduleMap[d.date] = { manana: d.manana, tarde: d.tarde }
+      })
+
+      const res = await fetch(API_URL('/api/mot-bot/schedule'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: scheduleMap }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) {
+          setCurrentWeek(data.currentWeek)
+          setNextWeek(data.nextWeek)
+          setTodayInfo(data.today)
+          setScheduleMsg('✓ Planificación guardada correctamente.')
+          setTimeout(() => setScheduleMsg(''), 3000)
+        }
+      }
+    } catch {
+      setScheduleMsg('Error al guardar la planificación.')
+    } finally {
+      setIsSavingSchedule(false)
+    }
+  }
+
+  const handleCopyWeek = async () => {
+    setIsSavingSchedule(true)
+    setScheduleMsg('')
+    try {
+      const res = await fetch(API_URL('/api/mot-bot/schedule/copy-week'), {
+        method: 'POST',
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) {
+          setCurrentWeek(data.currentWeek)
+          setNextWeek(data.nextWeek)
+          setTodayInfo(data.today)
+          setScheduleMsg('✓ Semana actual copiada a la semana siguiente.')
+          setTimeout(() => setScheduleMsg(''), 3000)
+        }
+      }
+    } catch {
+      setScheduleMsg('Error al copiar semana.')
+    } finally {
+      setIsSavingSchedule(false)
+    }
+  }
 
   const fetchLegajos = async () => {
     try {
@@ -480,6 +598,153 @@ export default function SettingsPage() {
                 ))}
               </div>
             </div>
+          </div>
+
+          {/* ── Planificador Semanal de Turnos (2 Semanas con Rollover Dinámico) ── */}
+          <div className="glass-card p-6 flex flex-col gap-6 border-amber-950/40 bg-slate-900/60">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+                  <Calendar className="text-amber-400" size={20} /> Planificador Semanal de Turnos (2 Semanas)
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Planifica con anticipación la semana en curso y la entrante. Cada Lunes a las 00:00 hs, la Semana Siguiente se convierte automáticamente en la Semana Actual.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopyWeek}
+                  disabled={isSavingSchedule}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors disabled:opacity-50"
+                  title="Clona todos los turnos de la semana actual a la semana siguiente"
+                >
+                  <Copy size={14} className="text-amber-400" />
+                  Duplicar Semana a Siguiente
+                </button>
+                <button
+                  onClick={handleSaveSchedule}
+                  disabled={isSavingSchedule}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-950/40 transition-colors disabled:opacity-50"
+                >
+                  {isSavingSchedule ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                  Guardar Planificación
+                </button>
+              </div>
+            </div>
+
+            {/* Pestañas de Semanas */}
+            <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+              <button
+                onClick={() => setSelectedWeekTab('current')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  selectedWeekTab === 'current'
+                    ? 'bg-amber-600 text-white shadow-md shadow-amber-950/50'
+                    : 'bg-slate-950/60 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                <Sun size={14} />
+                {currentWeek?.label || 'Semana Actual'}
+                <span className="text-[10px] bg-black/40 px-2 py-0.5 rounded-full font-mono">En Curso</span>
+              </button>
+
+              <button
+                onClick={() => setSelectedWeekTab('next')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  selectedWeekTab === 'next'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-950/50'
+                    : 'bg-slate-950/60 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                <Moon size={14} />
+                {nextWeek?.label || 'Semana Siguiente'}
+                <span className="text-[10px] bg-black/40 px-2 py-0.5 rounded-full font-mono">Planificación</span>
+              </button>
+
+              {scheduleMsg && (
+                <span className="ml-auto text-xs text-emerald-400 font-medium animate-fade-in flex items-center gap-1">
+                  <Check size={14} /> {scheduleMsg}
+                </span>
+              )}
+            </div>
+
+            {/* Grilla de los 7 Días (Lunes a Domingo) */}
+            {(() => {
+              const activeWeek = selectedWeekTab === 'current' ? currentWeek : nextWeek
+              if (!activeWeek || !activeWeek.days) {
+                return (
+                  <div className="py-8 text-center text-slate-500 text-sm">
+                    Cargando calendario semanal de turnos...
+                  </div>
+                )
+              }
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+                  {activeWeek.days.map(d => (
+                    <div
+                      key={d.date}
+                      className={`flex flex-col gap-2 p-3 rounded-xl border transition-all ${
+                        d.isToday
+                          ? 'bg-amber-950/30 border-amber-500 shadow-md shadow-amber-950/40'
+                          : 'bg-slate-950/50 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      {/* Cabecera del día */}
+                      <div className="flex items-center justify-between pb-1.5 border-b border-slate-800/80">
+                        <div className="flex flex-col">
+                          <span className={`text-xs font-bold ${d.isToday ? 'text-amber-400' : 'text-slate-200'}`}>
+                            {d.dayName}
+                          </span>
+                          <span className="text-[11px] font-mono text-slate-400">
+                            {d.formattedDate}
+                          </span>
+                        </div>
+                        {d.isToday && (
+                          <span className="text-[9px] bg-amber-500 text-black font-extrabold px-1.5 py-0.5 rounded uppercase">
+                            HOY
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Selector Turno Mañana */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-semibold text-amber-300/80 flex items-center gap-1">
+                          <Sun size={10} /> Mañana (≤14:30)
+                        </label>
+                        <select
+                          value={d.manana}
+                          onChange={e => handleDayShiftChange(selectedWeekTab, d.date, 'manana', e.target.value)}
+                          className="bg-slate-900 border border-slate-700 text-white text-xs font-mono rounded px-2 py-1 focus:outline-none focus:border-amber-500 font-bold"
+                        >
+                          {legajosList.map(l => (
+                            <option key={`cal-m-${d.date}-${l.legajo}`} value={l.legajo}>
+                              {l.legajo} {l.nombre ? `(${l.nombre.slice(0, 10)})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Selector Turno Tarde */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-semibold text-purple-300/80 flex items-center gap-1">
+                          <Moon size={10} /> Tarde (≥15:00)
+                        </label>
+                        <select
+                          value={d.tarde}
+                          onChange={e => handleDayShiftChange(selectedWeekTab, d.date, 'tarde', e.target.value)}
+                          className="bg-slate-900 border border-slate-700 text-white text-xs font-mono rounded px-2 py-1 focus:outline-none focus:border-purple-500 font-bold"
+                        >
+                          {legajosList.map(l => (
+                            <option key={`cal-t-${d.date}-${l.legajo}`} value={l.legajo}>
+                              {l.legajo} {l.nombre ? `(${l.nombre.slice(0, 10)})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
           </div>
 
           {/* ── Catalog Upload ── */}

@@ -17,8 +17,11 @@ const {
   updateSettings, 
   getMotLegajosConfig,
   updateMotLegajosConfig,
+  getMotSchedule,
+  updateMotSchedule,
   deleteExtraction 
 } = require('./db');
+const { getCalendarWeeksInfo } = require('./mot_calendar');
 const { runScraper } = require('./scraper');
 const { fetchDescriptionsFromIET } = require('./iet_scraper');
 const { getMissingDescriptions } = require('./description_db');
@@ -721,6 +724,87 @@ app.post('/api/mot-bot/legajos/selection', async (req, res) => {
   }
 });
 
+// GET planificación de turnos semanal a 2 semanas (Semana Actual y Semana Siguiente)
+app.get('/api/mot-bot/schedule', async (req, res) => {
+  try {
+    const config = await getMotLegajosConfig();
+    const scheduleMap = await getMotSchedule();
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(scheduleMap);
+    const weeksInfo = getCalendarWeeksInfo(scheduleMap, config.manana, config.tarde);
+    res.json({
+      ok: true,
+      today: weeksInfo.today,
+      currentWeek: weeksInfo.currentWeek,
+      nextWeek: weeksInfo.nextWeek,
+      legajosList: config.legajos,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST guardar o actualizar días en la planificación de turnos
+app.post('/api/mot-bot/schedule', async (req, res) => {
+  try {
+    const { schedule } = req.body || {};
+    if (!schedule || typeof schedule !== 'object') {
+      return res.status(400).json({ ok: false, error: 'Objeto schedule requerido' });
+    }
+    const merged = await updateMotSchedule(schedule);
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(merged);
+
+    const config = await getMotLegajosConfig();
+    const weeksInfo = getCalendarWeeksInfo(merged, config.manana, config.tarde);
+    res.json({
+      ok: true,
+      today: weeksInfo.today,
+      currentWeek: weeksInfo.currentWeek,
+      nextWeek: weeksInfo.nextWeek,
+      message: 'Planificación semanal guardada correctamente',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST clonar/duplicar planificación de la semana actual a la semana siguiente
+app.post('/api/mot-bot/schedule/copy-week', async (req, res) => {
+  try {
+    const config = await getMotLegajosConfig();
+    const currentSchedule = await getMotSchedule();
+    const weeksInfo = getCalendarWeeksInfo(currentSchedule, config.manana, config.tarde);
+
+    const toUpdate = {};
+    for (let i = 0; i < 7; i++) {
+      const curDay = weeksInfo.currentWeek.days[i];
+      const nextDay = weeksInfo.nextWeek.days[i];
+      if (curDay && nextDay) {
+        toUpdate[nextDay.date] = {
+          manana: curDay.manana,
+          tarde: curDay.tarde,
+        };
+      }
+    }
+
+    const merged = await updateMotSchedule(toUpdate);
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(merged);
+
+    const updatedWeeks = getCalendarWeeksInfo(merged, config.manana, config.tarde);
+    res.json({
+      ok: true,
+      today: updatedWeeks.today,
+      currentWeek: updatedWeeks.currentWeek,
+      nextWeek: updatedWeeks.nextWeek,
+      message: 'Semana actual copiada exitosamente a la semana siguiente',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
@@ -730,6 +814,13 @@ app.listen(PORT, () => {
     const motBot = require('./mot_bot');
     motBot.setMotLegajosState(cfg);
     console.log(`[MOT-Legajos] Configuración de turnos inicializada (Mañana: ${cfg.manana}, Tarde: ${cfg.tarde}, Total: ${cfg.legajos.length})`);
+  }).catch(() => {});
+
+  // Cargar cronograma semanal de turnos MOT en memoria
+  getMotSchedule().then(sched => {
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(sched);
+    console.log(`[MOT-Schedule] Planificador semanal de turnos inicializado (${Object.keys(sched || {}).length} fechas programadas)`);
   }).catch(() => {});
 
   // Iniciar el Guardián Automático Diario del Robot MOT (05:30 AM a 22:40 HS Hora Argentina)

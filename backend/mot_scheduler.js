@@ -85,6 +85,10 @@ function checkDayRollover() {
     _pausedManuallyToday    = false;
     _preSleepSweepDoneToday = false;
     log(`📅 Nuevo día detectado en Argentina (${today}). Contador de marcaciones diarias reiniciado.`);
+    try {
+      const mb = require('./mot_bot');
+      mb.syncTodayLegajosFromSchedule();
+    } catch (_) {}
   }
 }
 

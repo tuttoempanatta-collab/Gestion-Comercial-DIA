@@ -159,6 +159,42 @@ module.exports = {
     }
   },
 
+  getMotSchedule: async () => {
+    try {
+      const res = await pool.query("SELECT value FROM settings WHERE key = 'mot_shifts_schedule'");
+      if (res.rows && res.rows.length > 0 && res.rows[0].value) {
+        return JSON.parse(res.rows[0].value);
+      }
+      return {};
+    } catch (e) {
+      console.warn('[DB] Error leyendo mot_shifts_schedule:', e.message);
+      return {};
+    }
+  },
+
+  updateMotSchedule: async (scheduleMap) => {
+    try {
+      let current = {};
+      try {
+        const res = await pool.query("SELECT value FROM settings WHERE key = 'mot_shifts_schedule'");
+        if (res.rows && res.rows.length > 0 && res.rows[0].value) {
+          current = JSON.parse(res.rows[0].value);
+        }
+      } catch (_) {}
+
+      const merged = { ...current, ...scheduleMap };
+      const val = JSON.stringify(merged);
+      await pool.query(
+        'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
+        ['mot_shifts_schedule', val]
+      );
+      return merged;
+    } catch (e) {
+      console.error('[DB] Error guardando mot_shifts_schedule:', e.message);
+      throw e;
+    }
+  },
+
   deleteExtraction: async (id) => {
     verifiedExtractions.delete(id);
     // Delete child rows first then parent extraction

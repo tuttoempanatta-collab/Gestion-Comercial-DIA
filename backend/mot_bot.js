@@ -34,6 +34,7 @@ let _motLegajoTarde  = DEFAULT_LEGAJO;
 let _motLegajosList  = [
   { legajo: DEFAULT_LEGAJO, nombre: 'Responsable Turno Mañana' }
 ];
+let _motScheduleMap  = {};
 
 function setMotLegajosState({ legajos, manana, tarde }) {
   if (Array.isArray(legajos) && legajos.length > 0) _motLegajosList = legajos;
@@ -47,6 +48,29 @@ function getMotLegajosState() {
     manana: _motLegajoManana,
     tarde: _motLegajoTarde,
   };
+}
+
+function setMotScheduleMap(scheduleMap) {
+  if (scheduleMap && typeof scheduleMap === 'object') {
+    _motScheduleMap = { ..._motScheduleMap, ...scheduleMap };
+    syncTodayLegajosFromSchedule();
+  }
+}
+
+function getMotScheduleMap() {
+  return _motScheduleMap;
+}
+
+function syncTodayLegajosFromSchedule() {
+  const { formatDateISO } = require('./mot_calendar');
+  const nowArg = getNowArgentina();
+  const todayStr = formatDateISO(nowArg);
+  const entry = _motScheduleMap[todayStr];
+  if (entry) {
+    if (entry.manana) _motLegajoManana = String(entry.manana).trim();
+    if (entry.tarde) _motLegajoTarde = String(entry.tarde).trim();
+    log(`📅 [Cronograma Semanal] Turnos asignados para hoy (${todayStr}): Mañana -> Leg. ${_motLegajoManana} | Tarde -> Leg. ${_motLegajoTarde}`);
+  }
 }
 
 /**
@@ -945,6 +969,7 @@ async function readTasks() {
  */
 async function getMotDashboard(forceRefresh = false) {
   return await withLock(async () => {
+    syncTodayLegajosFromSchedule();
     if (forceRefresh || _cachedTasks.length === 0) {
       await readTasks();
     }
@@ -1964,5 +1989,8 @@ module.exports = {
   resolveLegajoForTask,
   getMotLegajosState,
   setMotLegajosState,
+  setMotScheduleMap,
+  getMotScheduleMap,
+  syncTodayLegajosFromSchedule,
   DEFAULT_EQUIPAMIENTO_TIENDA_624,
 };
