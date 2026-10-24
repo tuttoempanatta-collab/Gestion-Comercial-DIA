@@ -28,6 +28,61 @@ const MOT_EMAIL      = process.env.MOT_EMAIL      || 't00624ar@stores.diagroup.c
 const MOT_PASSWORD   = process.env.MOT_PASSWORD   || 'Tienda-/624';
 const DEFAULT_LEGAJO = process.env.MOT_LEGAJO     || '23250';
 
+// ─── Gestión de Legajos por Turnos (Mañana hasta 14:30 hs / Tarde desde 15:00 hs) ─
+let _motLegajoManana = DEFAULT_LEGAJO;
+let _motLegajoTarde  = DEFAULT_LEGAJO;
+let _motLegajosList  = [
+  { legajo: DEFAULT_LEGAJO, nombre: 'Responsable Turno Mañana' }
+];
+
+function setMotLegajosState({ legajos, manana, tarde }) {
+  if (Array.isArray(legajos) && legajos.length > 0) _motLegajosList = legajos;
+  if (manana) _motLegajoManana = String(manana).trim();
+  if (tarde) _motLegajoTarde = String(tarde).trim();
+}
+
+function getMotLegajosState() {
+  return {
+    legajos: _motLegajosList,
+    manana: _motLegajoManana,
+    tarde: _motLegajoTarde,
+  };
+}
+
+/**
+ * Resuelve el legajo aplicable a una tarea según el turno correspondiente:
+ * - Turno Mañana: tareas que inician antes de las 15:00 hs (hasta 14:30 hs).
+ * - Turno Tarde: tareas que inician a partir de las 15:00 hs.
+ * Si se provee un legajo explícito en llamada manual, se respeta.
+ */
+function resolveLegajoForTask(task, explicitLegajo = null) {
+  if (explicitLegajo && String(explicitLegajo).trim() !== '') {
+    return String(explicitLegajo).trim();
+  }
+
+  // 1. Evaluar según el horario de inicio programado de la tarea
+  if (task && task.horarioInicio) {
+    const parts = task.horarioInicio.split(':');
+    if (parts.length >= 2) {
+      const taskStartMin = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+      const cutoffMin = 15 * 60; // 15:00 hs
+      if (taskStartMin < cutoffMin) {
+        return _motLegajoManana || DEFAULT_LEGAJO;
+      } else {
+        return _motLegajoTarde || _motLegajoManana || DEFAULT_LEGAJO;
+      }
+    }
+  }
+
+  // 2. Si no tiene horario específico, evaluar por la hora actual de Argentina
+  const nowArg = getNowArgentina();
+  const currentMin = nowArg.getHours() * 60 + nowArg.getMinutes();
+  if (currentMin < 15 * 60) {
+    return _motLegajoManana || DEFAULT_LEGAJO;
+  }
+  return _motLegajoTarde || _motLegajoManana || DEFAULT_LEGAJO;
+}
+
 // Minutos DESPUÉS del horario de inicio de cada tarea para marcar automáticamente
 const MARK_AFTER_START_MINUTES = 10;
 const MARK_BEFORE_MINUTES      = 10; // alias de compatibilidad
@@ -900,7 +955,10 @@ async function getMotDashboard(forceRefresh = false) {
         id: _tiendaId,
         nombre: `Tienda 00${_tiendaId} AR`,
         email: MOT_EMAIL,
-        legajoDefault: DEFAULT_LEGAJO,
+        legajoDefault: _motLegajoManana || DEFAULT_LEGAJO,
+        legajoManana: _motLegajoManana || DEFAULT_LEGAJO,
+        legajoTarde: _motLegajoTarde || DEFAULT_LEGAJO,
+        legajosList: _motLegajosList,
         fecha: _cachedDate,
         horario: '07:00 a 22:30',
       },
@@ -990,7 +1048,7 @@ async function getTaskDetail(rowIndex) {
  * Reserva/Cámaras 0-4°C / Carne 0-2°C) e impactando fila por fila en GeneXus.
  */
 async function executeTemperatureControlOnMot(task, options = {}) {
-  const legajo = options.responsable || DEFAULT_LEGAJO;
+  const legajo = resolveLegajoForTask(task, options.responsable);
   const customTemps = options.temperaturas || {}; // { [EquipamientoGUID]: { equipo, producto, nombre } }
 
   log(`[Motor IA Temperatura] Analizando e iniciando Control de Temperatura en MOT para "${task.nombre}" (Legajo: ${legajo})...`);
@@ -1175,7 +1233,7 @@ function isOmittedStoreTask(task) {
  * ingresando el legajo 23250 en #W0093W0054vRESPONSABLE y presionando #W0093W0054BTNCONFIRMAR.
  */
 async function executeLimpiezaControlOnMot(task, options = {}) {
-  const legajo = options.responsable || DEFAULT_LEGAJO;
+  const legajo = resolveLegajoForTask(task, options.responsable);
   log(`Confirmando tarea con Legajo en MOT: "${task.nombre}" (Legajo: ${legajo})...`);
 
   if (!task.detailLink) {
@@ -1649,8 +1707,9 @@ async function markDueTasks(markedToday = new Set()) {
       const auditDate = getTodayStrArg();
       try {
         const outcome = await markWithRetry(task, async (t) => {
+          const shiftLegajo = resolveLegajoForTask(t);
           if (t.tipoControl === 'Equipo') {
-            const res = await executeTemperatureControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+            const res = await executeTemperatureControlOnMot(t, { responsable: shiftLegajo });
             const expectedTotal = Object.values(knowledge.RULES.EXPECTED_EQUIPMENT).reduce((a, b) => a + b, 0);
             if (res.aprobados !== undefined && res.aprobados < expectedTotal) {
               log(`ℹ️ [Verificación Temperatura] Se aprobaron ${res.aprobados} de ${expectedTotal} equipos esperados (puede haber equipos ya aprobados).`, 'warn');
@@ -1661,7 +1720,7 @@ async function markDueTasks(markedToday = new Set()) {
             return await executeCaducidadesOnMot(t);
           }
           if (t.tipoControl === 'Limpieza' || !t.tieneBotonCheck) {
-            return await executeLimpiezaControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+            return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo });
           }
           // Volver a asegurarnos de estar en la grilla de tareas si salimos a un detalle
           if (!_page.url().includes('tareastienda')) {
@@ -1779,14 +1838,15 @@ async function runPreSleepSweepAndResolve() {
 
       try {
         const outcome = await markWithRetry(task, async (t) => {
+          const shiftLegajo = resolveLegajoForTask(t);
           if (t.tipoControl === 'Equipo') {
-            return await executeTemperatureControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+            return await executeTemperatureControlOnMot(t, { responsable: shiftLegajo });
           }
           if (t.tipoControl === 'Caducidad' || /caducidad/i.test(t.nombre)) {
             return await executeCaducidadesOnMot(t);
           }
           if (t.tipoControl === 'Limpieza' || !t.tieneBotonCheck) {
-            return await executeLimpiezaControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+            return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo });
           }
           if (!_page.url().includes('tareastienda')) {
             await navigateToTareasPage();
@@ -1901,5 +1961,8 @@ module.exports = {
   MARK_BEFORE_MINUTES,
   MARK_AFTER_START_MINUTES,
   DEFAULT_LEGAJO,
+  resolveLegajoForTask,
+  getMotLegajosState,
+  setMotLegajosState,
   DEFAULT_EQUIPAMIENTO_TIENDA_624,
 };

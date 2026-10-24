@@ -30,7 +30,9 @@ import {
   ListChecks,
   Store,
   FileText,
-  Send
+  Send,
+  Sun,
+  Moon
 } from 'lucide-react'
 
 import { API_URL } from '@/lib/api'
@@ -439,6 +441,54 @@ export default function MotBotPage() {
   const [action, setAction]           = useState<string | null>(null)
   const [markingRow, setMarkingRow]   = useState<string | null>(null)
   const [legajo, setLegajo]           = useState('23250')
+  const [legajosList, setLegajosList]   = useState<{ legajo: string; nombre: string }[]>([
+    { legajo: '23250', nombre: 'Turno Mañana' }
+  ])
+  const [legajoManana, setLegajoManana] = useState('23250')
+  const [legajoTarde, setLegajoTarde]   = useState('23250')
+
+  const isMorningShift = () => {
+    const now = new Date()
+    return now.getHours() < 15
+  }
+
+  const getEffectiveLegajoForTask = (task?: MotTask | null) => {
+    if (task && task.horarioInicio) {
+      const h = parseInt(task.horarioInicio.split(':')[0] || '', 10)
+      if (!isNaN(h)) {
+        return h < 15 ? legajoManana : legajoTarde
+      }
+    }
+    return isMorningShift() ? legajoManana : legajoTarde
+  }
+
+  const fetchLegajos = useCallback(async () => {
+    try {
+      const res = await fetch(API_URL('/api/mot-bot/legajos'))
+      if (res.ok) {
+        const d = await res.json()
+        if (d.ok) {
+          if (Array.isArray(d.legajos) && d.legajos.length > 0) setLegajosList(d.legajos)
+          if (d.manana) setLegajoManana(d.manana)
+          if (d.tarde) setLegajoTarde(d.tarde)
+          setLegajo(isMorningShift() ? (d.manana || '23250') : (d.tarde || '23250'))
+        }
+      }
+    } catch (_) {}
+  }, [])
+
+  const handleShiftChange = async (newManana: string, newTarde: string) => {
+    setLegajoManana(newManana)
+    setLegajoTarde(newTarde)
+    setLegajo(isMorningShift() ? newManana : newTarde)
+    try {
+      await fetch(API_URL('/api/mot-bot/legajos/selection'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manana: newManana, tarde: newTarde })
+      })
+    } catch (_) {}
+  }
 
   // Filtros de lista de tareas
   const [searchQuery, setSearchQuery]   = useState('')
@@ -483,7 +533,14 @@ export default function MotBotPage() {
         const merged = mergeWithSavedMarks(incoming)
         setTasks(merged)
         setStats(computeClientStats(merged))
-        if (j.tienda) setTiendaInfo(j.tienda)
+        if (j.tienda) {
+          setTiendaInfo(j.tienda)
+          if (j.tienda.legajoManana) setLegajoManana(j.tienda.legajoManana)
+          if (j.tienda.legajoTarde) setLegajoTarde(j.tienda.legajoTarde)
+          if (Array.isArray(j.tienda.legajosList) && j.tienda.legajosList.length > 0) {
+            setLegajosList(j.tienda.legajosList)
+          }
+        }
         if (j.lastSyncAt) setLastSyncAt(j.lastSyncAt)
         if (j.equipamiento && j.equipamiento.length > 0) {
           setEquipamiento(j.equipamiento)
@@ -626,9 +683,10 @@ export default function MotBotPage() {
   useEffect(() => {
     fetchStatus()
     fetchTasksDashboard(false)
+    fetchLegajos()
     const id = setInterval(fetchStatus, 15000)
     return () => clearInterval(id)
-  }, [fetchStatus, fetchTasksDashboard])
+  }, [fetchStatus, fetchTasksDashboard, fetchLegajos])
 
   async function callApi(endpoint: string, label: string) {
     setLoading(true)
@@ -718,7 +776,7 @@ export default function MotBotPage() {
           horarioCierre: task.horarioCierre,
           accion,
           motivo: motivo || 'Operación en tienda',
-          responsable: legajo || '23250',
+          responsable: getEffectiveLegajoForTask(task),
           temperaturas: customTemps,
         }),
       })
@@ -748,9 +806,9 @@ export default function MotBotPage() {
       diasDeSemana: 'Todos',
       descripcion:
         task.tipoControl === 'Limpieza'
-          ? `Tarea de Orden y Limpieza (${task.nombre}). Requiere ingreso de número de legajo del responsable (${legajo}) y confirmación en MOT.WebLimpieza.`
+          ? `Tarea de Orden y Limpieza (${task.nombre}). Requiere ingreso de número de legajo del responsable (${getEffectiveLegajoForTask(task)}) y confirmación en MOT.WebLimpieza.`
           : task.tipoControl === 'Equipo'
-          ? `Control de Temperatura de Equipamiento (${task.nombre}). Requiere validar legajo (${legajo}) y registrar temperaturas de Murales (Pollo: 0 a 1.9°C, demás Murales: 0 a 4°C), Freezers (-18 a -22°C) y Cámaras (0 a 4°C).`
+          ? `Control de Temperatura de Equipamiento (${task.nombre}). Requiere validar legajo (${getEffectiveLegajoForTask(task)}) y registrar temperaturas de Murales (Pollo: 0 a 1.9°C, demás Murales: 0 a 4°C), Freezers (-18 a -22°C) y Cámaras (0 a 4°C).`
           : `Ejecución y verificación en tienda de la tarea "${task.nombre}" dentro de la franja horaria asignada (${task.horario}).`,
       procedimientos: [],
       detalleTipoServer: task.tipoControl === 'Directa' ? '' : task.tipoControl,
@@ -880,17 +938,49 @@ export default function MotBotPage() {
             </div>
           </div>
 
-          {/* Controles superiores: Legajo + Sincronizar + Iniciar/Detener Bot */}
+          {/* Controles superiores: Selectores de Turnos (Mañana y Tarde) + Sincronizar + Iniciar/Detener Bot */}
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5">
-              <span className="text-xs text-slate-400 font-medium">Legajo Resp.:</span>
-              <input
-                type="text"
-                value={legajo}
-                onChange={e => setLegajo(e.target.value)}
-                className="w-20 bg-transparent text-white font-mono text-sm font-bold focus:outline-none text-center border-b border-slate-700 focus:border-red-500"
-                placeholder="23250"
-              />
+            {/* Selectores de Turnos: Mañana (hasta 14:30) y Tarde (desde 15:00) */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Turno Mañana */}
+              <div className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1.5 transition-all ${
+                isMorningShift() ? 'bg-amber-950/40 border-amber-500/60 shadow-sm shadow-amber-950' : 'bg-slate-950/80 border-slate-800'
+              }`}>
+                <Sun size={14} className={isMorningShift() ? 'text-amber-400' : 'text-slate-500'} />
+                <span className="text-[11px] text-slate-400 font-semibold">Mañana:</span>
+                <select
+                  value={legajoManana}
+                  onChange={e => handleShiftChange(e.target.value, legajoTarde)}
+                  className="bg-transparent text-white font-mono text-xs font-bold focus:outline-none cursor-pointer"
+                  title="Legajo para tareas del Turno Mañana (hasta 14:30 hs)"
+                >
+                  {legajosList.map(l => (
+                    <option key={`hdr-m-${l.legajo}`} value={l.legajo} className="bg-slate-900 text-white">
+                      {l.legajo} {l.nombre ? `(${l.nombre})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Turno Tarde */}
+              <div className={`flex items-center gap-1.5 border rounded-xl px-2.5 py-1.5 transition-all ${
+                !isMorningShift() ? 'bg-purple-950/40 border-purple-500/60 shadow-sm shadow-purple-950' : 'bg-slate-950/80 border-slate-800'
+              }`}>
+                <Moon size={14} className={!isMorningShift() ? 'text-purple-400' : 'text-slate-500'} />
+                <span className="text-[11px] text-slate-400 font-semibold">Tarde:</span>
+                <select
+                  value={legajoTarde}
+                  onChange={e => handleShiftChange(legajoManana, e.target.value)}
+                  className="bg-transparent text-white font-mono text-xs font-bold focus:outline-none cursor-pointer"
+                  title="Legajo para tareas del Turno Tarde (desde 15:00 hs)"
+                >
+                  {legajosList.map(l => (
+                    <option key={`hdr-t-${l.legajo}`} value={l.legajo} className="bg-slate-900 text-white">
+                      {l.legajo} {l.nombre ? `(${l.nombre})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <button
@@ -1226,7 +1316,7 @@ export default function MotBotPage() {
                               disabled={isMarking}
                               title={
                                 task.tipoControl === 'Limpieza'
-                                  ? `Confirmar Limpieza en MOT con Legajo ${legajo}`
+                                  ? `Confirmar Limpieza en MOT con Legajo ${getEffectiveLegajoForTask(task)}`
                                   : 'Marcar como Cumplida (✓) en MOT'
                               }
                               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all disabled:opacity-50 shadow-md shadow-emerald-950/50"
@@ -1236,7 +1326,7 @@ export default function MotBotPage() {
                               ) : (
                                 <Check size={15} />
                               )}
-                              {task.tipoControl === 'Limpieza' ? `Cumplir (Leg. ${legajo})` : 'Cumplir'}
+                              {task.tipoControl === 'Limpieza' ? `Cumplir (Leg. ${getEffectiveLegajoForTask(task)})` : 'Cumplir'}
                             </button>
                           )}
 
@@ -1357,7 +1447,7 @@ export default function MotBotPage() {
                   className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all disabled:opacity-50 shadow-lg shadow-emerald-950/50"
                 >
                   {markingRow ? <RefreshCw size={15} className="animate-spin" /> : <Send size={15} />}
-                  {markingRow ? 'Enviando a MOT...' : `Enviar y Aprobar en MOT (Leg. ${legajo})`}
+                  {markingRow ? 'Enviando a MOT...' : `Enviar y Aprobar en MOT (Leg. ${getEffectiveLegajoForTask(tasks.find(t => t.rowIndex === selectedTempTaskRow))})`}
                 </button>
               </div>
             </div>
@@ -1772,13 +1862,10 @@ export default function MotBotPage() {
               {/* Acciones directas desde el modal de detalle */}
               <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">Legajo:</span>
-                  <input
-                    type="text"
-                    value={legajo}
-                    onChange={e => setLegajo(e.target.value)}
-                    className="w-20 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-white text-center"
-                  />
+                  <span className="text-xs text-slate-400">Legajo Asignado:</span>
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-white font-bold">
+                    {getEffectiveLegajoForTask(selectedTask)}
+                  </span>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1802,7 +1889,7 @@ export default function MotBotPage() {
                       className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50"
                     >
                       <Check size={15} />
-                      {selectedTask.tipoControl === 'Limpieza' ? `Confirmar Limpieza (Leg. ${legajo})` : 'Cumplir en MOT'}
+                      {selectedTask.tipoControl === 'Limpieza' ? `Confirmar Limpieza (Leg. ${getEffectiveLegajoForTask(selectedTask)})` : 'Cumplir en MOT'}
                     </button>
                   )}
 

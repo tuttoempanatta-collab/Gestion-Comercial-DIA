@@ -15,6 +15,8 @@ const {
   getExtractionData, 
   getSettings, 
   updateSettings, 
+  getMotLegajosConfig,
+  updateMotLegajosConfig,
   deleteExtraction 
 } = require('./db');
 const { runScraper } = require('./scraper');
@@ -645,10 +647,91 @@ app.post('/api/mot-bot/session', async (req, res) => {
   }
 });
 
+// GET legajos de turnos MOT (Mañana y Tarde)
+app.get('/api/mot-bot/legajos', async (req, res) => {
+  try {
+    const motBot = require('./mot_bot');
+    const config = await getMotLegajosConfig();
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, ...config });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST agregar legajo a la lista
+app.post('/api/mot-bot/legajos', async (req, res) => {
+  try {
+    const { legajo, nombre } = req.body || {};
+    if (!legajo || !String(legajo).trim()) {
+      return res.status(400).json({ ok: false, error: 'Número de legajo requerido' });
+    }
+    const cleanLegajo = String(legajo).trim();
+    const cleanNombre = (nombre || '').trim() || `Legajo ${cleanLegajo}`;
+
+    const config = await getMotLegajosConfig();
+    const exists = config.legajos.some(x => String(x.legajo) === cleanLegajo);
+    if (!exists) {
+      config.legajos.push({ legajo: cleanLegajo, nombre: cleanNombre });
+      await updateMotLegajosConfig({ legajos: config.legajos });
+    }
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, ...config });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE eliminar legajo de la lista
+app.delete('/api/mot-bot/legajos/:legajo', async (req, res) => {
+  try {
+    const targetLegajo = String(req.params.legajo || '').trim();
+    const config = await getMotLegajosConfig();
+    config.legajos = config.legajos.filter(x => String(x.legajo) !== targetLegajo);
+    if (config.legajos.length === 0) {
+      config.legajos = [{ legajo: '23250', nombre: 'Turno Mañana' }];
+    }
+    if (config.manana === targetLegajo) config.manana = config.legajos[0].legajo;
+    if (config.tarde === targetLegajo) config.tarde = config.legajos[0].legajo;
+
+    await updateMotLegajosConfig(config);
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, ...config });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST guardar selección activa de legajos por turno (Mañana y Tarde)
+app.post('/api/mot-bot/legajos/selection', async (req, res) => {
+  try {
+    const { manana, tarde } = req.body || {};
+    const config = await getMotLegajosConfig();
+    if (manana) config.manana = String(manana).trim();
+    if (tarde) config.tarde = String(tarde).trim();
+
+    await updateMotLegajosConfig({ manana: config.manana, tarde: config.tarde });
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, manana: config.manana, tarde: config.tarde });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  // Cargar configuración de legajos de turnos MOT en memoria
+  getMotLegajosConfig().then(cfg => {
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(cfg);
+    console.log(`[MOT-Legajos] Configuración de turnos inicializada (Mañana: ${cfg.manana}, Tarde: ${cfg.tarde}, Total: ${cfg.legajos.length})`);
+  }).catch(() => {});
+
   // Iniciar el Guardián Automático Diario del Robot MOT (05:30 AM a 22:40 HS Hora Argentina)
   if (motScheduler.initAutoGuardian) {
     motScheduler.initAutoGuardian();

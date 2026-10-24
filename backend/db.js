@@ -119,6 +119,46 @@ module.exports = {
     }
   },
 
+  getMotLegajosConfig: async () => {
+    try {
+      const res = await pool.query("SELECT key, value FROM settings WHERE key IN ('mot_legajos_list', 'mot_legajo_manana', 'mot_legajo_tarde')");
+      const map = (res.rows || []).reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
+      let list = [];
+      try {
+        if (map.mot_legajos_list) list = JSON.parse(map.mot_legajos_list);
+      } catch (_) {}
+      if (!Array.isArray(list) || list.length === 0) {
+        list = [{ legajo: '23250', nombre: 'Turno Mañana' }];
+      }
+      return {
+        legajos: list,
+        manana: map.mot_legajo_manana || '23250',
+        tarde: map.mot_legajo_tarde || '23250',
+      };
+    } catch (e) {
+      console.warn('[DB] Error cargando mot_legajos desde settings, usando default:', e.message);
+      return {
+        legajos: [{ legajo: '23250', nombre: 'Turno Mañana' }],
+        manana: '23250',
+        tarde: '23250',
+      };
+    }
+  },
+
+  updateMotLegajosConfig: async (config) => {
+    const toSave = {};
+    if (config.legajos !== undefined) toSave.mot_legajos_list = JSON.stringify(config.legajos);
+    if (config.manana !== undefined) toSave.mot_legajo_manana = String(config.manana);
+    if (config.tarde !== undefined) toSave.mot_legajo_tarde = String(config.tarde);
+
+    for (const [key, value] of Object.entries(toSave)) {
+      await pool.query(
+        'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
+        [key, value]
+      );
+    }
+  },
+
   deleteExtraction: async (id) => {
     verifiedExtractions.delete(id);
     // Delete child rows first then parent extraction

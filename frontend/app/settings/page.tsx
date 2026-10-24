@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Save, Lock, User, Globe, ShieldCheck, AlertTriangle, Database, Upload, RefreshCw, Search, Package, CheckCircle2, Loader2 } from 'lucide-react'
+import { Save, Lock, User, Globe, ShieldCheck, AlertTriangle, Database, Upload, RefreshCw, Search, Package, CheckCircle2, Loader2, Users, Plus, Trash2, Sun, Moon } from 'lucide-react'
 import { API_URL } from '@/lib/api'
 
 // ── File System Access API helpers ──────────────────────────────────────────
@@ -73,6 +73,15 @@ export default function SettingsPage() {
   const [catalogPage, setCatalogPage] = useState(1)
   const [isLoadingItems, setIsLoadingItems] = useState(false)
 
+  // Legajos MOT (Turnos Mañana y Tarde)
+  const [legajosList, setLegajosList] = useState<{ legajo: string; nombre: string }[]>([])
+  const [legajoManana, setLegajoManana] = useState('23250')
+  const [legajoTarde, setLegajoTarde] = useState('23250')
+  const [newLegajoNum, setNewLegajoNum] = useState('')
+  const [newLegajoNombre, setNewLegajoNombre] = useState('')
+  const [isSavingLegajo, setIsSavingLegajo] = useState(false)
+  const [legajoMsg, setLegajoMsg] = useState('')
+
   // Feature detection (client-only, avoids hydration mismatch)
   const [hasFSA, setHasFSA] = useState(false)
 
@@ -84,10 +93,82 @@ export default function SettingsPage() {
     fetchSettings()
     fetchCatalogStatus()
     fetchDbStatus()
+    fetchLegajos()
     loadFileHandle().then(h => {
       if (h) { setSavedHandle(h); setSavedHandleName(h.name) }
     })
   }, [])
+
+  const fetchLegajos = async () => {
+    try {
+      const res = await fetch(API_URL('/api/mot-bot/legajos'))
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) {
+          if (Array.isArray(data.legajos)) setLegajosList(data.legajos)
+          if (data.manana) setLegajoManana(data.manana)
+          if (data.tarde) setLegajoTarde(data.tarde)
+        }
+      }
+    } catch (_) {}
+  }
+
+  const handleAddLegajo = async () => {
+    if (!newLegajoNum.trim()) return
+    setIsSavingLegajo(true)
+    setLegajoMsg('')
+    try {
+      const res = await fetch(API_URL('/api/mot-bot/legajos'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ legajo: newLegajoNum.trim(), nombre: newLegajoNombre.trim() }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) {
+          setLegajosList(data.legajos)
+          setNewLegajoNum('')
+          setNewLegajoNombre('')
+          setLegajoMsg('Legajo agregado correctamente.')
+          setTimeout(() => setLegajoMsg(''), 3000)
+        }
+      }
+    } catch {
+      setLegajoMsg('Error al agregar legajo.')
+    } finally {
+      setIsSavingLegajo(false)
+    }
+  }
+
+  const handleDeleteLegajo = async (legajoToDelete: string) => {
+    try {
+      const res = await fetch(API_URL(`/api/mot-bot/legajos/${encodeURIComponent(legajoToDelete)}`), {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok) {
+          setLegajosList(data.legajos)
+          if (data.manana) setLegajoManana(data.manana)
+          if (data.tarde) setLegajoTarde(data.tarde)
+        }
+      }
+    } catch (_) {}
+  }
+
+  const handleSaveShiftSelection = async (manana: string, tarde: string) => {
+    setLegajoManana(manana)
+    setLegajoTarde(tarde)
+    try {
+      await fetch(API_URL('/api/mot-bot/legajos/selection'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manana, tarde }),
+      })
+      setLegajoMsg('Turnos actualizados.')
+      setTimeout(() => setLegajoMsg(''), 2500)
+    } catch (_) {}
+  }
 
   const fetchDbStatus = async () => {
     try {
@@ -281,6 +362,124 @@ export default function SettingsPage() {
               {isSaving ? 'Guardando...' : 'Guardar Cambios'}
             </button>
             {message && <p className={`text-sm mt-2 ${message.includes('Error') ? 'text-red-400' : 'text-emerald-400'}`}>{message}</p>}
+          </div>
+
+          {/* ── Gestión de Legajos MOT (Turnos Mañana y Tarde) ── */}
+          <div className="glass-card p-6 flex flex-col gap-5 border-red-950/40 bg-slate-900/60">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+                <Users className="text-red-400" size={20} /> Gestión de Legajos MOT (Turnos)
+              </h3>
+              <span className="text-xs bg-red-950/60 text-red-300 border border-red-800/40 px-2.5 py-1 rounded-full font-medium">
+                {legajosList.length} legajos registrados
+              </span>
+            </div>
+
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Configura los legajos utilizados para confirmar tareas en MOT. El robot asignará automáticamente el legajo de la <strong className="text-amber-400">Mañana (hasta 14:30 hs)</strong> o de la <strong className="text-purple-400">Tarde (desde 15:00 hs)</strong> según el horario de cada tarea.
+            </p>
+
+            {/* Asignación Rápida de Turnos */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950/60 p-4 rounded-xl border border-slate-800">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-amber-400 flex items-center gap-1.5">
+                  <Sun size={14} /> Turno Mañana (hasta 14:30 hs)
+                </label>
+                <select
+                  value={legajoManana}
+                  onChange={e => handleSaveShiftSelection(e.target.value, legajoTarde)}
+                  className="bg-slate-900 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-red-500 font-mono font-bold"
+                >
+                  {legajosList.map(l => (
+                    <option key={`m-${l.legajo}`} value={l.legajo}>
+                      {l.legajo} — {l.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-purple-400 flex items-center gap-1.5">
+                  <Moon size={14} /> Turno Tarde (desde 15:00 hs)
+                </label>
+                <select
+                  value={legajoTarde}
+                  onChange={e => handleSaveShiftSelection(legajoManana, e.target.value)}
+                  className="bg-slate-900 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-red-500 font-mono font-bold"
+                >
+                  {legajosList.map(l => (
+                    <option key={`t-${l.legajo}`} value={l.legajo}>
+                      {l.legajo} — {l.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Formulario para agregar nuevo legajo */}
+            <div className="flex flex-col gap-3 pt-3 border-t border-slate-800">
+              <h4 className="text-sm font-semibold text-slate-300">Agregar Nuevo Legajo</h4>
+              <div className="flex flex-wrap sm:flex-nowrap gap-3 items-center">
+                <input
+                  type="text"
+                  placeholder="N° Legajo (ej: 31420)"
+                  value={newLegajoNum}
+                  onChange={e => setNewLegajoNum(e.target.value)}
+                  className="w-36 bg-slate-950 border border-slate-800 text-white text-sm rounded-lg px-3 py-2 font-mono font-bold focus:outline-none focus:border-red-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Nombre / Responsable (opcional)"
+                  value={newLegajoNombre}
+                  onChange={e => setNewLegajoNombre(e.target.value)}
+                  className="flex-1 bg-slate-950 border border-slate-800 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-red-500"
+                />
+                <button
+                  onClick={handleAddLegajo}
+                  disabled={isSavingLegajo || !newLegajoNum.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-semibold transition-colors disabled:opacity-50 shrink-0"
+                >
+                  <Plus size={16} /> Agregar
+                </button>
+              </div>
+              {legajoMsg && <span className="text-xs text-emerald-400 font-medium">{legajoMsg}</span>}
+            </div>
+
+            {/* Listado de Legajos con botón de eliminar */}
+            <div className="flex flex-col gap-2 pt-2">
+              <h4 className="text-xs uppercase tracking-wider text-slate-400 font-bold">Legajos Registrados</h4>
+              <div className="divide-y divide-slate-800/60 border border-slate-800 rounded-xl overflow-hidden bg-slate-950/40">
+                {legajosList.map(item => (
+                  <div key={item.legajo} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-800/30 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-sm font-bold text-red-300 bg-red-950/60 border border-red-900/40 px-2 py-0.5 rounded">
+                        {item.legajo}
+                      </span>
+                      <span className="text-sm text-slate-200 font-medium">{item.nombre}</span>
+                      {item.legajo === legajoManana && (
+                        <span className="text-[10px] bg-amber-950/70 text-amber-300 border border-amber-800/50 px-2 py-0.5 rounded-full font-bold">
+                          Mañana
+                        </span>
+                      )}
+                      {item.legajo === legajoTarde && (
+                        <span className="text-[10px] bg-purple-950/70 text-purple-300 border border-purple-800/50 px-2 py-0.5 rounded-full font-bold">
+                          Tarde
+                        </span>
+                      )}
+                    </div>
+                    {legajosList.length > 1 && (
+                      <button
+                        onClick={() => handleDeleteLegajo(item.legajo)}
+                        className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-950/40 rounded transition-colors"
+                        title="Eliminar legajo"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* ── Catalog Upload ── */}
