@@ -15,6 +15,7 @@ const {
   getTaskDetail,
   markTaskOnMot,
   markDueTasks,
+  runPreSleepSweepAndResolve,
   closeBrowser,
   log,
   getLogs,
@@ -25,23 +26,26 @@ const {
 } = require('./mot_bot');
 
 // ─── Configuración de Horario Automático Diario (Hora Argentina UTC-3) ───────
-const DAILY_WAKE_TIME  = '05:30'; // Se despierta solo todos los días a las 05:30 AM
-const DAILY_SLEEP_TIME = '22:40'; // Cierra y descansa a las 22:40 hs (última tarea cierra 22:35)
-const WAKE_MINUTES     = 5 * 60 + 30;   // 330 min (05:30)
-const SLEEP_MINUTES    = 22 * 60 + 40;  // 1360 min (22:40)
+const DAILY_WAKE_TIME      = '05:30'; // Se despierta solo todos los días a las 05:30 AM
+const DAILY_PRE_SLEEP_TIME = '22:30'; // Pasada preventiva 10 min antes del cierre definitivo
+const DAILY_SLEEP_TIME     = '22:40'; // Cierra y descansa a las 22:40 hs (última tarea cierra 22:35)
+const WAKE_MINUTES         = 5 * 60 + 30;   // 330 min (05:30)
+const PRE_SLEEP_MINUTES    = 22 * 60 + 30;  // 1350 min (22:30)
+const SLEEP_MINUTES        = 22 * 60 + 40;  // 1360 min (22:40)
 
 // ─── Estado del scheduler ─────────────────────────────────────────────────────
-let _interval            = null;
-let _guardianInterval    = null;
-let _status              = 'sleeping'; // 'running' | 'sleeping' | 'stopped' | 'error' | 'logging_in'
-let _lastError           = null;
-let _startedAt           = null;
-let _nextRunAt           = null;
-let _needsLogin          = false;
-let _autoScheduleEnabled = true;       // Guardia automática 05:30 - 22:40 hs activa por defecto
-let _pausedManuallyToday = false;      // Si el usuario pausó manualmente dentro de la franja 05:30-22:40
-let _forcedNightRun      = false;      // Si el usuario forzó encendido manual fuera de horario (22:40-05:30)
-let _isRunningCycle      = false;
+let _interval               = null;
+let _guardianInterval       = null;
+let _status                 = 'sleeping'; // 'running' | 'sleeping' | 'stopped' | 'error' | 'logging_in'
+let _lastError              = null;
+let _startedAt              = null;
+let _nextRunAt              = null;
+let _needsLogin             = false;
+let _autoScheduleEnabled    = true;       // Guardia automática 05:30 - 22:40 hs activa por defecto
+let _pausedManuallyToday    = false;      // Si el usuario pausó manualmente dentro de la franja 05:30-22:40
+let _forcedNightRun         = false;      // Si el usuario forzó encendido manual fuera de horario (22:40-05:30)
+let _isRunningCycle         = false;
+let _preSleepSweepDoneToday = false;
 
 // Historial de marcaciones del día (se reinicia a medianoche de Argentina)
 let _markedToday   = new Set();
@@ -76,9 +80,10 @@ function isWithinOperatingWindow() {
 function checkDayRollover() {
   const today = todayStringArg();
   if (today !== _todayStr) {
-    _todayStr            = today;
-    _markedToday         = new Set();
-    _pausedManuallyToday = false;
+    _todayStr               = today;
+    _markedToday            = new Set();
+    _pausedManuallyToday    = false;
+    _preSleepSweepDoneToday = false;
     log(`📅 Nuevo día detectado en Argentina (${today}). Contador de marcaciones diarias reiniciado.`);
   }
 }
@@ -99,6 +104,22 @@ async function runCycle() {
     }
 
     const argTime = getArgentinaHHMM();
+    const currentMins = getArgentinaMinutes();
+
+    // Pasada preventiva a partir de las 22:30 hs (10 min antes del cierre definitivo)
+    if (_autoScheduleEnabled && currentMins >= PRE_SLEEP_MINUTES && currentMins < SLEEP_MINUTES && !_preSleepSweepDoneToday) {
+      _preSleepSweepDoneToday = true;
+      log(`⏰ [Pre-Cierre Preventivo ${DAILY_PRE_SLEEP_TIME} hs] Auditando tareas del día para asegurar 100% de cumplimiento antes del descanso...`);
+      try {
+        const sweep = await runPreSleepSweepAndResolve();
+        if (sweep && sweep.rescuedCount > 0) {
+          log(`🎉 [Pre-Cierre Preventivo] Se rescataron y completaron ${sweep.rescuedCount} tarea(s) antes de las ${DAILY_SLEEP_TIME} hs.`);
+        }
+      } catch (err) {
+        log(`⚠️ [Pre-Cierre Preventivo] Error en barrido: ${err.message}`, 'warn');
+      }
+    }
+
     console.log(`[MOT-Scheduler] Ejecutando ciclo (${argTime} hs AR)...`);
     _nextRunAt = new Date(Date.now() + 60 * 1000).toISOString();
 
@@ -137,13 +158,27 @@ async function enterNightSleep(reason = 'Reposo nocturno automático') {
   _forcedNightRun = false;
   _nextRunAt      = null;
   _status         = 'sleeping';
+
+  // ── SEGUNDO CHEQUEO PRE-DORMICIÓN CON MOTOR IA ──
   try {
+    const argTime = getArgentinaHHMM();
+    log(`🌙 [Segundo Chequeo Pre-Dormición ${argTime} hs] Auditando y verificando tareas pendientes o incompletas antes de apagar... Motivo: ${reason}`);
+    const sweepRes = await runPreSleepSweepAndResolve();
+    if (sweepRes && sweepRes.rescuedCount > 0) {
+      log(`🎉 [Segundo Chequeo Pre-Dormición] ¡Éxito! Se finalizaron ${sweepRes.rescuedCount} tarea(s) que habían quedado sin terminar.`);
+    } else {
+      log(`👍 [Segundo Chequeo Pre-Dormición] Verificado: 0 tareas pendientes. Todo el plan diario fue completado.`);
+    }
+
     const mb = require('./mot_bot');
     const day = mb.getAudit(mb.getTodayKey());
     const ok = day.filter(e => e.estado === 'verificada').length;
     const rev = day.filter(e => e.estado !== 'verificada').length;
     log(`📋 [Reporte de Auditoría Diario] ${ok} tareas verificadas en MOT, ${rev} requieren revisión.`);
-  } catch (_) {}
+  } catch (err) {
+    log(`⚠️ [Segundo Chequeo Pre-Dormición] Error en el chequeo final antes de dormir: ${err.message}`, 'error');
+  }
+
   await closeBrowser();
   log(`🌙 [Auto-Sleep] ${reason} Robot en reposo nocturno. Se despertará solo a las ${DAILY_WAKE_TIME} hs.`);
 }

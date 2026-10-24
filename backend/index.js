@@ -600,6 +600,17 @@ app.post('/api/mot-bot/stop', async (req, res) => {
   }
 });
 
+// POST disparar manualmente el Segundo Chequeo Pre-Dormición con Motor IA
+app.post('/api/mot-bot/pre-sleep-sweep', async (req, res) => {
+  try {
+    const motBot = require('./mot_bot');
+    const result = await motBot.runPreSleepSweepAndResolve();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POST reiniciar el bot a 0%
 app.post('/api/mot-bot/reset', async (req, res) => {
   try {

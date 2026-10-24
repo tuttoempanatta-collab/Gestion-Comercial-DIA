@@ -2,10 +2,13 @@ name: Supabase & Backend Keep-Alive Bot
 
 on:
   schedule:
+    # Pre-calentamiento del Robot MOT: 05:20 y 05:25 AM Hora Argentina (08:20 y 08:25 UTC)
+    - cron: '20 8 * * *'
+    - cron: '25 8 * * *'
     # Despertador exacto del Robot MOT a las 05:30 AM Hora Argentina (08:30 UTC)
     - cron: '30 8 * * *'
     # Pings periódicos cada 10 minutos durante la jornada operativa (05:30 a 22:40 AR = 08:30 a 01:40 UTC)
-    - cron: '*/10 0-1,8-23 * * *'
+    - cron: '*/10 8-23,0-1 * * *'
   workflow_dispatch:
     inputs:
       backend_url:
@@ -26,48 +29,52 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           echo "========================================================"
-          echo "Iniciando proceso de Keep-Alive para evitar pausas"
-          echo "Fecha y hora: $(date -u)"
+          echo "Iniciando proceso de Keep-Alive y Auto-Despertar MOT"
+          echo "Fecha y hora UTC: $(date -u)"
           echo "========================================================"
 
-          # Determinar la URL del Backend
-          TARGET_BACKEND="${INPUT_BACKEND_URL:-${SECRET_BACKEND_URL:-$VAR_BACKEND_URL}}"
+          # Determinar la URL del Backend (con fallback fijo a Render)
+          TARGET_BACKEND="${INPUT_BACKEND_URL:-${SECRET_BACKEND_URL:-${VAR_BACKEND_URL:-https://gestion-comercial-dia.onrender.com}}}"
+          TARGET_BACKEND="${TARGET_BACKEND%/}"
 
-          if [ -n "$TARGET_BACKEND" ]; then
-            echo "1. Realizando ping al endpoint /api/keep-alive en el Backend: $TARGET_BACKEND"
-            HTTP_CODE=$(curl -s -o /tmp/keepalive_res.json -w "%{http_code}" "$TARGET_BACKEND/api/keep-alive" || echo "000")
-            echo "Código HTTP recibido: $HTTP_CODE"
-            if [ -f /tmp/keepalive_res.json ]; then
-              cat /tmp/keepalive_res.json
-              echo ""
-            fi
+          echo "1. Realizando ping de despertar al Backend en Render: $TARGET_BACKEND/health"
+          HEALTH_CODE=$(curl -s -m 45 -o /tmp/health_res.txt -w "%{http_code}" "$TARGET_BACKEND/health" || echo "000")
+          echo "Código HTTP recibido (/health): $HEALTH_CODE"
 
-            echo "2. Realizando ping al endpoint /api/db-status..."
-            curl -s "$TARGET_BACKEND/api/db-status" || echo "Error al consultar db-status"
+          echo "2. Activando scheduler de MOT Bot si está en reposo: $TARGET_BACKEND/api/mot-bot/start"
+          START_CODE=$(curl -s -m 45 -X POST -o /tmp/start_res.json -w "%{http_code}" "$TARGET_BACKEND/api/mot-bot/start" -H "Content-Type: application/json" -d '{"manual": false}' || echo "000")
+          echo "Código HTTP recibido (/api/mot-bot/start): $START_CODE"
+          if [ -f /tmp/start_res.json ]; then
+            cat /tmp/start_res.json
             echo ""
-          else
-            echo "Aviso: No se configuró BACKEND_URL en GitHub Secrets o Variables."
-            echo "Para máxima efectividad, agregá la variable BACKEND_URL en Settings > Secrets and variables > Actions."
           fi
+
+          echo "3. Sincronizando estado y tareas del día: $TARGET_BACKEND/api/mot-bot/tasks"
+          TASKS_CODE=$(curl -s -m 45 -o /dev/null -w "%{http_code}" "$TARGET_BACKEND/api/mot-bot/tasks?refresh=true" || echo "000")
+          echo "Código HTTP recibido (/api/mot-bot/tasks): $TASKS_CODE"
+
+          echo "4. Realizando ping al endpoint /api/db-status..."
+          curl -s -m 30 "$TARGET_BACKEND/api/db-status" || echo "Error al consultar db-status"
+          echo ""
 
           # Ping directo a Supabase
           TARGET_SUPABASE="${SUPABASE_URL:-https://zrbawrypaebfmgpivyvd.supabase.co}"
-          echo "3. Realizando ping a Supabase en $TARGET_SUPABASE..."
+          echo "5. Realizando ping a Supabase en $TARGET_SUPABASE..."
           if [ -n "$SUPABASE_KEY" ]; then
-            SUPA_CODE=$(curl -s -o /tmp/supa_res.json -w "%{http_code}" "$TARGET_SUPABASE/rest/v1/settings?select=key&limit=1" -H "apikey: $SUPABASE_KEY" || echo "000")
+            SUPA_CODE=$(curl -s -m 30 -o /tmp/supa_res.json -w "%{http_code}" "$TARGET_SUPABASE/rest/v1/settings?select=key&limit=1" -H "apikey: $SUPABASE_KEY" || echo "000")
             echo "Código HTTP Supabase (con Key): $SUPA_CODE"
             if [ -f /tmp/supa_res.json ]; then
               cat /tmp/supa_res.json
               echo ""
             fi
           else
-            SUPA_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_SUPABASE/auth/v1/health" || echo "000")
+            SUPA_HEALTH=$(curl -s -m 30 -o /dev/null -w "%{http_code}" "$TARGET_SUPABASE/auth/v1/health" || echo "000")
             echo "Código HTTP Supabase Health: $SUPA_HEALTH"
           fi
 
           # Ping al Frontend en Vercel
-          echo "4. Realizando ping a la aplicación web en Vercel..."
-          VERCEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://gestion-comercial-dia.vercel.app" || echo "000")
+          echo "6. Realizando ping a la aplicación web en Vercel..."
+          VERCEL_CODE=$(curl -s -m 30 -o /dev/null -w "%{http_code}" "https://gestion-comercial-dia.vercel.app" || echo "000")
           echo "Código HTTP Frontend Vercel: $VERCEL_CODE"
 
           echo "========================================================"

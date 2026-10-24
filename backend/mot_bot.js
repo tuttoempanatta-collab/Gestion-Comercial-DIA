@@ -1726,6 +1726,129 @@ async function markDueTasks(markedToday = new Set()) {
   });
 }
 
+// ─── Segundo Chequeo Pre-Dormición con Motor IA ─────────────────────────────
+
+/**
+ * Segundo Chequeo Pre-Dormición con Motor IA.
+ * Se ejecuta antes de apagar o entrar en reposo nocturno (22:40 hs o pre-cierre 22:30 hs).
+ * Lee en vivo el estado oficial de todas las tareas en MOT, detecta aquellas que hayan quedado
+ * pendientes, incompletas o a medio realizar (ej. temperaturas con equipos pendientes o caducidades),
+ * y las liquida en conjunto con la IA para evitar cerrar la jornada con tareas sin marcar.
+ */
+async function runPreSleepSweepAndResolve() {
+  return await withLock(async () => {
+    log('🔍 [Chequeo Pre-Dormición IA] Iniciando segundo chequeo de auditoría y barrido final antes de dormir...');
+
+    if (!_loggedIn || !_page) {
+      log('[Chequeo Pre-Dormición IA] Asegurando sesión en MOT...', 'info');
+      await doLogin(true);
+    }
+
+    let tasks = [];
+    try {
+      tasks = await readTasks();
+    } catch (e) {
+      log(`[Chequeo Pre-Dormición IA] Error leyendo tareas en MOT: ${e.message}`, 'error');
+      return { ok: false, error: e.message, rescuedCount: 0 };
+    }
+
+    const nowMin = nowMinutes();
+    const auditDate = getTodayStrArg();
+    const rescued = [];
+
+    // Filtrar tareas que correspondan a hoy, no omitidas, y que sigan sin estar cumplidas en MOT
+    const pendingTasks = tasks.filter(t => {
+      if (isOmittedStoreTask(t)) return false;
+      const isDone = (t.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(t.estadoCode)) || (t.horaCumplimiento && t.horaCumplimiento !== '00:00');
+      if (isDone) return false;
+
+      // Si la tarea tiene horario de inicio menor o igual a la hora actual (ya transcurrió hoy)
+      const iniMin = timeToMinutes(t.horarioInicio);
+      return iniMin <= nowMin;
+    });
+
+    if (pendingTasks.length === 0) {
+      log('✓ [Chequeo Pre-Dormición IA] Verificación completada: 100% de las tareas operativas del día están cumplidas.');
+      return { ok: true, rescuedCount: 0, pendingTasksCount: 0, rescued: [] };
+    }
+
+    log(`⚠️ [Chequeo Pre-Dormición IA] Se detectaron ${pendingTasks.length} tarea(s) pendiente(s) o incompleta(s) antes de dormir. Iniciando resolución con Motor IA...`);
+
+    for (const task of pendingTasks) {
+      log(`⚙️ [Chequeo Pre-Dormición IA] Resolviendo "${task.nombre}" (${task.horarioInicio}-${task.horarioCierre}, Tipo: ${task.tipoControl})...`);
+
+      try {
+        const outcome = await markWithRetry(task, async (t) => {
+          if (t.tipoControl === 'Equipo') {
+            return await executeTemperatureControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+          }
+          if (t.tipoControl === 'Caducidad' || /caducidad/i.test(t.nombre)) {
+            return await executeCaducidadesOnMot(t);
+          }
+          if (t.tipoControl === 'Limpieza' || !t.tieneBotonCheck) {
+            return await executeLimpiezaControlOnMot(t, { responsable: DEFAULT_LEGAJO });
+          }
+          if (!_page.url().includes('tareastienda')) {
+            await navigateToTareasPage();
+          }
+          const btn = _page.locator(`#CUMPLIR_${t.rowIndex}`).first();
+          if (await btn.isVisible().catch(() => false)) {
+            await btn.click();
+            await _page.waitForTimeout(1800);
+            await handleMotivePopupIfPresent('Cumplimiento pre-cierre');
+            return { ok: true };
+          }
+          return { skipped: true, reason: 'Botón Cumplir no visible en grilla' };
+        });
+
+        if (outcome.ok) {
+          const v = outcome.verification || {};
+          _localMarkedMap.set(task.rowIndex, {
+            estadoCode: v.estadoCode || 'FT',
+            estadoTexto: v.estadoCode === 'C' ? 'a tiempo' : 'fuera de hora',
+            horaCumplimiento: v.horaCumplimiento || '',
+            fecha: _cachedDate || new Date().toLocaleDateString('es-AR'),
+          });
+          rescued.push({
+            tarea: task.nombre,
+            hora: v.horaCumplimiento || '',
+            estado: v.estadoCode || 'FT',
+            intentos: outcome.attempts || 1,
+          });
+          knowledge.recordAudit(auditDate, {
+            tarea: task.nombre,
+            tipo: task.tipoControl,
+            estado: 'verificada',
+            horaMOT: v.horaCumplimiento || '',
+            estadoMOT: v.estadoCode || '',
+            intentos: outcome.attempts,
+            nota: 'Resuelta en Segundo Chequeo Pre-Dormición IA',
+          });
+          log(`✅ [Chequeo Pre-Dormición IA] "${task.nombre}" completada y verificada en MOT (${v.estadoCode || 'FT'} a las ${v.horaCumplimiento || 's/h'} hs).`);
+        } else {
+          knowledge.recordAudit(auditDate, {
+            tarea: task.nombre,
+            tipo: task.tipoControl,
+            estado: outcome.critical ? 'ALERTA_CRITICA' : 'requiere_revision',
+            motivo: outcome.reason || 'Fallo en pre-dormición',
+            intentos: outcome.attempts,
+          });
+          log(`✗ [Chequeo Pre-Dormición IA] No se pudo finalizar "${task.nombre}": ${outcome.reason}`, 'warn');
+        }
+      } catch (err) {
+        log(`✗ [Chequeo Pre-Dormición IA] Excepción al procesar "${task.nombre}": ${err.message}`, 'error');
+      }
+    }
+
+    if (rescued.length > 0) {
+      await readTasks().catch(() => {});
+    }
+
+    log(`🏁 [Chequeo Pre-Dormición IA] Fin de barrido: ${rescued.length} de ${pendingTasks.length} tarea(s) rescatada(s) y marcadas exitosamente.`);
+    return { ok: true, rescuedCount: rescued.length, pendingTasksCount: pendingTasks.length, rescued };
+  });
+}
+
 // ─── Captura de pantalla para debug ──────────────────────────────────────────
 
 async function captureDebugScreenshot(label = 'debug') {
@@ -1760,6 +1883,7 @@ module.exports = {
   markTaskOnMot,
   executeCaducidadesOnMot,
   markDueTasks,
+  runPreSleepSweepAndResolve,
   preflightCheck,
   verifyMark,
   getAudit: knowledge.getAudit,
