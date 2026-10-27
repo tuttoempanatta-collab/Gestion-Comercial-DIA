@@ -47,8 +47,28 @@ let _forcedNightRun         = false;      // Si el usuario forzó encendido manu
 let _isRunningCycle         = false;
 let _preSleepSweepDoneToday = false;
 
-// Historial de marcaciones del día (se reinicia a medianoche de Argentina)
-let _markedToday   = new Set();
+const MARKED_FILE = path.join(__dirname, 'mot_marked_today.json');
+
+function loadMarkedToday() {
+  try {
+    if (fs.existsSync(MARKED_FILE)) {
+      const data = JSON.parse(fs.readFileSync(MARKED_FILE, 'utf8'));
+      if (data && data.date === todayStringArg() && Array.isArray(data.items)) {
+        return new Set(data.items);
+      }
+    }
+  } catch (_) {}
+  return new Set();
+}
+
+function saveMarkedToday(set) {
+  try {
+    fs.writeFileSync(MARKED_FILE, JSON.stringify({ date: todayStringArg(), items: Array.from(set) }, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+// Historial de marcaciones del día (persistido en disco y reiniciado a medianoche de Argentina)
+let _markedToday   = loadMarkedToday();
 let _todayStr      = todayStringArg();
 const _marcaciones = [];
 
@@ -82,6 +102,7 @@ function checkDayRollover() {
   if (today !== _todayStr) {
     _todayStr               = today;
     _markedToday            = new Set();
+    saveMarkedToday(_markedToday);
     _pausedManuallyToday    = false;
     _preSleepSweepDoneToday = false;
     log(`📅 Nuevo día detectado en Argentina (${today}). Contador de marcaciones diarias reiniciado.`);
@@ -134,6 +155,7 @@ async function runCycle() {
 
     _needsLogin = false;
     const results = await markDueTasks(_markedToday);
+    saveMarkedToday(_markedToday);
 
     if (results.length > 0) {
       _marcaciones.unshift(...results);
@@ -367,6 +389,7 @@ async function markSingleTask(params) {
   const closeHour = params.horarioCierre || '';
   if (taskName && closeHour) {
     _markedToday.add(`${taskName}|${params.horarioInicio || ''}-${closeHour}`);
+    saveMarkedToday(_markedToday);
   }
   _marcaciones.unshift({
     tarea: `${taskName} (${params.accion || 'C'})`,
@@ -437,6 +460,7 @@ async function reset() {
   _pausedManuallyToday = false;
   _forcedNightRun      = false;
   _markedToday         = new Set();
+  saveMarkedToday(_markedToday);
   _marcaciones.length  = 0;
 
   const motBot = require('./mot_bot');

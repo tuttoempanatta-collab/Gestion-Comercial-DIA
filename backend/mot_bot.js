@@ -886,8 +886,21 @@ async function readTasks() {
       const btnsContainer   = document.getElementById(`TABLEBTNSCUMPLIMIENTO_${r}`);
       const tieneBotones    = btnsContainer ? (btnsContainer.style.display !== 'none') : false;
 
-      const estadoTextoRaw  = getSpan('vTAREAESTADO');
-      const horaCumplRaw    = getSpan('ACTIVIDADTAREAHORACUMPLIMIENTO');
+      const estadoTextoRaw  =
+        getSpan('vTAREAESTADO') ||
+        getSpan('vESTADOTAREATEXTO') ||
+        getSpan('ACTIVIDADTAREAESTADO') ||
+        getSpan('vESTADO') ||
+        rowEl.querySelector('[id*="ESTADO" i]')?.innerText?.trim() ||
+        rowEl.querySelector('[class*="Badge" i], [class*="badge" i]')?.innerText?.trim() ||
+        '';
+
+      const horaCumplRaw    =
+        getSpan('ACTIVIDADTAREAHORACUMPLIMIENTO') ||
+        getSpan('vHORACUMPLIMIENTO') ||
+        getSpan('HORACUMPLIMIENTO') ||
+        rowEl.querySelector('[id*="HORACUMPLIMIENTO" i]')?.innerText?.trim() ||
+        '';
       const maestroGUID     = getSpan('MAESTROTAREAGUID');
       const actividadGUID   = getSpan('ACTIVIDADGUID');
       const actividadFecha  = getSpan('ACTIVIDADFECHA');
@@ -1783,8 +1796,9 @@ async function verifyMark(task) {
  * Ciclo completo por tarea: pre-vuelo -> (re-chequeo) -> ejecutar -> verificar -> reintentar.
  * `executor` ejecuta la marcación y devuelve { skipped?, reason? }.
  */
-async function markWithRetry(task, executor) {
-  const maxAttempts = 1 + knowledge.RULES.MAX_RETRIES;
+async function markWithRetry(task, executor, options = {}) {
+  const isOverdue = options.isOverdue || false;
+  const maxAttempts = isOverdue ? 1 : (1 + knowledge.RULES.MAX_RETRIES);
   let lastReason = '';
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -1850,7 +1864,26 @@ async function markDueTasks(markedToday = new Set()) {
       return results;
     }
 
-    for (const task of tasks) {
+    // Prioridad del Motor IA:
+    // 1. Tareas de la franja horaria actual (en ventana a tiempo) se marcan PRIMERO.
+    // 2. Tareas atrasadas / fuera de hora se marcan después (más recientes primero).
+    const nowMin = nowMinutes();
+    const sortedTasks = [...tasks].sort((a, b) => {
+      const aStart = timeToMinutes(a.horarioInicio);
+      const aClose = timeToMinutes(a.horarioCierre);
+      const bStart = timeToMinutes(b.horarioInicio);
+      const bClose = timeToMinutes(b.horarioCierre);
+
+      const aInWin = nowMin >= aStart && (aClose <= aStart ? true : nowMin <= aClose);
+      const bInWin = nowMin >= bStart && (bClose <= bStart ? true : nowMin <= bClose);
+
+      if (aInWin && !bInWin) return -1;
+      if (!aInWin && bInWin) return 1;
+
+      return bStart - aStart;
+    });
+
+    for (const task of sortedTasks) {
       const key = `${task.nombre}|${task.horarioInicio}-${task.horarioCierre}`;
 
       // 1. Detección proactiva de tareas ya cumplidas en el APK oficial o servidor MOT
@@ -1912,7 +1945,7 @@ async function markDueTasks(markedToday = new Set()) {
             return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo, motivo });
           }
           return await executeDirectControlOnMot(t, { responsable: shiftLegajo, motivo });
-        });
+        }, { isOverdue });
 
         if (outcome.ok) {
           const v = outcome.verification || {};
