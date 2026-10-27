@@ -1298,41 +1298,24 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     ? task.detailLink
     : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-  await _page.waitForTimeout(2500);
 
-  const domSummary = await _page.evaluate(() => {
-    const gx = JSON.parse(document.querySelector('input[name="GXState"]')?.value || '{}');
-    const allClickable = Array.from(document.querySelectorAll('a, button, input, img[onclick], [id*="CUMPLIR"], [id*="CONFIRM"], [id*="RESP"], [class*="Button"]'))
-      .filter(el => el.offsetParent !== null)
-      .map(el => `${el.tagName}#${el.id}.${el.className}[val:${el.value || el.innerText || el.getAttribute('title') || ''}]`);
-    return {
-      title: document.title,
-      gxKeys: Object.keys(gx).filter(k => !k.startsWith('_')),
-      clickables: allClickable,
-      bodyText: document.body.innerText.replace(/\s+/g, ' ').slice(0, 200)
-    };
-  }).catch(() => null);
-  log(`[DOM Limpieza "${task.nombre}"] ${JSON.stringify(domSummary)}`);
-
-  // Selector de MOT.WebLimpieza en DOM (soporta cualquier prefijo de WebComponent GeneXus)
+  // Esperar activamente hasta 8 segundos a que GeneXus cargue el WebComponent de Limpieza (W0093W0054)
   const respInput = _page.locator('input[id*="vRESPONSABLE"], #W0093W0054vRESPONSABLE').first();
+  await respInput.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+
   if (await respInput.isVisible().catch(() => false)) {
+    log(`[Limpieza] Campo vRESPONSABLE detectado. Ingresando legajo ${legajo}...`);
     await respInput.fill('');
     await respInput.fill(String(legajo));
+    await respInput.dispatchEvent('change').catch(() => {});
+    await respInput.dispatchEvent('blur').catch(() => {});
     await respInput.press('Tab').catch(() => {});
-    await _page.waitForTimeout(400);
+    await _page.waitForTimeout(600);
 
-    // 1. Validar Responsable con el botón Validar si existe (GeneXus WebLimpieza)
-    const valBtn = _page.locator('input[id*="BTNVALIDARRESP"], input[id*="BTNVALIDAR"], input[value*="Validar" i]').first();
-    if (await valBtn.isVisible().catch(() => false)) {
-      log(`[Limpieza] Validando legajo ${legajo} en MOT...`);
-      await valBtn.click();
-      await _page.waitForTimeout(2200);
-    }
-
-    // 2. Clickear Confirmar
-    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR"], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i], #CUMPLIR').first();
+    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR"], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i]').first();
+    await confirmBtn.waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
     if (await confirmBtn.isVisible().catch(() => false)) {
+      log(`[Limpieza] Clickeando botón Confirmar...`);
       await confirmBtn.click();
       await _page.waitForTimeout(2500);
     }
@@ -1344,6 +1327,7 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   // Fallback: si tiene botón CUMPLIR visible en el detalle
   const cumplirDetail = _page.locator('#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i], img[title*="Cumplir" i]').first();
   if (await cumplirDetail.isVisible().catch(() => false)) {
+    log(`[Limpieza] Clickeando botón alternativo Cumplir en detalle...`);
     await cumplirDetail.click();
     await _page.waitForTimeout(2200);
     await handleMotivePopupIfPresent(options.motivo || 'Realizado en tienda');
