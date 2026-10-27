@@ -1771,6 +1771,11 @@ async function verifyMark(task) {
     }
   }
 
+  // Fallback de confirmación: si el botón Cumplir en la grilla ya no está visible, la tarea impactó en GeneXus
+  if (!done && t && !t.tieneBotonCheck && task.tieneBotonCheck) {
+    done = true;
+  }
+
   if (!done) return { ok: false, estadoCode: t.estadoCode, motivo: 'MOT no refleja la tarea como cumplida' };
 
   if (t.horaCumplimiento) {
@@ -1797,8 +1802,7 @@ async function verifyMark(task) {
  * `executor` ejecuta la marcación y devuelve { skipped?, reason? }.
  */
 async function markWithRetry(task, executor, options = {}) {
-  const isOverdue = options.isOverdue || false;
-  const maxAttempts = isOverdue ? 1 : (1 + knowledge.RULES.MAX_RETRIES);
+  const maxAttempts = 1; // 1 intento por ciclo: evita bloquear la cola de tareas si una falla
   let lastReason = '';
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -1869,17 +1873,22 @@ async function markDueTasks(markedToday = new Set()) {
     // 2. Tareas atrasadas / fuera de hora se marcan después (más recientes primero).
     const nowMin = nowMinutes();
     const sortedTasks = [...tasks].sort((a, b) => {
-      const aStart = timeToMinutes(a.horarioInicio);
-      const aClose = timeToMinutes(a.horarioCierre);
-      const bStart = timeToMinutes(b.horarioInicio);
-      const bClose = timeToMinutes(b.horarioCierre);
+      const aStart = parseTimeToMinutes(a.horarioInicio) ?? 9999;
+      const aClose = parseTimeToMinutes(a.horarioCierre) ?? 9999;
+      const bStart = parseTimeToMinutes(b.horarioInicio) ?? 9999;
+      const bClose = parseTimeToMinutes(b.horarioCierre) ?? 9999;
 
-      const aInWin = nowMin >= aStart && (aClose <= aStart ? true : nowMin <= aClose);
-      const bInWin = nowMin >= bStart && (bClose <= bStart ? true : nowMin <= bClose);
+      const aInWin = nowMin >= aStart && nowMin <= aClose;
+      const bInWin = nowMin >= bStart && nowMin <= bClose;
 
+      // 1. Tareas en su ventana horaria activa (a tiempo) van PRIMERO
       if (aInWin && !bInWin) return -1;
       if (!aInWin && bInWin) return 1;
 
+      // 2. Si ambas están activas, la que empezó antes va primero
+      if (aInWin && bInWin) return aStart - bStart;
+
+      // 3. Tareas fuera de hora: ordenar de la más reciente a la más vieja
       return bStart - aStart;
     });
 
