@@ -1714,7 +1714,6 @@ async function verifyMark(task) {
 
   if (t.horaCumplimiento) {
     const hMin = parseTimeToMinutes(t.horaCumplimiento);
-    _failedAttempts.clear();
     const nowMin = nowMinutes();
     if (hMin !== null && hMin > nowMin + 1) {
       knowledge.recordIncident({
@@ -1777,9 +1776,10 @@ async function markWithRetry(task, executor) {
   return { ok: false, reason: lastReason, attempts: maxAttempts };
 }
 
-const _failedAttempts = new Map(); // key -> ciclos fallidos del día (tope para no insistir sin fin)
+const _failedAttempts = new Map(); // key -> { count, lastTs }
 let _failedDate = '';
-const MAX_FAILED_CYCLES = 2;
+const MAX_FAILED_CYCLES = 3;
+const FAILED_RETRY_BACKOFF_MS = 15 * 60 * 1000; // 15 min de espera para reintentar tareas pendientes / fuera de hora
 
 async function markDueTasks(markedToday = new Set()) {
   if (_failedDate !== getTodayStrArg()) {
@@ -1832,8 +1832,18 @@ async function markDueTasks(markedToday = new Set()) {
       }
 
       const targetMarkHHMM = minutesToHHMM(getTargetMarkMinutes(task.horarioInicio, task.horarioCierre));
-      log(`[Auto-Bot +10m] Marcando "${task.nombre}" (inicio: ${task.horarioInicio} -> marca programada: ${targetMarkHHMM}, cierre: ${task.horarioCierre}, tipo: ${task.tipoControl})`);
-      if ((_failedAttempts.get(key) || 0) >= MAX_FAILED_CYCLES) continue; // ya se escaló a revisión manual
+      const isOverdue = nowMinutes() > timeToMinutes(task.horarioCierre);
+      const motivo = isOverdue ? 'Cumplimiento fuera de hora' : 'Cumplimiento en tienda';
+      const markLabel = isOverdue ? `[Auto-Bot Fuera de Hora]` : `[Auto-Bot +10m]`;
+
+      log(`${markLabel} Marcando "${task.nombre}" (inicio: ${task.horarioInicio} -> programada: ${targetMarkHHMM}, cierre: ${task.horarioCierre}, tipo: ${task.tipoControl})`);
+
+      const attemptInfo = _failedAttempts.get(key);
+      if (attemptInfo && attemptInfo.count >= MAX_FAILED_CYCLES) {
+        if (Date.now() - attemptInfo.lastTs < FAILED_RETRY_BACKOFF_MS) {
+          continue; // esperar el backoff de 15 min antes del siguiente reintento
+        }
+      }
 
       const auditDate = getTodayStrArg();
       try {
@@ -1851,9 +1861,9 @@ async function markDueTasks(markedToday = new Set()) {
             return await executeCaducidadesOnMot(t);
           }
           if (t.tipoControl === 'Limpieza') {
-            return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo });
+            return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo, motivo });
           }
-          return await executeDirectControlOnMot(t, { responsable: shiftLegajo, motivo: 'Cumplimiento en tienda' });
+          return await executeDirectControlOnMot(t, { responsable: shiftLegajo, motivo });
         });
 
         if (outcome.ok) {
@@ -1865,6 +1875,7 @@ async function markDueTasks(markedToday = new Set()) {
             fecha: _cachedDate || new Date().toLocaleDateString('es-AR'),
           });
           markedToday.add(key);
+          _failedAttempts.delete(key);
           results.push({
             tarea: task.nombre,
             horarioInicio: task.horarioInicio,
@@ -1877,20 +1888,22 @@ async function markDueTasks(markedToday = new Set()) {
             tarea: task.nombre, tipo: task.tipoControl, estado: 'verificada',
             horaMOT: v.horaCumplimiento || '', estadoMOT: v.estadoCode || '', intentos: outcome.attempts,
           });
-          log(`✓ [Auto-Bot +10m] Marcada y VERIFICADA en MOT: "${task.nombre}" (${v.horaCumplimiento || 's/h'} hs, intentos: ${outcome.attempts})`);
+          log(`✓ [Auto-Bot] Marcada y VERIFICADA en MOT: "${task.nombre}" (${v.horaCumplimiento || 's/h'} hs, estado: ${v.estadoCode || 'C'}, intentos: ${outcome.attempts})`);
         } else {
           const reason = outcome.reason || 'sin detalle';
-          _failedAttempts.set(key, (_failedAttempts.get(key) || 0) + (outcome.critical ? MAX_FAILED_CYCLES : 1));
+          const prev = _failedAttempts.get(key) || { count: 0, lastTs: 0 };
+          _failedAttempts.set(key, { count: prev.count + 1, lastTs: Date.now() });
           results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: reason, ts: new Date().toISOString() });
           knowledge.recordAudit(auditDate, {
             tarea: task.nombre, tipo: task.tipoControl,
             estado: outcome.critical ? 'ALERTA_CRITICA' : 'requiere_revision',
             motivo: reason, intentos: outcome.attempts,
           });
-          log(`✗ [Auto-Bot +10m] No se pudo confirmar "${task.nombre}": ${reason}`, 'warn');
+          log(`✗ [Auto-Bot] No se pudo confirmar "${task.nombre}": ${reason}`, 'warn');
         }
       } catch (e) {
-        _failedAttempts.set(key, (_failedAttempts.get(key) || 0) + 1);
+        const prev = _failedAttempts.get(key) || { count: 0, lastTs: 0 };
+        _failedAttempts.set(key, { count: prev.count + 1, lastTs: Date.now() });
         results.push({ tarea: task.nombre, horarioCierre: task.horarioCierre, estado: 'error', msg: e.message, ts: new Date().toISOString() });
         knowledge.recordAudit(auditDate, { tarea: task.nombre, tipo: task.tipoControl, estado: 'requiere_revision', motivo: e.message });
         log(`Error marcando "${task.nombre}": ${e.message}`, 'error');
