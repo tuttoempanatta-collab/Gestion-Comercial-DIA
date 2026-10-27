@@ -438,6 +438,7 @@ export default function MotBotPage() {
   }, [])
   const [loading, setLoading]         = useState(false)
   const [syncingTasks, setSyncingTasks] = useState(false)
+  const [isSweeping, setIsSweeping]   = useState(false)
   const [action, setAction]           = useState<string | null>(null)
   const [markingRow, setMarkingRow]   = useState<string | null>(null)
   const [legajo, setLegajo]           = useState('23250')
@@ -446,6 +447,20 @@ export default function MotBotPage() {
   ])
   const [legajoManana, setLegajoManana] = useState('23250')
   const [legajoTarde, setLegajoTarde]   = useState('23250')
+
+  const handleRunPreSleepSweep = async () => {
+    setIsSweeping(true)
+    try {
+      await fetch(API_URL('/api/mot-bot/pre-sleep-sweep'), { method: 'POST' })
+      await fetchTasksDashboard(true)
+      await fetchStatus()
+      await fetchAudit()
+    } catch (err) {
+      console.error('Error ejecutando barrido IA:', err)
+    } finally {
+      setIsSweeping(false)
+    }
+  }
 
   const isMorningShift = () => {
     const now = new Date()
@@ -1092,18 +1107,28 @@ export default function MotBotPage() {
       </div>
 
       {data?.alertas && data.alertas.length > 0 && (
-        <div className="rounded-2xl border border-red-500/40 bg-red-950/40 p-4 space-y-2">
-          <div className="flex items-center gap-2 text-red-300 font-bold text-sm">
-            <AlertTriangle size={16} />
-            {data.alertas.length} tarea(s) no se pudieron confirmar en MOT tras los reintentos: marcarlas manualmente desde la tienda
+        <div className="rounded-2xl border border-red-500/40 bg-red-950/40 p-4 space-y-3 shadow-lg">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-red-300 font-bold text-sm">
+              <AlertTriangle size={18} className="text-red-400 shrink-0" />
+              <span>{data.alertas.length} tarea(s) requieren atención en MOT</span>
+            </div>
+            <button
+              onClick={handleRunPreSleepSweep}
+              disabled={isSweeping}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-all shadow-md shadow-red-950/50 disabled:opacity-50"
+            >
+              {isSweeping ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              Completar Pendientes con Motor IA Ahora
+            </button>
           </div>
-          <ul className="text-xs text-red-200/90 space-y-1">
+          <ul className="text-xs text-red-200/90 space-y-1 bg-black/30 p-3 rounded-xl border border-red-900/30">
             {data.alertas.map((a, i) => (
-              <li key={i}>
-                <span className="font-semibold">{a.tarea}</span>
-                {a.estado === 'ALERTA_CRITICA' ? ' · ALERTA CRÍTICA' : ''}
-                {a.motivo ? ` · ${a.motivo}` : ''}
-                {a.intentos ? ` · ${a.intentos} intento(s)` : ''}
+              <li key={i} className="flex flex-wrap items-center gap-1.5">
+                <span className="font-semibold text-white">{a.tarea}</span>
+                {a.estado === 'ALERTA_CRITICA' ? <span className="text-[10px] bg-red-900 text-red-200 px-1.5 py-0.5 rounded font-bold">ALERTA CRÍTICA</span> : ''}
+                {a.motivo ? <span className="text-red-300/80 font-mono text-[11px]">({a.motivo})</span> : ''}
+                {a.intentos ? <span className="text-slate-400 font-mono text-[10px]">· {a.intentos} intento(s)</span> : ''}
               </li>
             ))}
           </ul>

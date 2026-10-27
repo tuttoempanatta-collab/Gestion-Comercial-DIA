@@ -678,6 +678,7 @@ async function doLogin(headless = true) {
     _browser = null;
     _context = null;
     _page    = null;
+    _tareasUrl = null;
   }
 
   await ensureBrowser(headless);
@@ -799,12 +800,23 @@ async function navigateToTareasPage() {
   }
 
   const targetUrl = _tareasUrl || MOT_TAREAS;
-  await _page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  try {
+    await _page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  } catch (navErr) {
+    log(`Aviso al navegar a Tareas (${navErr.message}). Re-extrayendo URL limpia desde Home...`, 'warn');
+    _tareasUrl = null;
+    await _page.goto(MOT_HOME, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+    await _page.waitForTimeout(2000);
+    await extractTareasUrlFromPage();
+    const retryTarget = _tareasUrl || MOT_TAREAS;
+    await _page.goto(retryTarget, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  }
   await _page.waitForTimeout(2500);
 
   if (_page.url().includes('login')) {
     log('Sesión expirada al abrir Tareas, re-logueando...', 'warn');
     _loggedIn = false;
+    _tareasUrl = null;
     await doLogin(true);
     const retryUrl = _tareasUrl || MOT_TAREAS;
     await _page.goto(retryUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
@@ -816,6 +828,7 @@ async function navigateToTareasPage() {
   if (hasNoData) {
     const freshHref = await extractTareasUrlFromPage();
     if (freshHref && freshHref !== targetUrl) {
+      _tareasUrl = freshHref;
       await _page.goto(freshHref, { waitUntil: 'domcontentloaded', timeout: 25000 });
       await _page.waitForTimeout(2500);
     }
@@ -1271,25 +1284,26 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(2200);
 
-  // Selector exacto de MOT.WebLimpieza descubierto en DOM: #W0093W0054vRESPONSABLE + #W0093W0054BTNCONFIRMAR
-  const respInput = _page.locator('#W0093W0054vRESPONSABLE').first();
+  // Selector de MOT.WebLimpieza en DOM (soporta cualquier prefijo de WebComponent GeneXus)
+  const respInput = _page.locator('input[id*="vRESPONSABLE"], #W0093W0054vRESPONSABLE').first();
   if (await respInput.isVisible().catch(() => false)) {
     await respInput.fill('');
     await respInput.fill(String(legajo));
     await respInput.press('Tab').catch(() => {});
     await _page.waitForTimeout(600);
 
-    const confirmBtn = _page.locator('#W0093W0054BTNCONFIRMAR').first();
+    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR"], #W0093W0054BTNCONFIRMAR, input[value="Confirmar" i]').first();
     if (await confirmBtn.isVisible().catch(() => false)) {
       await confirmBtn.click();
       await _page.waitForTimeout(2200);
     }
+    await handleMotivePopupIfPresent(options.motivo || 'Limpieza cumplida');
     log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
     return { ok: true, msg: `Tarea confirmada con legajo ${legajo}.` };
   }
 
   // Fallback: si tiene botón CUMPLIR visible en el detalle
-  const cumplirDetail = _page.locator('#CUMPLIR').first();
+  const cumplirDetail = _page.locator('#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i], img[title*="Cumplir" i]').first();
   if (await cumplirDetail.isVisible().catch(() => false)) {
     await cumplirDetail.click();
     await _page.waitForTimeout(2000);
@@ -1297,7 +1311,7 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     return { ok: true, msg: 'Tarea marcada como cumplida desde detalle.' };
   }
 
-  throw new Error('No se encontró el campo #W0093W0054vRESPONSABLE ni el botón de cumplimiento para esta tarea.');
+  throw new Error('No se encontró el campo vRESPONSABLE ni el botón de cumplimiento para esta tarea.');
 }
 
 /**
@@ -1367,26 +1381,104 @@ async function executeCaducidadesOnMot(task) {
 }
 
 /**
+ * Completa cualquier tarea directa en MOT (ej: Apertura de cajas, Lectura de boletín, Conteo, etc.)
+ * Intenta primero clickear el botón #CUMPLIR_XXXX en la grilla principal tareastienda.
+ * Si no está visible (ej: tarea fuera de hora / vencida o colapsada), abre el panel de detalle webvertarea
+ * donde el botón #CUMPLIR permanece accesible para liquidar la tarea.
+ */
+async function executeDirectControlOnMot(task, options = {}) {
+  const motivo = options.motivo || 'Cumplimiento en tienda';
+  log(`[Control Directo] Procesando marcación para "${task.nombre}" (Fila ${task.rowIndex})...`);
+
+  // Intento 1: Si el botón #CUMPLIR_XXXX está visible en la grilla tareastienda
+  if (_page && _page.url().includes('tareastienda')) {
+    const r = task.rowIndex;
+    const btn = _page.locator(`#CUMPLIR_${r}`).first();
+    if (await btn.isVisible().catch(() => false)) {
+      log(`[Control Directo] Clickeando botón #CUMPLIR_${r} en grilla principal...`);
+      await btn.click();
+      await _page.waitForTimeout(2000);
+      await handleMotivePopupIfPresent(motivo);
+      await _page.waitForTimeout(1500);
+      return { ok: true, msg: 'Marcada desde grilla principal.' };
+    }
+  }
+
+  // Intento 2: Si el botón no estaba visible en grilla (tarea vencida, fuera de hora o detalle requerido),
+  // abrir el panel de detalle oficial (webvertarea) donde #CUMPLIR siempre está disponible
+  if (task.detailLink) {
+    log(`[Control Directo] Botón de grilla no visible para "${task.nombre}". Abriendo panel de detalle oficial...`);
+    const fullUrl = task.detailLink.startsWith('http')
+      ? task.detailLink
+      : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await _page.waitForTimeout(2200);
+
+    // En webvertarea, buscar #CUMPLIR
+    const detailBtn = _page.locator('#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i]').first();
+    if (await detailBtn.isVisible().catch(() => false)) {
+      log(`[Control Directo] Clickeando botón #CUMPLIR en detalle de "${task.nombre}"...`);
+      await detailBtn.click();
+      await _page.waitForTimeout(2000);
+      await handleMotivePopupIfPresent(motivo);
+      await _page.waitForTimeout(1500);
+      return { ok: true, msg: 'Marcada desde panel de detalle oficial.' };
+    }
+  }
+
+  // Si no estaba en tareastienda y no pudimos abrir detalle, navegar a tareas y reintentar botón
+  await navigateToTareasPage();
+  const btnRetry = _page.locator(`#CUMPLIR_${task.rowIndex}`).first();
+  if (await btnRetry.isVisible().catch(() => false)) {
+    await btnRetry.click();
+    await _page.waitForTimeout(2000);
+    await handleMotivePopupIfPresent(motivo);
+    await _page.waitForTimeout(1500);
+    return { ok: true, msg: 'Marcada tras navegar a grilla.' };
+  }
+
+  return { skipped: true, reason: 'Botón Cumplir no visible ni en grilla ni en detalle' };
+}
+
+/**
  * Si MOT abre el popup com.mot.mot.wcingresarmotivoincumplimiento (para 'FT' fuera de hora o 'NC' no cumplida),
  * ingresa el motivo y confirma automáticamente.
  */
 async function handleMotivePopupIfPresent(motivoTexto = 'Operación de tienda') {
-  await _page.waitForTimeout(1200);
-  // En GeneXus WorkWithPlus los popups se abren dentro de un iframe (.gx-popup-content iframe o iframe[src*="wcingresarmotivoincumplimiento"])
-  const frames = _page.frames();
-  for (const frame of frames) {
-    if (frame.url().includes('wcingresarmotivoincumplimiento')) {
-      log(`Popup de motivo detectado (${frame.url()}). Completando motivo: "${motivoTexto}"...`);
-      const textInput = frame.locator('textarea, input[type="text"]').first();
-      if (await textInput.isVisible().catch(() => false)) {
-        await textInput.fill(motivoTexto);
-        await _page.waitForTimeout(300);
+  for (let check = 0; check < 4; check++) {
+    await _page.waitForTimeout(700);
+
+    // 1. Chequeo en iframes (GeneXus WorkWithPlus popup estándar)
+    const frames = _page.frames();
+    for (const frame of frames) {
+      if (frame.url().includes('wcingresarmotivoincumplimiento') || frame.url().includes('motivo')) {
+        log(`Popup de motivo detectado en iframe (${frame.url()}). Completando motivo: "${motivoTexto}"...`);
+        const textInput = frame.locator('textarea, input[type="text"]').first();
+        if (await textInput.isVisible().catch(() => false)) {
+          await textInput.fill(motivoTexto);
+          await _page.waitForTimeout(300);
+        }
+        const confirmBtn = frame.locator('input[type="button"][value*="Confirmar" i], input[type="button"][value*="Aceptar" i], input[type="button"][value*="Guardar" i], input[id*="BTNENTER"], button:has-text("Confirmar"), button:has-text("Aceptar")').first();
+        if (await confirmBtn.isVisible().catch(() => false)) {
+          await confirmBtn.click();
+          await _page.waitForTimeout(2000);
+          log('Motivo confirmado en popup MOT iframe.');
+          return true;
+        }
       }
-      const confirmBtn = frame.locator('input[type="button"][value*="Confirmar" i], input[type="button"][value*="Aceptar" i], input[type="button"][value*="Guardar" i], input[id*="BTNENTER"], button:has-text("Confirmar")').first();
-      if (await confirmBtn.isVisible().catch(() => false)) {
-        await confirmBtn.click();
+    }
+
+    // 2. Chequeo en la página principal (modales bootstrap o div emergentes)
+    const modalInput = _page.locator('.gx-popup-content textarea, [id*="wcingresarmotivoincumplimiento"] textarea, [id*="vMOTIVO"] textarea, [id*="vMOTIVO"] input').first();
+    if (await modalInput.isVisible().catch(() => false)) {
+      log(`Popup de motivo detectado en página principal. Completando motivo: "${motivoTexto}"...`);
+      await modalInput.fill(motivoTexto);
+      await _page.waitForTimeout(300);
+      const modalBtn = _page.locator('.gx-popup-content input[type="button"][value*="Confirmar" i], .gx-popup-content input[type="button"][value*="Aceptar" i], input[id*="BTNENTER"], button:has-text("Confirmar")').first();
+      if (await modalBtn.isVisible().catch(() => false)) {
+        await modalBtn.click();
         await _page.waitForTimeout(2000);
-        log('Motivo confirmado en popup MOT.');
+        log('Motivo confirmado en popup principal.');
         return true;
       }
     }
@@ -1471,7 +1563,7 @@ async function markTaskOnMot(params = {}) {
       }
 
       // 2. Si es Tarea de Limpieza y la acción es Cumplir o LIMPIEZA
-      if ((task.tipoControl === 'Limpieza' || accion === 'LIMPIEZA') && !task.tieneBotonCheck && accion !== 'NA' && accion !== 'NC') {
+      if ((task.tipoControl === 'Limpieza' || accion === 'LIMPIEZA') && accion !== 'NA' && accion !== 'NC') {
         const res = await executeLimpiezaControlOnMot(task, params);
         applyLocalMark('C');
         const updated = await readTasks();
@@ -1509,9 +1601,9 @@ async function markTaskOnMot(params = {}) {
         await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
         await _page.waitForTimeout(2000);
 
-        let detailBtnSel = '#CUMPLIR';
-        if (accion === 'NC') detailBtnSel = '#NOCUMPLIR';
-        else if (accion === 'NA') detailBtnSel = '#NOAPLICA';
+        let detailBtnSel = '#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i]';
+        if (accion === 'NC') detailBtnSel = '#NOCUMPLIR, input[value*="No cumplir" i]';
+        else if (accion === 'NA') detailBtnSel = '#NOAPLICA, input[value*="No aplica" i]';
 
         const detailBtn = _page.locator(detailBtnSel).first();
         if (await detailBtn.isVisible().catch(() => false)) {
@@ -1600,15 +1692,29 @@ async function preflightCheck() {
  */
 async function verifyMark(task) {
   _localMarkedMap.delete(task.rowIndex); // evitar falsos positivos con marcas locales
+  await _page.waitForTimeout(1000);
   const fresh = await readTasks();
-  const t = fresh.find(x => x.rowIndex === task.rowIndex || x.nombre === task.nombre);
+  let t = fresh.find(x => x.rowIndex === task.rowIndex || x.nombre === task.nombre);
   if (!t) return { ok: false, motivo: 'tarea no encontrada tras marcar' };
 
-  const done = knowledge.RULES.DONE_CODES.includes(t.estadoCode) || !!t.horaCumplimiento;
+  let done = knowledge.RULES.DONE_CODES.includes(t.estadoCode) || !!t.horaCumplimiento;
+
+  // Si aún no refleja estado pero recién se ejecutó la acción, dar un reintento breve de 2s
+  if (!done) {
+    await _page.waitForTimeout(2000);
+    const retryFresh = await readTasks();
+    const retryT = retryFresh.find(x => x.rowIndex === task.rowIndex || x.nombre === task.nombre);
+    if (retryT && (knowledge.RULES.DONE_CODES.includes(retryT.estadoCode) || !!retryT.horaCumplimiento)) {
+      done = true;
+      t = retryT;
+    }
+  }
+
   if (!done) return { ok: false, estadoCode: t.estadoCode, motivo: 'MOT no refleja la tarea como cumplida' };
 
   if (t.horaCumplimiento) {
     const hMin = parseTimeToMinutes(t.horaCumplimiento);
+    _failedAttempts.clear();
     const nowMin = nowMinutes();
     if (hMin !== null && hMin > nowMin + 1) {
       knowledge.recordIncident({
@@ -1744,21 +1850,10 @@ async function markDueTasks(markedToday = new Set()) {
           if (t.tipoControl === 'Caducidad' || /caducidad/i.test(t.nombre)) {
             return await executeCaducidadesOnMot(t);
           }
-          if (t.tipoControl === 'Limpieza' || !t.tieneBotonCheck) {
+          if (t.tipoControl === 'Limpieza') {
             return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo });
           }
-          // Volver a asegurarnos de estar en la grilla de tareas si salimos a un detalle
-          if (!_page.url().includes('tareastienda')) {
-            await navigateToTareasPage();
-          }
-          const btn = _page.locator(`#CUMPLIR_${t.rowIndex}`).first();
-          if (await btn.isVisible().catch(() => false)) {
-            await btn.click();
-            await _page.waitForTimeout(1800);
-            await handleMotivePopupIfPresent('Cumplimiento en tienda');
-            return { ok: true };
-          }
-          return { skipped: true, reason: 'Botón Cumplir no visible en grilla' };
+          return await executeDirectControlOnMot(t, { responsable: shiftLegajo, motivo: 'Cumplimiento en tienda' });
         });
 
         if (outcome.ok) {
@@ -1836,6 +1931,7 @@ async function runPreSleepSweepAndResolve() {
       return { ok: false, error: e.message, rescuedCount: 0 };
     }
 
+    _failedAttempts.clear();
     const nowMin = nowMinutes();
     const auditDate = getTodayStrArg();
     const rescued = [];
@@ -1870,20 +1966,10 @@ async function runPreSleepSweepAndResolve() {
           if (t.tipoControl === 'Caducidad' || /caducidad/i.test(t.nombre)) {
             return await executeCaducidadesOnMot(t);
           }
-          if (t.tipoControl === 'Limpieza' || !t.tieneBotonCheck) {
+          if (t.tipoControl === 'Limpieza') {
             return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo });
           }
-          if (!_page.url().includes('tareastienda')) {
-            await navigateToTareasPage();
-          }
-          const btn = _page.locator(`#CUMPLIR_${t.rowIndex}`).first();
-          if (await btn.isVisible().catch(() => false)) {
-            await btn.click();
-            await _page.waitForTimeout(1800);
-            await handleMotivePopupIfPresent('Cumplimiento pre-cierre');
-            return { ok: true };
-          }
-          return { skipped: true, reason: 'Botón Cumplir no visible en grilla' };
+          return await executeDirectControlOnMot(t, { responsable: shiftLegajo, motivo: 'Cumplimiento pre-cierre' });
         });
 
         if (outcome.ok) {
