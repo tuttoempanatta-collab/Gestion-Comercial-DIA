@@ -1288,6 +1288,7 @@ function isOmittedStoreTask(task) {
  */
 async function executeLimpiezaControlOnMot(task, options = {}) {
   const legajo = resolveLegajoForTask(task, options.responsable);
+  const motivo = options.motivo || 'Cumplimiento fuera de hora';
   log(`Confirmando tarea con Legajo en MOT: "${task.nombre}" (Legajo: ${legajo})...`);
 
   if (!task.detailLink) {
@@ -1298,41 +1299,55 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     ? task.detailLink
     : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+  await _page.waitForTimeout(3000);
 
-  // Esperar activamente hasta 8 segundos a que GeneXus cargue el WebComponent de Limpieza (W0093W0054)
-  const respInput = _page.locator('input[id*="RESPONSABLE" i], #W0093W0054vRESPONSABLE').first();
-  await respInput.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+  // Intentar completar y confirmar directamente en el DOM de GeneXus
+  let filled = false;
+  for (let w = 0; w < 6; w++) {
+    filled = await _page.evaluate((leg) => {
+      const input = document.querySelector('input[id*="RESPONSABLE" i]') || document.getElementById('W0093W0054vRESPONSABLE');
+      if (!input) return false;
+      input.value = String(leg);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+      if (window.gx && window.gx.evt && window.gx.evt.onblur) {
+        try { window.gx.evt.onblur(input); } catch (_) {}
+      }
+      return true;
+    }, legajo).catch(() => false);
 
-  if (await respInput.isVisible().catch(() => false)) {
-    log(`[Limpieza] Campo vRESPONSABLE detectado. Ingresando legajo ${legajo}...`);
-    await respInput.fill('');
-    await respInput.fill(String(legajo));
-    await respInput.dispatchEvent('change').catch(() => {});
-    await respInput.dispatchEvent('blur').catch(() => {});
-    await respInput.press('Tab').catch(() => {});
-    await _page.waitForTimeout(600);
-
-    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR" i], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i]').first();
-    await confirmBtn.waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
-    if (await confirmBtn.isVisible().catch(() => false)) {
-      log(`[Limpieza] Clickeando botón Confirmar (#${await confirmBtn.getAttribute('id').catch(() => '')})...`);
-      await confirmBtn.click();
-      await _page.waitForTimeout(2500);
-      const postClickText = await _page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 300)).catch(() => '');
-      log(`[Post-Click Confirmar] ${postClickText}`);
-    }
-    await handleMotivePopupIfPresent(options.motivo || 'Limpieza cumplida');
-    log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
-    return { ok: true, msg: `Tarea confirmada con legajo ${legajo}.` };
+    if (filled) break;
+    await _page.waitForTimeout(1000);
   }
 
-  // Fallback: si tiene botón CUMPLIR visible en el detalle
-  const cumplirDetail = _page.locator('#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i], img[title*="Cumplir" i]').first();
+  if (filled) {
+    log(`[Limpieza] Legajo ${legajo} completado en input DOM de GeneXus.`);
+    await _page.waitForTimeout(1000);
+
+    const clicked = await _page.evaluate(() => {
+      const btn = document.querySelector('input[id*="BTNCONFIRMAR" i]') || document.getElementById('W0093W0054BTNCONFIRMAR');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    }).catch(() => false);
+
+    if (clicked) {
+      log(`[Limpieza] Botón Confirmar (#W0093W0054BTNCONFIRMAR) presionado en DOM.`);
+      await _page.waitForTimeout(2500);
+      await handleMotivePopupIfPresent(motivo);
+      log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
+      return { ok: true, msg: `Tarea confirmada con legajo ${legajo}.` };
+    }
+  }
+
+  // Fallback: si tiene botón CUMPLIR visible en el detalle (sin incluir BTNCONFIRMAR para evitar disparar sin legajo)
+  const cumplirDetail = _page.locator('#CUMPLIR, input[value="Cumplir" i], img[title*="Cumplir" i]').first();
   if (await cumplirDetail.isVisible().catch(() => false)) {
     log(`[Limpieza] Clickeando botón alternativo Cumplir en detalle...`);
     await cumplirDetail.click();
     await _page.waitForTimeout(2200);
-    await handleMotivePopupIfPresent(options.motivo || 'Realizado en tienda');
+    await handleMotivePopupIfPresent(motivo);
     return { ok: true, msg: 'Tarea marcada como cumplida desde detalle.' };
   }
 
