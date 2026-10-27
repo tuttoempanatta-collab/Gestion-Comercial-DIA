@@ -1300,6 +1300,14 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(2500);
 
+  const domSummary = await _page.evaluate(() => {
+    const visibleEls = Array.from(document.querySelectorAll('input, button, a[id], span[id*="RESP"], select'))
+      .filter(el => el.offsetParent !== null)
+      .map(el => `${el.tagName}#${el.id}[${el.type || ''}|${(el.value || el.innerText || '').slice(0, 20)}]`);
+    return { title: document.title, inputs: visibleEls };
+  }).catch(() => null);
+  log(`[DOM Limpieza "${task.nombre}"] ${JSON.stringify(domSummary)}`);
+
   // Selector de MOT.WebLimpieza en DOM (soporta cualquier prefijo de WebComponent GeneXus)
   const respInput = _page.locator('input[id*="vRESPONSABLE"], #W0093W0054vRESPONSABLE').first();
   if (await respInput.isVisible().catch(() => false)) {
