@@ -1300,7 +1300,7 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
 
   // Esperar activamente hasta 8 segundos a que GeneXus cargue el WebComponent de Limpieza (W0093W0054)
-  const respInput = _page.locator('input[id*="vRESPONSABLE"], #W0093W0054vRESPONSABLE').first();
+  const respInput = _page.locator('input[id*="RESPONSABLE" i], #W0093W0054vRESPONSABLE').first();
   await respInput.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
 
   if (await respInput.isVisible().catch(() => false)) {
@@ -1312,12 +1312,14 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     await respInput.press('Tab').catch(() => {});
     await _page.waitForTimeout(600);
 
-    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR"], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i]').first();
+    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR" i], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i]').first();
     await confirmBtn.waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
     if (await confirmBtn.isVisible().catch(() => false)) {
-      log(`[Limpieza] Clickeando botón Confirmar...`);
+      log(`[Limpieza] Clickeando botón Confirmar (#${await confirmBtn.getAttribute('id').catch(() => '')})...`);
       await confirmBtn.click();
       await _page.waitForTimeout(2500);
+      const postClickText = await _page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 300)).catch(() => '');
+      log(`[Post-Click Confirmar] ${postClickText}`);
     }
     await handleMotivePopupIfPresent(options.motivo || 'Limpieza cumplida');
     log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
