@@ -613,10 +613,27 @@ function isMotHost(urlStr) {
 
 async function ensureBrowser(headless = true) {
   ensureSessionDir();
-  if (!_browser || !_context || !_page || _page.isClosed()) {
+
+  const isHealthy = _browser && _browser.isConnected() && _page && !_page.isClosed();
+  let alive = false;
+  if (isHealthy) {
+    try {
+      await _page.evaluate(() => 1);
+      alive = true;
+    } catch (_) {
+      alive = false;
+    }
+  }
+
+  if (!alive) {
     if (_browser) {
       try { await _browser.close(); } catch (_) {}
     }
+    _browser  = null;
+    _context  = null;
+    _page     = null;
+    _loggedIn = false;
+
     const contextOptions = {
       viewport: { width: 1280, height: 800 },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -626,11 +643,23 @@ async function ensureBrowser(headless = true) {
     if (sessionExists()) {
       contextOptions.storageState = SESSION_FILE;
     }
+
+    const isWin = process.platform === 'win32';
+    const extraArgs = isWin
+      ? ['--no-sandbox', '--disable-setuid-sandbox']
+      : [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-zygote',
+          '--disable-accelerated-2d-canvas',
+        ];
+
     _browser = await chromium.launch({
       headless,
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
+        ...extraArgs,
         '--disable-blink-features=AutomationControlled',
         '--lang=es-AR',
         '--timezone=America/Argentina/Buenos_Aires',
@@ -644,6 +673,11 @@ async function ensureBrowser(headless = true) {
       } catch (_) {}
     });
     _page = await _context.newPage();
+
+    _page.on('crash', () => {
+      log('⚠️ Evento crash detectado en página de Playwright. Limpiando instancia para reinicio.', 'warn');
+      closeBrowser().catch(() => {});
+    });
 
     // Verificación de auditoría del reloj del navegador
     try {
@@ -820,6 +854,11 @@ async function navigateToTareasPage() {
     await _page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   } catch (navErr) {
     log(`Aviso al navegar a Tareas (${navErr.message}). Re-extrayendo URL limpia desde Home...`, 'warn');
+    if (/crash|closed|target|context/i.test(navErr.message)) {
+      await closeBrowser();
+      await ensureBrowser(true);
+      await doLogin(true);
+    }
     _tareasUrl = null;
     await _page.goto(MOT_HOME, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
     await _page.waitForTimeout(2000);
@@ -1336,19 +1375,29 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
 
   if (filled) {
     log(`[Limpieza] Legajo ${legajo} completado en input DOM de GeneXus.`);
-    await _page.waitForTimeout(1000);
+    await _page.waitForTimeout(1200);
 
-    const clicked = await _page.evaluate(() => {
-      const btn = document.querySelector('input[id*="BTNCONFIRMAR" i]') || document.getElementById('W0093W0054BTNCONFIRMAR');
-      if (!btn) return false;
-      btn.click();
-      return true;
-    }).catch(() => false);
+    // Intentar clickear BTNCONFIRMAR mediante locator (evento de mouse sintético) y fallback DOM
+    let clicked = false;
+    const btnLocator = _page.locator('input[id*="BTNCONFIRMAR" i], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i]').first();
+    if (await btnLocator.isVisible().catch(() => false)) {
+      await btnLocator.click({ timeout: 4000 }).catch(() => {});
+      clicked = true;
+    }
+    if (!clicked) {
+      clicked = await _page.evaluate(() => {
+        const btn = document.querySelector('input[id*="BTNCONFIRMAR" i]') || document.getElementById('W0093W0054BTNCONFIRMAR');
+        if (!btn) return false;
+        btn.click();
+        return true;
+      }).catch(() => false);
+    }
 
     if (clicked) {
-      log(`[Limpieza] Botón Confirmar (#W0093W0054BTNCONFIRMAR) presionado en DOM.`);
-      await _page.waitForTimeout(2500);
+      log(`[Limpieza] Botón Confirmar (#W0093W0054BTNCONFIRMAR) presionado.`);
+      await _page.waitForTimeout(3000);
       await handleMotivePopupIfPresent(motivo);
+      await _page.waitForTimeout(1500);
       log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
       return { ok: true, msg: `Tarea confirmada con legajo ${legajo}.` };
     }
@@ -1827,8 +1876,12 @@ async function markWithRetry(task, executor, options = {}) {
       lastReason = v.motivo;
     } catch (e) {
       lastReason = e.message;
-      if (/sesi[oó]n|login|timeout|closed|Target page/i.test(e.message)) {
-        try { await doLogin(true); } catch (_) {}
+      if (/sesi[oó]n|login|timeout|closed|Target page|crash/i.test(e.message)) {
+        try {
+          await closeBrowser();
+          await ensureBrowser(true);
+          await doLogin(true);
+        } catch (_) {}
       }
     }
     knowledge.recordIncident({
@@ -1865,6 +1918,13 @@ async function markDueTasks(markedToday = new Set()) {
       tasks = await readTasks();
     } catch (e) {
       log(`Error leyendo tareas en ciclo automático: ${e.message}`, 'error');
+      if (/crash|closed|target|context/i.test(e.message)) {
+        try {
+          await closeBrowser();
+          await ensureBrowser(true);
+          await doLogin(true);
+        } catch (_) {}
+      }
       return results;
     }
 
