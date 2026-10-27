@@ -1301,10 +1301,16 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   await _page.waitForTimeout(2500);
 
   const domSummary = await _page.evaluate(() => {
-    const visibleEls = Array.from(document.querySelectorAll('input, button, a[id], span[id*="RESP"], select'))
+    const gx = JSON.parse(document.querySelector('input[name="GXState"]')?.value || '{}');
+    const allClickable = Array.from(document.querySelectorAll('a, button, input, img[onclick], [id*="CUMPLIR"], [id*="CONFIRM"], [id*="RESP"], [class*="Button"]'))
       .filter(el => el.offsetParent !== null)
-      .map(el => `${el.tagName}#${el.id}[${el.type || ''}|${(el.value || el.innerText || '').slice(0, 20)}]`);
-    return { title: document.title, inputs: visibleEls };
+      .map(el => `${el.tagName}#${el.id}.${el.className}[val:${el.value || el.innerText || el.getAttribute('title') || ''}]`);
+    return {
+      title: document.title,
+      gxKeys: Object.keys(gx).filter(k => !k.startsWith('_')),
+      clickables: allClickable,
+      bodyText: document.body.innerText.replace(/\s+/g, ' ').slice(0, 200)
+    };
   }).catch(() => null);
   log(`[DOM Limpieza "${task.nombre}"] ${JSON.stringify(domSummary)}`);
 
