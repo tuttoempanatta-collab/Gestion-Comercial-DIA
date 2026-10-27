@@ -385,8 +385,17 @@ function getTodayAlerts() {
     const latest = new Map();
     // la entrada más reciente por tarea manda (la lista viene con la más nueva primero)
     for (const e of day) if (!latest.has(e.tarea)) latest.set(e.tarea, e);
+
+    // Cruzar con el estado actual de tareas: si en MOT la tarea ya está cumplida ('C' o 'FT'), no es una alerta
+    const cached = mb.getCachedTasks ? mb.getCachedTasks() : [];
+    const doneSet = new Set(
+      cached
+        .filter(t => ['C', 'FT', 'NC', 'NA'].includes(t.estadoCode) || (t.horaCumplimiento && t.horaCumplimiento !== '00:00'))
+        .map(t => t.nombre)
+    );
+
     return Array.from(latest.values())
-      .filter(e => e.estado !== 'verificada')
+      .filter(e => e.estado !== 'verificada' && !doneSet.has(e.tarea))
       .map(e => ({ tarea: e.tarea, estado: e.estado, motivo: e.motivo || '', intentos: e.intentos || null, ts: e.ts }));
   } catch (_) {
     return [];

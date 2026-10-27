@@ -1543,6 +1543,14 @@ async function markTaskOnMot(params = {}) {
         horaCumplimiento: `${hh}:${mm}`,
         fecha: dateKey,
       });
+      knowledge.recordAudit(getTodayStrArg(), {
+        tarea: task.nombre,
+        tipo: task.tipoControl,
+        estado: 'verificada',
+        horaMOT: `${hh}:${mm}`,
+        estadoMOT: finalCode,
+        nota: 'Marcada en MOT',
+      });
     };
 
     try {
@@ -2091,5 +2099,6 @@ module.exports = {
   setMotScheduleMap,
   getMotScheduleMap,
   syncTodayLegajosFromSchedule,
+  getCachedTasks: () => _cachedTasks || [],
   DEFAULT_EQUIPAMIENTO_TIENDA_624,
 };
