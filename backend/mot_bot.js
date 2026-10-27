@@ -398,18 +398,19 @@ function getLogs()    { return botLog; }
 function clearLogs()  { botLog.length = 0; }
 function isLoggedIn() { return _loggedIn; }
 
-// Mutex simple para evitar que una acción manual y el scheduler usen _page a la vez
+// Mutex secuencial FIFO para evitar que una acción manual y el scheduler usen _page a la vez
+let _lockPromise = Promise.resolve();
 async function withLock(fn) {
-  let waited = 0;
-  while (_busy && waited < 45000) {
-    await new Promise(r => setTimeout(r, 250));
-    waited += 250;
-  }
+  const previous = _lockPromise;
+  let release;
+  _lockPromise = new Promise(resolve => { release = resolve; });
+  await previous;
   _busy = true;
   try {
     return await fn();
   } finally {
     _busy = false;
+    release();
   }
 }
 
@@ -487,7 +488,22 @@ function classifyTaskType(nombre, tieneBotonesDirectos) {
   if (n.includes('caducidad')) return 'Caducidad';
   if (n.includes('retiro calidad')) return 'Retiro';
   if (n.includes('trazabilidad')) return 'Trazabilidad';
-  if (n.includes('limpieza')) return 'Limpieza';
+  if (
+    n.includes('limpieza') ||
+    n.includes('piletas') ||
+    n.includes('baldas') ||
+    n.includes('murales') ||
+    n.includes('freezer') ||
+    n.includes('pisos') ||
+    n.includes('baño') ||
+    n.includes('pase de turno') ||
+    n.includes('panadería') ||
+    n.includes('exhibidor') ||
+    n.includes('aseo') ||
+    n.includes('orden y limpieza')
+  ) {
+    return 'Limpieza';
+  }
   if (tieneBotonesDirectos) return 'Directa';
   return 'Directa';
 }
@@ -1282,7 +1298,7 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     ? task.detailLink
     : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-  await _page.waitForTimeout(2200);
+  await _page.waitForTimeout(2500);
 
   // Selector de MOT.WebLimpieza en DOM (soporta cualquier prefijo de WebComponent GeneXus)
   const respInput = _page.locator('input[id*="vRESPONSABLE"], #W0093W0054vRESPONSABLE').first();
@@ -1290,12 +1306,21 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     await respInput.fill('');
     await respInput.fill(String(legajo));
     await respInput.press('Tab').catch(() => {});
-    await _page.waitForTimeout(600);
+    await _page.waitForTimeout(400);
 
-    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR"], #W0093W0054BTNCONFIRMAR, input[value="Confirmar" i]').first();
+    // 1. Validar Responsable con el botón Validar si existe (GeneXus WebLimpieza)
+    const valBtn = _page.locator('input[id*="BTNVALIDARRESP"], input[id*="BTNVALIDAR"], input[value*="Validar" i]').first();
+    if (await valBtn.isVisible().catch(() => false)) {
+      log(`[Limpieza] Validando legajo ${legajo} en MOT...`);
+      await valBtn.click();
+      await _page.waitForTimeout(2200);
+    }
+
+    // 2. Clickear Confirmar
+    const confirmBtn = _page.locator('input[id*="BTNCONFIRMAR"], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i], #CUMPLIR').first();
     if (await confirmBtn.isVisible().catch(() => false)) {
       await confirmBtn.click();
-      await _page.waitForTimeout(2200);
+      await _page.waitForTimeout(2500);
     }
     await handleMotivePopupIfPresent(options.motivo || 'Limpieza cumplida');
     log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
@@ -1306,7 +1331,7 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   const cumplirDetail = _page.locator('#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i], img[title*="Cumplir" i]').first();
   if (await cumplirDetail.isVisible().catch(() => false)) {
     await cumplirDetail.click();
-    await _page.waitForTimeout(2000);
+    await _page.waitForTimeout(2200);
     await handleMotivePopupIfPresent(options.motivo || 'Realizado en tienda');
     return { ok: true, msg: 'Tarea marcada como cumplida desde detalle.' };
   }
@@ -1445,24 +1470,24 @@ async function executeDirectControlOnMot(task, options = {}) {
  * ingresa el motivo y confirma automáticamente.
  */
 async function handleMotivePopupIfPresent(motivoTexto = 'Operación de tienda') {
-  for (let check = 0; check < 4; check++) {
-    await _page.waitForTimeout(700);
+  for (let check = 0; check < 5; check++) {
+    await _page.waitForTimeout(800);
 
     // 1. Chequeo en iframes (GeneXus WorkWithPlus popup estándar)
     const frames = _page.frames();
     for (const frame of frames) {
       if (frame.url().includes('wcingresarmotivoincumplimiento') || frame.url().includes('motivo')) {
         log(`Popup de motivo detectado en iframe (${frame.url()}). Completando motivo: "${motivoTexto}"...`);
-        const textInput = frame.locator('textarea, input[type="text"]').first();
+        const textInput = frame.locator('textarea, input[type="text"], [id*="MOTIVO"]').first();
         if (await textInput.isVisible().catch(() => false)) {
           await textInput.fill(motivoTexto);
-          await _page.waitForTimeout(300);
+          await _page.waitForTimeout(400);
         }
-        const confirmBtn = frame.locator('input[type="button"][value*="Confirmar" i], input[type="button"][value*="Aceptar" i], input[type="button"][value*="Guardar" i], input[id*="BTNENTER"], button:has-text("Confirmar"), button:has-text("Aceptar")').first();
+        const confirmBtn = frame.locator('input[value*="Confirmar" i], input[value*="Aceptar" i], input[value*="Guardar" i], input[id*="BTNENTER"], input[name*="BTNENTER"], button:has-text("Confirmar"), button:has-text("Aceptar")').first();
         if (await confirmBtn.isVisible().catch(() => false)) {
           await confirmBtn.click();
-          await _page.waitForTimeout(2000);
-          log('Motivo confirmado en popup MOT iframe.');
+          await _page.waitForTimeout(2500);
+          log('✓ Motivo confirmado en popup MOT iframe.');
           return true;
         }
       }
@@ -1473,12 +1498,12 @@ async function handleMotivePopupIfPresent(motivoTexto = 'Operación de tienda') 
     if (await modalInput.isVisible().catch(() => false)) {
       log(`Popup de motivo detectado en página principal. Completando motivo: "${motivoTexto}"...`);
       await modalInput.fill(motivoTexto);
-      await _page.waitForTimeout(300);
-      const modalBtn = _page.locator('.gx-popup-content input[type="button"][value*="Confirmar" i], .gx-popup-content input[type="button"][value*="Aceptar" i], input[id*="BTNENTER"], button:has-text("Confirmar")').first();
+      await _page.waitForTimeout(400);
+      const modalBtn = _page.locator('.gx-popup-content input[value*="Confirmar" i], .gx-popup-content input[value*="Aceptar" i], input[id*="BTNENTER"], input[name*="BTNENTER"], button:has-text("Confirmar")').first();
       if (await modalBtn.isVisible().catch(() => false)) {
         await modalBtn.click();
-        await _page.waitForTimeout(2000);
-        log('Motivo confirmado en popup principal.');
+        await _page.waitForTimeout(2500);
+        log('✓ Motivo confirmado en popup principal.');
         return true;
       }
     }
@@ -1609,6 +1634,14 @@ async function markTaskOnMot(params = {}) {
         await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
         await _page.waitForTimeout(2000);
 
+        // Si dentro del detalle es una tarea con Responsable (Limpieza)
+        if (await _page.locator('input[id*="vRESPONSABLE"], #W0093W0054vRESPONSABLE').first().isVisible().catch(() => false)) {
+          const res = await executeLimpiezaControlOnMot(task, params);
+          applyLocalMark('C');
+          const updated = await readTasks();
+          return { ...res, tasks: updated, stats: computeStats(updated) };
+        }
+
         let detailBtnSel = '#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i]';
         if (accion === 'NC') detailBtnSel = '#NOCUMPLIR, input[value*="No cumplir" i]';
         else if (accion === 'NA') detailBtnSel = '#NOAPLICA, input[value*="No aplica" i]';
@@ -1626,14 +1659,6 @@ async function markTaskOnMot(params = {}) {
             tasks: updated,
             stats: computeStats(updated),
           };
-        }
-
-        // Si dentro del detalle es una tarea con Responsable (Limpieza)
-        if (await _page.locator('#W0093W0054vRESPONSABLE').isVisible().catch(() => false)) {
-          const res = await executeLimpiezaControlOnMot(task, params);
-          applyLocalMark('C');
-          const updated = await readTasks();
-          return { ...res, tasks: updated, stats: computeStats(updated) };
         }
       }
     } catch (liveErr) {
@@ -1700,19 +1725,19 @@ async function preflightCheck() {
  */
 async function verifyMark(task) {
   _localMarkedMap.delete(task.rowIndex); // evitar falsos positivos con marcas locales
-  await _page.waitForTimeout(1000);
+  await _page.waitForTimeout(1500);
   const fresh = await readTasks();
   let t = fresh.find(x => x.rowIndex === task.rowIndex || x.nombre === task.nombre);
   if (!t) return { ok: false, motivo: 'tarea no encontrada tras marcar' };
 
-  let done = knowledge.RULES.DONE_CODES.includes(t.estadoCode) || !!t.horaCumplimiento;
+  let done = knowledge.RULES.DONE_CODES.includes(t.estadoCode) || (!!t.horaCumplimiento && t.horaCumplimiento !== '00:00');
 
-  // Si aún no refleja estado pero recién se ejecutó la acción, dar un reintento breve de 2s
+  // Si aún no refleja estado pero recién se ejecutó la acción, dar un reintento breve de 3.5s
   if (!done) {
-    await _page.waitForTimeout(2000);
+    await _page.waitForTimeout(3500);
     const retryFresh = await readTasks();
     const retryT = retryFresh.find(x => x.rowIndex === task.rowIndex || x.nombre === task.nombre);
-    if (retryT && (knowledge.RULES.DONE_CODES.includes(retryT.estadoCode) || !!retryT.horaCumplimiento)) {
+    if (retryT && (knowledge.RULES.DONE_CODES.includes(retryT.estadoCode) || (!!retryT.horaCumplimiento && retryT.horaCumplimiento !== '00:00'))) {
       done = true;
       t = retryT;
     }
