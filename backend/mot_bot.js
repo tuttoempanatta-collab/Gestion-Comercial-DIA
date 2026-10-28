@@ -1353,29 +1353,50 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(3000);
 
-  // Intentar completar y confirmar directamente en el DOM de GeneXus
+  // 1. Intentar interactuar con el input de Legajo via Playwright typing
   let filled = false;
-  for (let w = 0; w < 6; w++) {
-    filled = await _page.evaluate((leg) => {
-      const input = document.querySelector('input[id*="RESPONSABLE" i]') || document.getElementById('W0093W0054vRESPONSABLE');
-      if (!input) return false;
-      input.value = String(leg);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      input.dispatchEvent(new Event('blur', { bubbles: true }));
-      if (window.gx && window.gx.evt && window.gx.evt.onblur) {
-        try { window.gx.evt.onblur(input); } catch (_) {}
-      }
-      return true;
-    }, legajo).catch(() => false);
+  const respLocator = _page.locator('input[id*="RESPONSABLE" i], #W0093W0054vRESPONSABLE').first();
+  await respLocator.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  if (await respLocator.isVisible().catch(() => false)) {
+    try {
+      await respLocator.click();
+      await respLocator.fill('');
+      await respLocator.fill(String(legajo));
+      await respLocator.press('Tab');
+      filled = true;
+      log(`[Limpieza] Legajo ${legajo} ingresado con fill y Tab en campo visible.`);
+      await _page.waitForTimeout(1000);
+    } catch (_) {}
+  }
 
-    if (filled) break;
-    await _page.waitForTimeout(1000);
+  // Fallback: completar y disparar eventos en el DOM de GeneXus
+  if (!filled) {
+    for (let w = 0; w < 4; w++) {
+      filled = await _page.evaluate((leg) => {
+        const input = document.querySelector('input[id*="RESPONSABLE" i]') || document.getElementById('W0093W0054vRESPONSABLE');
+        if (!input) return false;
+        input.value = String(leg);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+        if (window.gx && window.gx.evt && window.gx.evt.onblur) {
+          try { window.gx.evt.onblur(input); } catch (_) {}
+        }
+        return true;
+      }, legajo).catch(() => false);
+
+      if (filled) break;
+      await _page.waitForTimeout(800);
+    }
+    if (filled) {
+      log(`[Limpieza] Legajo ${legajo} completado en input DOM de GeneXus.`);
+      await _page.waitForTimeout(1000);
+    }
   }
 
   if (filled) {
-    log(`[Limpieza] Legajo ${legajo} completado en input DOM de GeneXus.`);
-    await _page.waitForTimeout(1200);
+    const preText = await _page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 250)).catch(() => '');
+    log(`[Limpieza Pre-Confirm] ${preText}`);
 
     // Intentar clickear BTNCONFIRMAR mediante locator (evento de mouse sintético) y fallback DOM
     let clicked = false;
@@ -1396,6 +1417,10 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     if (clicked) {
       log(`[Limpieza] Botón Confirmar (#W0093W0054BTNCONFIRMAR) presionado.`);
       await _page.waitForTimeout(3000);
+
+      const postText = await _page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 300)).catch(() => '');
+      log(`[Limpieza Post-Confirm] ${postText}`);
+
       await handleMotivePopupIfPresent(motivo);
       await _page.waitForTimeout(1500);
       log(`✓ Tarea "${task.nombre}" confirmada en MOT Oficial con legajo ${legajo}.`);
