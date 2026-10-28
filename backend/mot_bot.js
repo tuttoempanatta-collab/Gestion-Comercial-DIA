@@ -1353,70 +1353,140 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(3000);
 
-  // 1. Intentar interactuar con el input de Legajo via Playwright typing
+  // 1. Localizar de forma robusta el input visible de Responsable.
+  // En GeneXus WebVerTarea existen múltiples webcomponents embebidos (W0024, W0030, W0036... W0054)
+  // donde sólo el componente activo de la tarea tiene visibilidad real.
   let filled = false;
-  const respLocator = _page.locator('input[id*="RESPONSABLE" i], #W0093W0054vRESPONSABLE').first();
-  await respLocator.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-  if (await respLocator.isVisible().catch(() => false)) {
-    try {
-      await respLocator.click();
-      await respLocator.fill('');
-      await respLocator.fill(String(legajo));
-      await respLocator.press('Tab');
-      filled = true;
-      log(`[Limpieza] Legajo ${legajo} ingresado con fill y Tab en campo visible.`);
-      await _page.waitForTimeout(1000);
-    } catch (_) {}
+  const respLocators = _page.locator('input[id*="RESPONSABLE" i]');
+  const totalResp = await respLocators.count();
+  let activeRespLocator = null;
+
+  for (let i = 0; i < totalResp; i++) {
+    const loc = respLocators.nth(i);
+    if (await loc.isVisible().catch(() => false)) {
+      activeRespLocator = loc;
+      break;
+    }
   }
 
-  // Fallback: completar y disparar eventos en el DOM de GeneXus
-  if (!filled) {
-    for (let w = 0; w < 4; w++) {
-      filled = await _page.evaluate((leg) => {
-        const input = document.querySelector('input[id*="RESPONSABLE" i]') || document.getElementById('W0093W0054vRESPONSABLE');
-        if (!input) return false;
-        input.value = String(leg);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        input.dispatchEvent(new Event('blur', { bubbles: true }));
-        if (window.gx && window.gx.evt && window.gx.evt.onblur) {
-          try { window.gx.evt.onblur(input); } catch (_) {}
-        }
-        return true;
-      }, legajo).catch(() => false);
+  if (activeRespLocator) {
+    try {
+      await activeRespLocator.scrollIntoViewIfNeeded().catch(() => {});
+      await activeRespLocator.click({ timeout: 3000 }).catch(() => {});
+      await activeRespLocator.fill('');
+      await activeRespLocator.fill(String(legajo));
+      await activeRespLocator.press('Tab');
+      filled = true;
+      const activeId = await activeRespLocator.getAttribute('id').catch(() => 'desconocido');
+      log(`[Limpieza] Legajo ${legajo} ingresado vía Playwright typing en campo activo (#${activeId}).`);
+      await _page.waitForTimeout(600);
+    } catch (err) {
+      log(`[Limpieza] Error al tipear legajo con Playwright: ${err.message}`, 'warn');
+    }
+  }
 
-      if (filled) break;
-      await _page.waitForTimeout(800);
+  // 2. Fallback y sincronización DOM / GeneXus:
+  // Asegurar que tanto el DOM como los estados internos de GeneXus (gx.fn.setCtrlValue, gx.O, onblur)
+  // tengan el valor del legajo registrado, previniendo el error "Ingrese Responsable."
+  const domSync = await _page.evaluate((leg) => {
+    const inputs = Array.from(document.querySelectorAll('input[id*="RESPONSABLE" i]'));
+    if (!inputs.length) return false;
+
+    // Poblar todos los inputs coincidentes (tanto visibles como en componentes auxiliares)
+    for (const inp of inputs) {
+      inp.value = String(leg);
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      inp.dispatchEvent(new Event('blur', { bubbles: true }));
+
+      if (window.gx && window.gx.fn && window.gx.fn.setCtrlValue) {
+        try { window.gx.fn.setCtrlValue(inp.id, String(leg)); } catch (_) {}
+      }
+      if (window.gx && window.gx.evt && window.gx.evt.onblur) {
+        try { window.gx.evt.onblur(inp, 20); } catch (_) {}
+      }
     }
-    if (filled) {
-      log(`[Limpieza] Legajo ${legajo} completado en input DOM de GeneXus.`);
-      await _page.waitForTimeout(1000);
+
+    if (window.gx && window.gx.O) {
+      for (const k in window.gx.O) {
+        if (k.toLowerCase().includes('responsable')) {
+          window.gx.O[k] = String(leg);
+        }
+      }
     }
+    return true;
+  }, legajo).catch(() => false);
+
+  if (domSync && !filled) {
+    filled = true;
+    log(`[Limpieza] Legajo ${legajo} sincronizado en el estado DOM / GeneXus.`);
   }
 
   if (filled) {
     const preText = await _page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 250)).catch(() => '');
     log(`[Limpieza Pre-Confirm] ${preText}`);
 
-    // Intentar clickear BTNCONFIRMAR mediante locator (evento de mouse sintético) y fallback DOM
+    // 3. Localizar el botón visible de Confirmar (en el componente activo)
     let clicked = false;
-    const btnLocator = _page.locator('input[id*="BTNCONFIRMAR" i], #W0093W0054BTNCONFIRMAR, input[value*="Confirmar" i]').first();
-    if (await btnLocator.isVisible().catch(() => false)) {
-      await btnLocator.click({ timeout: 4000 }).catch(() => {});
-      clicked = true;
+    const btnLocators = _page.locator('input[id*="BTNCONFIRMAR" i], input[value*="Confirmar" i], button:has-text("Confirmar")');
+    const totalBtns = await btnLocators.count();
+    let activeBtnLocator = null;
+
+    for (let i = 0; i < totalBtns; i++) {
+      const b = btnLocators.nth(i);
+      if (await b.isVisible().catch(() => false)) {
+        activeBtnLocator = b;
+        break;
+      }
     }
+
+    if (activeBtnLocator) {
+      await activeBtnLocator.scrollIntoViewIfNeeded().catch(() => {});
+      await activeBtnLocator.click({ timeout: 4000 }).catch(() => {});
+      clicked = true;
+      log(`[Limpieza] Botón Confirmar activo presionado vía Playwright.`);
+    }
+
     if (!clicked) {
       clicked = await _page.evaluate(() => {
-        const btn = document.querySelector('input[id*="BTNCONFIRMAR" i]') || document.getElementById('W0093W0054BTNCONFIRMAR');
+        const btns = Array.from(document.querySelectorAll('input[id*="BTNCONFIRMAR" i], input[value*="Confirmar" i]'));
+        const btn = btns.find(b => b.offsetParent !== null || b.offsetWidth > 0) || btns[btns.length - 1];
         if (!btn) return false;
         btn.click();
+        const ctx = btn.getAttribute('data-gx-context');
+        const comp = ctx ? JSON.parse(ctx)[0] : '';
+        if (comp && window.gx && window.gx.evt && window.gx.evt.execEvt) {
+          try { window.gx.evt.execEvt(comp, false, `${comp}E'CONFIRMAR'.`, btn); } catch (_) {}
+        }
         return true;
       }).catch(() => false);
+      if (clicked) {
+        log(`[Limpieza] Botón Confirmar ejecutado vía fallback GeneXus.`);
+      }
     }
 
     if (clicked) {
-      log(`[Limpieza] Botón Confirmar (#W0093W0054BTNCONFIRMAR) presionado.`);
       await _page.waitForTimeout(3000);
+
+      // Verificar si GeneXus devolvió mensajes de error
+      const gxErrors = await _page.evaluate(() => {
+        return Array.from(document.querySelectorAll('.ErrorViewer, .alert, .gx-error, span[id*="error" i], div[id*="error" i]'))
+          .map(e => e.innerText.trim())
+          .filter(Boolean);
+      }).catch(() => []);
+
+      if (gxErrors.length > 0) {
+        log(`[Limpieza Aviso GeneXus] Mensajes en pantalla: ${gxErrors.join(' | ')}`, 'warn');
+        if (gxErrors.some(e => /ingrese responsable/i.test(e))) {
+          log(`[Limpieza Reintento] Reintentando click y tipeo forzado en input visible...`, 'warn');
+          if (activeRespLocator) {
+            await activeRespLocator.focus().catch(() => {});
+            await activeRespLocator.type(String(legajo), { delay: 100 }).catch(() => {});
+            if (activeBtnLocator) await activeBtnLocator.click().catch(() => {});
+            await _page.waitForTimeout(2500);
+          }
+        }
+      }
 
       const postText = await _page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').slice(0, 300)).catch(() => '');
       log(`[Limpieza Post-Confirm] ${postText}`);
@@ -1737,7 +1807,11 @@ async function markTaskOnMot(params = {}) {
         await _page.waitForTimeout(2000);
 
         // Si dentro del detalle es una tarea con Responsable (Limpieza)
-        if (await _page.locator('input[id*="vRESPONSABLE"], #W0093W0054vRESPONSABLE').first().isVisible().catch(() => false)) {
+        const hasRespField = await _page.evaluate(() => {
+          const inps = Array.from(document.querySelectorAll('input[id*="RESPONSABLE" i]'));
+          return inps.some(inp => inp.offsetParent !== null || inp.offsetWidth > 0) || inps.length > 0;
+        }).catch(() => false);
+        if (hasRespField) {
           const res = await executeLimpiezaControlOnMot(task, params);
           applyLocalMark('C');
           const updated = await readTasks();
