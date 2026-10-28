@@ -216,6 +216,11 @@ async function checkGuardianSchedule() {
   checkDayRollover();
   if (!_autoScheduleEnabled) return;
 
+  // Árbitro de Memoria: Si la extracción de ofertas está activa, NO despertar ni ejecutar MOT
+  if (_pausedByExtraction) {
+    return;
+  }
+
   const inWindow = isWithinOperatingWindow();
   const argTime  = getArgentinaHHMM();
 
@@ -274,7 +279,12 @@ function initAutoGuardian() {
 // ─── Control del scheduler ────────────────────────────────────────────────────
 
 async function start(options = {}) {
-  const { autoWoken = false, manual = false } = options;
+  const { autoWoken = false, manual = false, force = false } = options;
+
+  if (_pausedByExtraction && !force) {
+    log('⚠️ [Árbitro Memoria] MOT Bot en pausa: Extracción de ofertas en curso para preservar RAM.', 'warn');
+    return;
+  }
 
   if (_interval) {
     console.log('[MOT-Scheduler] Ya está corriendo.');

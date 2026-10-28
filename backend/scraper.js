@@ -12,14 +12,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
   const browser = await chromium.launch({ 
     headless: true,
     args: process.platform === 'win32' 
-      ? ['--no-sandbox', '--disable-setuid-sandbox', '--js-flags=--max-old-space-size=96'] 
+      ? ['--no-sandbox', '--disable-setuid-sandbox'] 
       : [
           '--no-sandbox', 
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--no-zygote',
-          '--single-process',
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--disable-extensions',
@@ -31,9 +30,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           '--disable-domain-reliability',
           '--disable-ipc-flooding-protection',
           '--disable-renderer-backgrounding',
-          '--disable-features=Translate,OptimizationHints,MediaRouter',
-          '--disk-cache-size=1',
-          '--js-flags=--max-old-space-size=96'
+          '--disk-cache-size=1'
         ]
   });
 
@@ -42,8 +39,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
   });
 
-  // Bloquear imágenes pesadas, fuentes y multimedia para ahorrar RAM
-  await context.route('**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf,eot,svg}', route => route.abort());
+  // Bloquear imágenes pesadas y multimedia para ahorrar RAM sin romper fuentes ni estilos GeneXus
+  await context.route('**/*.{png,jpg,jpeg,gif,webp,mp4,mp3}', route => route.abort());
 
   const page = await context.newPage();
 
@@ -75,8 +72,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       await enterBtn.waitFor({ state: 'visible', timeout: 10000 });
       await enterBtn.click();
       console.log(`[Ext-${extractionId}] Clic en Ingresar. Esperando validación de sesión...`);
-      await page.waitForTimeout(4000);
-      await page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {});
+      await page.waitForTimeout(3000);
+      await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
     }
 
     onProgress({ message: 'Sesión iniciada. Navegando a la tabla...', current: 5, total: 100, percentage: 5 });
@@ -93,7 +90,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             }
           } catch (_) {}
         }
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(400);
       }
       return null;
     }
@@ -105,7 +102,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log(`[Ext-${extractionId}] Intentando navegar directamente a la tabla...`);
       await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview', { 
         waitUntil: 'domcontentloaded',
-        timeout: 25000 
+        timeout: 20000 
       });
       await page.waitForTimeout(1500);
       const found = await locateFilterFrame(8000);
@@ -124,7 +121,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         if (!page.url().includes('viewhome')) {
           await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.viewhome', { 
             waitUntil: 'domcontentloaded',
-            timeout: 25000 
+            timeout: 20000 
           });
           await page.waitForTimeout(1500);
         }
@@ -141,7 +138,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         await accionesGeneralesItem.click();
 
         console.log(`[Ext-${extractionId}] Esperando carga de la tabla (#vDESDE)...`);
-        const found = await locateFilterFrame(20000);
+        const found = await locateFilterFrame(15000);
         if (found) {
           dataFrame = found;
           isTableLoaded = true;
@@ -152,10 +149,10 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         try {
           await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview', { 
             waitUntil: 'domcontentloaded',
-            timeout: 25000 
+            timeout: 20000 
           });
           await page.waitForTimeout(1500);
-          const found = await locateFilterFrame(12000);
+          const found = await locateFilterFrame(10000);
           if (found) {
             dataFrame = found;
             isTableLoaded = true;
@@ -180,38 +177,19 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       try {
         if (startFormatted) {
-          const desdeEl = dataFrame.locator('#vDESDE, input[name*="vDESDE"], input[name*="DESDE"]').first();
-          await desdeEl.waitFor({ state: 'visible', timeout: 15000 });
-          await desdeEl.click({ clickCount: 3 });
-          await desdeEl.fill(startFormatted);
-          await desdeEl.dispatchEvent('change');
-          await desdeEl.press('Tab');
-          console.log(`[Ext-${extractionId}] Desde completado: ${startFormatted}`);
+          await fillGeneXusDate(page, dataFrame, '#vDESDE, input[name*="vDESDE"], input[name*="DESDE"]', startFormatted, 'DESDE', extractionId);
         }
 
         if (endFormatted) {
-          const hastaEl = dataFrame.locator('#vHASTA, input[name*="vHASTA"], input[name*="HASTA"]').first();
-          await hastaEl.waitFor({ state: 'visible', timeout: 15000 });
-          await hastaEl.click({ clickCount: 3 });
-          await hastaEl.fill(endFormatted);
-          await hastaEl.dispatchEvent('change');
-          await hastaEl.press('Tab');
-          console.log(`[Ext-${extractionId}] Hasta completado: ${endFormatted}`);
+          await fillGeneXusDate(page, dataFrame, '#vHASTA, input[name*="vHASTA"], input[name*="HASTA"]', endFormatted, 'HASTA', extractionId);
         }
 
-        await page.waitForTimeout(1500);
+        await clickGeneXusBuscar(page, dataFrame, extractionId);
 
-        // Click en BUSCAR
-        const buscarEl = dataFrame.locator('#BTNBUSCAR, input[name="BTNBUSCAR"], button:has-text("Buscar"), input[value="Buscar"]').first();
-        await buscarEl.waitFor({ state: 'visible', timeout: 10000 });
-        console.log(`[Ext-${extractionId}] Clickeando botón BUSCAR...`);
-        await buscarEl.click();
-
-        // Esperar que la grilla se actualice con los resultados de la búsqueda
-        console.log(`[Ext-${extractionId}] Esperando actualización de la tabla tras búsqueda...`);
-        await page.waitForTimeout(20000);
-        await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
+        onProgress({ message: 'Esperando actualización de la grilla...', current: 5, total: 100, percentage: 11 });
         await page.waitForTimeout(3000);
+        await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(1500);
       } catch (e) {
         console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
         onProgress({ message: `Aviso: Error en filtros (${e.message.slice(0, 40)})`, current: 5, total: 100, percentage: 10 });
@@ -668,6 +646,70 @@ function formatDateForPortal(dateStr) {
   if (parts.length !== 3) return "";
   const [year, month, day] = parts;
   return `${day}/${month}/${year}`;
+}
+
+async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extractionId) {
+  if (!valueStr) return false;
+  console.log(`[Ext-${extractionId}] Registrando campo GeneXus ${fieldName}: ${valueStr}...`);
+
+  const framesToTry = [frame, ...(page.frames ? page.frames() : [])];
+  const uniqueFrames = Array.from(new Set(framesToTry));
+
+  for (const f of uniqueFrames) {
+    try {
+      const el = f.locator(selector).first();
+      if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await el.click({ clickCount: 3 });
+        await page.waitForTimeout(200);
+        await page.keyboard.press('Control+a');
+        await page.keyboard.press('Delete');
+        await page.waitForTimeout(200);
+
+        const digitsOnly = valueStr.replace(/\D/g, '');
+        console.log(`[Ext-${extractionId}] Tipeando dígitos "${digitsOnly}" en campo ${fieldName} (frame: ${f.url()})`);
+
+        for (const digit of digitsOnly) {
+          await page.keyboard.type(digit);
+          await page.waitForTimeout(60);
+        }
+
+        await page.waitForTimeout(300);
+        await page.keyboard.press('Tab');
+        await page.waitForTimeout(300);
+
+        const finalValue = await el.inputValue().catch(() => 'N/A');
+        console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${finalValue}" (esperado: "${valueStr}").`);
+        return true;
+      }
+    } catch (e) {}
+  }
+  console.log(`[Ext-${extractionId}] Campo ${fieldName} no encontrado.`);
+  return false;
+}
+
+async function clickGeneXusBuscar(page, frame, extractionId) {
+  console.log(`[Ext-${extractionId}] Disparando evento de búsqueda GeneXus...`);
+  const framesToTry = [frame, ...(page.frames ? page.frames() : [])];
+  const uniqueFrames = Array.from(new Set(framesToTry));
+
+  for (const f of uniqueFrames) {
+    try {
+      const buscarBtn = f.locator('#BTNBUSCAR, input[value="Buscar"], button:has-text("Buscar"), input[name*="BTNBUSCAR"]').first();
+      if (await buscarBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await buscarBtn.click();
+        console.log(`[Ext-${extractionId}] Clic en BUSCAR realizado en frame: ${f.url()}`);
+        return;
+      }
+    } catch (e) {}
+  }
+
+  for (const f of uniqueFrames) {
+    await f.evaluate(() => {
+      if (window.gx && window.gx.evt && window.gx.evt.execEvt) {
+        try { window.gx.evt.execEvt("E'BUSCAR'.", this); } catch(e) {}
+      }
+    }).catch(() => {});
+  }
 }
 
 module.exports = { runScraper };
