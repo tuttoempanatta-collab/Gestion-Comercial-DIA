@@ -8,6 +8,9 @@
 
 process.env.TZ = 'America/Argentina/Buenos_Aires';
 
+const fs = require('fs');
+const path = require('path');
+
 const {
   doLogin,
   readTasks,

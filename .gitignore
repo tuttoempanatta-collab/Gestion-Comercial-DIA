@@ -16,6 +16,7 @@ backend/playwright_data/*
 !backend/playwright_data/mot_session/
 backend/playwright_data/mot_session/*
 !backend/playwright_data/mot_session/storage_state.json
+backend/backups/pre_restore_archives/
 
 # Frontend specific
 frontend/node_modules/

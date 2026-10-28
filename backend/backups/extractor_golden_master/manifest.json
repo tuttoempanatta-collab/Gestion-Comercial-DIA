@@ -1,0 +1,23 @@
+{
+  "version": "1.0.0",
+  "date": "2026-10-28T18:06:15.857Z",
+  "description": "Golden Master validado del modulo de extraccion DIA y Arbitro de Memoria MOT",
+  "files": {
+    "scraper.js": {
+      "backupFile": "scraper.golden.js",
+      "sha256": "53a9dd11e89e7a763036b7510fcdacea1838df01329697ea85d783b74bf2a547"
+    },
+    "mot_scheduler.js": {
+      "backupFile": "mot_scheduler.golden.js",
+      "sha256": "09386675c2caeb990d4ff65d8ce91b09fa201e48605bff2a74eef9f5277a855f"
+    }
+  },
+  "criticalRules": {
+    "memoryLimitRendererProcess": "--renderer-process-limit=1",
+    "disableSitePerProcess": "--disable-features=site-per-process",
+    "forbiddenSingleProcess": "--single-process",
+    "guardianCheckPausedByExtraction": "_pausedByExtraction",
+    "safeDateMaskTyping": "fillGeneXusDate",
+    "officialBuscarTrigger": "clickGeneXusBuscar"
+  }
+}

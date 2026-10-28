@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node --expose-gc index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/test_extractor_integrity.js",
+    "test:extractor": "node tests/test_extractor_integrity.js",
+    "repair:extractor": "node tests/restore_extractor_golden.js"
   },
   "keywords": [],
   "author": "",
