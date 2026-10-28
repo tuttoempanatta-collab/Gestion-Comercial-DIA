@@ -46,6 +46,7 @@ let _pausedManuallyToday    = false;      // Si el usuario pausó manualmente de
 let _forcedNightRun         = false;      // Si el usuario forzó encendido manual fuera de horario (22:40-05:30)
 let _isRunningCycle         = false;
 let _preSleepSweepDoneToday = false;
+let _pausedByExtraction     = false;
 
 const MARKED_FILE = path.join(__dirname, 'mot_marked_today.json');
 
@@ -339,6 +340,45 @@ async function stop(options = {}) {
   await closeBrowser();
 }
 
+/**
+ * Árbitro de Memoria: Pausa temporalmente el robot MOT y cierra completamente su navegador
+ * Playwright Chromium para ceder el 100% de la memoria RAM de Render (512MB) al Extractor de Ofertas.
+ */
+async function pauseForExtraction() {
+  log('🛑 [Árbitro Memoria] Pausando MOT Bot y cerrando Chromium para liberar RAM durante la extracción...', 'warn');
+  _pausedByExtraction = true;
+  if (_interval) {
+    clearInterval(_interval);
+    _interval = null;
+  }
+  _status = 'paused_by_extraction';
+  _nextRunAt = null;
+  try {
+    await closeBrowser();
+  } catch (_) {}
+  log('✅ [Árbitro Memoria] Navegador MOT cerrado. RAM liberada para el proceso de extracción.');
+}
+
+/**
+ * Árbitro de Memoria: Reactiva el robot MOT de forma transparente una vez concluida la extracción.
+ */
+async function resumeAfterExtraction() {
+  if (!_pausedByExtraction) return;
+  _pausedByExtraction = false;
+  log('🔄 [Árbitro Memoria] Proceso de extracción finalizado. Reactivando MOT Bot...', 'info');
+  if (isWithinOperatingWindow() && _autoScheduleEnabled && !_pausedManuallyToday) {
+    try {
+      await start({ manual: false });
+      log('🟢 [Árbitro Memoria] MOT Bot reanudado automáticamente.');
+    } catch (err) {
+      log(`⚠️ [Árbitro Memoria] Error al reanudar MOT Bot: ${err.message}`, 'warn');
+    }
+  } else {
+    _status = isWithinOperatingWindow() ? 'stopped' : 'sleeping';
+    log(`ℹ️ [Árbitro Memoria] MOT Bot queda en estado ${_status}.`);
+  }
+}
+
 async function doManualLogin() {
   const isCloud = process.env.RENDER || process.env.NODE_ENV === 'production';
   console.log(`[MOT-Scheduler] Forzando login (headless: ${!!isCloud})...`);
@@ -428,6 +468,7 @@ function getTodayAlerts() {
 function getStatus() {
   return {
     status:               _status,
+    isPausedByExtraction: _pausedByExtraction,
     needsLogin:           _needsLogin,
     loggedIn:             isLoggedIn(),
     startedAt:            _startedAt,
@@ -483,4 +524,6 @@ module.exports = {
   fetchTaskDetail,
   markSingleTask,
   getStatus,
+  pauseForExtraction,
+  resumeAfterExtraction,
 };

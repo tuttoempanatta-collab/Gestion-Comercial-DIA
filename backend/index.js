@@ -157,6 +157,9 @@ app.post('/api/cancel-extract', (req, res) => {
   const { extractionId } = req.body;
   if (!global.cancelledExtractions) global.cancelledExtractions = new Set();
   global.cancelledExtractions.add(extractionId);
+  if (motScheduler && motScheduler.resumeAfterExtraction) {
+    motScheduler.resumeAfterExtraction().catch(() => {});
+  }
   res.json({ status: 'cancelled' });
 });
 
@@ -167,8 +170,14 @@ app.post('/api/extract', async (req, res) => {
     const extractionId = await createExtraction(startDate, endDate);
     const settings = await getSettings();
     
+    // Árbitro de Memoria: Cerrar navegador de MOT y pausar su ciclo para evitar colisión de 512MB RAM en Render
+    if (motScheduler && motScheduler.pauseForExtraction) {
+      await motScheduler.pauseForExtraction();
+    }
+
     const initialMsg = stageName ? `Iniciando ${stageName}...` : 'Iniciando proceso de extracción...';
     activeLogs[extractionId] = [
+      { timestamp: new Date().toISOString(), message: '🛑 [Gestión de Memoria] MOT Bot pausado y Chromium cerrado. 100% de RAM libre asignada a la extracción.', percentage: 1 },
       { timestamp: new Date().toISOString(), message: initialMsg, percentage: 1 }
     ];
     activeProgress[extractionId] = { percentage: 1, message: initialMsg };
@@ -192,10 +201,19 @@ app.post('/api/extract', async (req, res) => {
     .catch(async (err) => {
       await updateExtractionStatus(extractionId, 'failed', 0, err.message);
       console.error(`[Ext-${extractionId}] Error en scraper:`, err.message);
+    })
+    .finally(async () => {
+      // Árbitro de Memoria: Reactivar MOT Bot automáticamente al finalizar la extracción
+      if (motScheduler && motScheduler.resumeAfterExtraction) {
+        await motScheduler.resumeAfterExtraction();
+      }
     });
 
     res.json({ extractionId, message: 'Extraction started' });
   } catch (err) {
+    if (motScheduler && motScheduler.resumeAfterExtraction) {
+      await motScheduler.resumeAfterExtraction().catch(() => {});
+    }
     res.status(500).json({ error: err.message });
   }
 });

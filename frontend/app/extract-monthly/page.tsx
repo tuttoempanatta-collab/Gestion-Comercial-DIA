@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Play, Terminal, Loader2, CheckCircle2, AlertCircle, Calendar, CalendarRange } from 'lucide-react'
+import { Play, Terminal, Loader2, CheckCircle2, AlertCircle, Calendar, CalendarRange, PowerOff, Cpu } from 'lucide-react'
 import { API_URL } from '@/lib/api'
 
 export default function ExtractMonthlyPage() {
@@ -34,6 +34,56 @@ export default function ExtractMonthlyPage() {
   const [extractionId, setExtractionId] = useState<number | null>(null)
   const [status, setStatus] = useState<'idle' | 'running' | 'completed' | 'failed'>('idle')
   const logContainerRef = useRef<HTMLDivElement>(null)
+  const [motStatus, setMotStatus] = useState<string>('unknown')
+  const [isTogglingMot, setIsTogglingMot] = useState<boolean>(false)
+
+  const fetchMotStatus = async () => {
+    try {
+      const res = await fetch(API_URL('/api/mot-bot/status'))
+      if (res.ok) {
+        const data = await res.json()
+        setMotStatus(data.status || 'stopped')
+      }
+    } catch (_) {}
+  }
+
+  useEffect(() => {
+    fetchMotStatus()
+    const timer = setInterval(fetchMotStatus, 6000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const handleStopMot = async () => {
+    setIsTogglingMot(true)
+    try {
+      await fetch(API_URL('/api/mot-bot/stop'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual: true, reason: 'manual_liberar_ram' })
+      })
+      await fetchMotStatus()
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setIsTogglingMot(false)
+    }
+  }
+
+  const handleStartMot = async () => {
+    setIsTogglingMot(true)
+    try {
+      await fetch(API_URL('/api/mot-bot/start'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual: true })
+      })
+      await fetchMotStatus()
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setIsTogglingMot(false)
+    }
+  }
 
   const scrollToBottom = () => {
     if (logContainerRef.current) {
@@ -256,6 +306,63 @@ export default function ExtractMonthlyPage() {
           </div>
         </div>
       </header>
+
+      {/* Panel de Convivencia y Gestión de Memoria MOT */}
+      <div className="glass-card p-4 rounded-xl border border-slate-700/60 bg-slate-900/60 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className={`p-2.5 rounded-lg shrink-0 ${
+            motStatus === 'running'
+              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+              : motStatus === 'paused_by_extraction'
+              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+              : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+          }`}>
+            <Cpu size={22} />
+          </div>
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-white">Estado Robot MOT:</span>
+              <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                motStatus === 'running'
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  : motStatus === 'paused_by_extraction'
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+              }`}>
+                {motStatus === 'running' ? 'Activo (En Ejecución)' : motStatus === 'paused_by_extraction' ? 'Pausado por Extracción' : motStatus === 'sleeping' ? 'En Reposo Nocturno' : 'Apagado'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              {motStatus === 'running'
+                ? 'El robot se pausará automáticamente al iniciar la extracción mensual para liberar 100% de RAM (~512MB) y evitar reinicios del servidor.'
+                : 'Chromium de MOT cerrado. Máxima memoria disponible para la extracción de ofertas sin riesgo de saturación.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
+          {motStatus === 'running' ? (
+            <button
+              onClick={handleStopMot}
+              disabled={isTogglingMot || isExtracting}
+              className="w-full md:w-auto text-xs px-4 py-2.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-semibold flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-50"
+              title="Cierra el navegador de MOT para garantizar toda la memoria al extractor"
+            >
+              {isTogglingMot ? <Loader2 size={14} className="animate-spin" /> : <PowerOff size={14} />}
+              Apagar MOT (Liberar RAM)
+            </button>
+          ) : (
+            <button
+              onClick={handleStartMot}
+              disabled={isTogglingMot || isExtracting}
+              className="w-full md:w-auto text-xs px-4 py-2.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-semibold flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-50"
+            >
+              {isTogglingMot ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+              Encender MOT
+            </button>
+          )}
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Controls */}
