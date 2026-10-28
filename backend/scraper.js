@@ -81,76 +81,93 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     onProgress({ message: 'Sesión iniciada. Navegando a la tabla...', current: 5, total: 100, percentage: 5 });
 
+    // Helper para detectar el frame que contiene los filtros (#vDESDE)
+    async function locateFilterFrame(timeoutMs = 15000) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        for (const f of page.frames()) {
+          try {
+            const hasDesde = await f.$('#vDESDE, input[name*="vDESDE"], input[name*="DESDE"]');
+            if (hasDesde && (await hasDesde.isVisible().catch(() => false))) {
+              return f;
+            }
+          } catch (_) {}
+        }
+        await page.waitForTimeout(500);
+      }
+      return null;
+    }
+
     let isTableLoaded = false;
+    let dataFrame = page;
+
     try {
       console.log(`[Ext-${extractionId}] Intentando navegar directamente a la tabla...`);
       await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview', { 
-        waitUntil: 'load',
-        timeout: 30000 
+        waitUntil: 'domcontentloaded',
+        timeout: 25000 
       });
-      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 15000 });
-      isTableLoaded = true;
-      console.log(`[Ext-${extractionId}] Tabla cargada directamente (#vDESDE visible).`);
+      await page.waitForTimeout(1500);
+      const found = await locateFilterFrame(8000);
+      if (found) {
+        dataFrame = found;
+        isTableLoaded = true;
+        console.log(`[Ext-${extractionId}] Tabla cargada directamente (#vDESDE visible).`);
+      }
     } catch (e) {
-      console.log(`[Ext-${extractionId}] No se pudo cargar directamente (#vDESDE no visible). Intentando menú lateral...`);
+      console.log(`[Ext-${extractionId}] Aviso navegación directa (${e.message}). Intentando menú lateral...`);
     }
 
     if (!isTableLoaded) {
+      onProgress({ message: 'Accediendo mediante menú lateral...', current: 5, total: 100, percentage: 6 });
       try {
         if (!page.url().includes('viewhome')) {
           await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.viewhome', { 
-            waitUntil: 'load',
-            timeout: 30000 
+            waitUntil: 'domcontentloaded',
+            timeout: 25000 
           });
+          await page.waitForTimeout(1500);
         }
         
         console.log(`[Ext-${extractionId}] Buscando menú "Gestion Operativa"...`);
         const gestionOperativaMenu = page.locator('text="Gestion Operativa", :has-text("Gestion Operativa")').first();
-        await gestionOperativaMenu.waitFor({ state: 'visible', timeout: 20000 });
+        await gestionOperativaMenu.waitFor({ state: 'visible', timeout: 15000 });
         await gestionOperativaMenu.click();
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(2000);
 
         console.log(`[Ext-${extractionId}] Buscando item "Acciones comerciales generales"...`);
         const accionesGeneralesItem = page.locator('text="Acciones comerciales generales", a:has-text("Acciones comerciales generales"), span:has-text("Acciones comerciales generales")').first();
-        await accionesGeneralesItem.waitFor({ state: 'visible', timeout: 20000 });
+        await accionesGeneralesItem.waitFor({ state: 'visible', timeout: 15000 });
         await accionesGeneralesItem.click();
 
         console.log(`[Ext-${extractionId}] Esperando carga de la tabla (#vDESDE)...`);
-        await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 35000 });
-        isTableLoaded = true;
-        console.log(`[Ext-${extractionId}] Tabla cargada exitosamente mediante el menú.`);
+        const found = await locateFilterFrame(20000);
+        if (found) {
+          dataFrame = found;
+          isTableLoaded = true;
+          console.log(`[Ext-${extractionId}] Tabla cargada exitosamente mediante el menú.`);
+        }
       } catch (menuError) {
         console.error(`[Ext-${extractionId}] Error en menú lateral:`, menuError.message);
         try {
           await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview', { 
-            waitUntil: 'load',
-            timeout: 30000 
+            waitUntil: 'domcontentloaded',
+            timeout: 25000 
           });
-          await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 25000 });
-          isTableLoaded = true;
+          await page.waitForTimeout(1500);
+          const found = await locateFilterFrame(12000);
+          if (found) {
+            dataFrame = found;
+            isTableLoaded = true;
+          }
         } catch (finalError) {
           console.error(`[Ext-${extractionId}] Fallaron todos los métodos de navegación.`);
         }
       }
     }
 
-    // 2. Esperar que el panel de filtros esté visible
-    onProgress({ message: 'Buscando panel de datos...', current: 5, total: 100, percentage: 7 });
-    let dataFrame = page;
-
-    try {
-      await page.waitForSelector('#vDESDE', { state: 'visible', timeout: 35000 });
-    } catch (e) {
-      for (const f of page.frames()) {
-        try {
-          const el = await f.$('#vDESDE');
-          if (el && await el.isVisible()) {
-            dataFrame = f;
-            break;
-          }
-        } catch (err) {}
-      }
-    }
+    // 2. Confirmar que el panel de filtros esté visible
+    onProgress({ message: 'Panel de datos listo. Preparando filtros...', current: 5, total: 100, percentage: 8 });
 
     // 3. Aplicar Filtros de Fecha
     if (startDate || endDate) {
