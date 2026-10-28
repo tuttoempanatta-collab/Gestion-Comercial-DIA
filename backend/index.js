@@ -825,6 +825,14 @@ app.post('/api/mot-bot/schedule/copy-week', async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Manejo global de excepciones para evitar que errores no fatales reinicien el proceso Node.js
+process.on('uncaughtException', (err) => {
+  console.error('[Process Safeguard] Excepción no capturada:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process Safeguard] Rechazo no controlado en promesa:', reason);
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   // Cargar configuración de legajos de turnos MOT en memoria

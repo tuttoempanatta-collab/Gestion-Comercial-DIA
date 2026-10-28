@@ -12,13 +12,14 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
   const browser = await chromium.launch({ 
     headless: true,
     args: process.platform === 'win32' 
-      ? ['--no-sandbox', '--disable-setuid-sandbox'] 
+      ? ['--no-sandbox', '--disable-setuid-sandbox', '--js-flags=--max-old-space-size=96'] 
       : [
           '--no-sandbox', 
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--no-zygote',
+          '--single-process',
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--disable-extensions',
@@ -30,8 +31,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           '--disable-domain-reliability',
           '--disable-ipc-flooding-protection',
           '--disable-renderer-backgrounding',
+          '--disable-features=Translate,OptimizationHints,MediaRouter',
           '--disk-cache-size=1',
-          '--js-flags=--max-old-space-size=256'
+          '--js-flags=--max-old-space-size=96'
         ]
   });
 
@@ -40,8 +42,8 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
   });
 
-  // Bloquear imágenes pesadas y multimedia para ahorrar RAM
-  await context.route('**/*.{png,jpg,jpeg,gif,webp,mp4,mp3}', route => route.abort());
+  // Bloquear imágenes pesadas, fuentes y multimedia para ahorrar RAM
+  await context.route('**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf,eot,svg}', route => route.abort());
 
   const page = await context.newPage();
 
@@ -520,6 +522,11 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       totalItems += pageResults.count;
       console.log(`[Ext-${extractionId}] Pág ${currentPage}: Guardados ${pageResults.count} artículos (acumulado: ${totalItems}, primer código: ${pageResults.firstCode || 'ninguno'})`);
+
+      // Forzar liberación inmediata de memoria RAM tras procesar la página
+      if (global.gc) {
+        try { global.gc(); } catch (_) {}
+      }
 
       // Detección de fin si no hay filas o si la página se repite
       if (pageResults.count === 0) {
