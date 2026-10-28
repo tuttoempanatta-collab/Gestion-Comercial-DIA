@@ -201,6 +201,14 @@ app.post('/api/extract', async (req, res) => {
     .catch(async (err) => {
       await updateExtractionStatus(extractionId, 'failed', 0, err.message);
       console.error(`[Ext-${extractionId}] Error en scraper:`, err.message);
+      if (activeLogs[extractionId]) {
+        activeLogs[extractionId].push({
+          timestamp: new Date().toISOString(),
+          message: `Error: ${err.message}`,
+          percentage: 0
+        });
+      }
+      activeProgress[extractionId] = { percentage: 0, message: `Error: ${err.message}` };
     })
     .finally(async () => {
       // Árbitro de Memoria: Reactivar MOT Bot automáticamente al finalizar la extracción

@@ -19,17 +19,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--no-zygote',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--disable-extensions',
-          '--disable-background-networking',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-breakpad',
-          '--disable-component-update',
-          '--disable-domain-reliability',
-          '--disable-ipc-flooding-protection',
-          '--disable-renderer-backgrounding',
+          '--renderer-process-limit=1',
+          '--disable-features=site-per-process,Translate,OptimizationHints,MediaRouter',
+          '--js-flags=--max-old-space-size=128',
           '--disk-cache-size=1'
         ]
   });
@@ -78,36 +70,20 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     onProgress({ message: 'Sesión iniciada. Navegando a la tabla...', current: 5, total: 100, percentage: 5 });
 
-    // Helper para detectar el frame que contiene los filtros (#vDESDE)
-    async function locateFilterFrame(timeoutMs = 15000) {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        for (const f of page.frames()) {
-          try {
-            const hasDesde = await f.$('#vDESDE, input[name*="vDESDE"], input[name*="DESDE"]');
-            if (hasDesde && (await hasDesde.isVisible().catch(() => false))) {
-              return f;
-            }
-          } catch (_) {}
-        }
-        await page.waitForTimeout(400);
-      }
-      return null;
-    }
-
     let isTableLoaded = false;
     let dataFrame = page;
 
     try {
-      console.log(`[Ext-${extractionId}] Intentando navegar directamente a la tabla...`);
+      console.log(`[Ext-${extractionId}] Navegando directamente a articulospromoview...`);
+      onProgress({ message: 'Conectando con tabla de promociones...', current: 5, total: 100, percentage: 6 });
       await page.goto('https://portalfranquicias.supermercadosdia.com.ar/servlet/com.portalsocios.articulospromoview', { 
-        waitUntil: 'domcontentloaded',
-        timeout: 20000 
+        waitUntil: 'commit',
+        timeout: 25000 
       });
-      await page.waitForTimeout(1500);
-      const found = await locateFilterFrame(8000);
-      if (found) {
-        dataFrame = found;
+      await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+
+      const desdeCheck = page.locator('#vDESDE, input[name*="vDESDE"]').first();
+      if (await desdeCheck.isVisible({ timeout: 8000 }).catch(() => false)) {
         isTableLoaded = true;
         console.log(`[Ext-${extractionId}] Tabla cargada directamente (#vDESDE visible).`);
       }
@@ -133,17 +109,15 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         await page.waitForTimeout(2000);
 
         console.log(`[Ext-${extractionId}] Buscando item "Acciones comerciales generales"...`);
-        const accionesGeneralesItem = page.locator('text="Acciones comerciales generales", a:has-text("Acciones comerciales generales"), span:has-text("Acciones comerciales generales")').first();
+        const accionesGeneralesItem = page.locator('text="Acciones comerciales generales", a:has-text("Acciones comerciales generales")').first();
         await accionesGeneralesItem.waitFor({ state: 'visible', timeout: 15000 });
         await accionesGeneralesItem.click();
 
         console.log(`[Ext-${extractionId}] Esperando carga de la tabla (#vDESDE)...`);
-        const found = await locateFilterFrame(15000);
-        if (found) {
-          dataFrame = found;
-          isTableLoaded = true;
-          console.log(`[Ext-${extractionId}] Tabla cargada exitosamente mediante el menú.`);
-        }
+        const desdeMenuCheck = page.locator('#vDESDE, input[name*="vDESDE"]').first();
+        await desdeMenuCheck.waitFor({ state: 'visible', timeout: 20000 });
+        isTableLoaded = true;
+        console.log(`[Ext-${extractionId}] Tabla cargada exitosamente mediante el menú.`);
       } catch (menuError) {
         console.error(`[Ext-${extractionId}] Error en menú lateral:`, menuError.message);
         try {
@@ -151,12 +125,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             waitUntil: 'domcontentloaded',
             timeout: 20000 
           });
-          await page.waitForTimeout(1500);
-          const found = await locateFilterFrame(10000);
-          if (found) {
-            dataFrame = found;
-            isTableLoaded = true;
-          }
+          const desdeFinalCheck = page.locator('#vDESDE, input[name*="vDESDE"]').first();
+          await desdeFinalCheck.waitFor({ state: 'visible', timeout: 10000 });
+          isTableLoaded = true;
         } catch (finalError) {
           console.error(`[Ext-${extractionId}] Fallaron todos los métodos de navegación.`);
         }
@@ -165,6 +136,21 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
     // 2. Confirmar que el panel de filtros esté visible
     onProgress({ message: 'Panel de datos listo. Preparando filtros...', current: 5, total: 100, percentage: 8 });
+
+    // Determinar qué frame contiene los datos si no está en el frame principal
+    dataFrame = page;
+    const isMainVisible = await page.locator('#vDESDE').first().isVisible({ timeout: 2000 }).catch(() => false);
+    if (!isMainVisible) {
+      for (const f of page.frames()) {
+        try {
+          const el = f.locator('#vDESDE').first();
+          if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
+            dataFrame = f;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
 
     // 3. Aplicar Filtros de Fecha
     if (startDate || endDate) {
