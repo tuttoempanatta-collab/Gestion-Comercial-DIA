@@ -1,11 +1,11 @@
 {
-  "version": "1.2.0",
-  "date": "2026-10-29T14:15:13.867Z",
-  "description": "Golden Master validado v1.2.0: Arbitro de Memoria con mutex global y blindaje de ciclo en vuelo contra colisiones de RAM",
+  "version": "1.3.0",
+  "date": "2026-10-29T14:35:40.516Z",
+  "description": "Golden Master validado v1.3.0: Sincronizacion robusta de paginacion y espera activa de actualizacion a 50 filas (30 pags)",
   "files": {
     "scraper.js": {
       "backupFile": "scraper.golden.js",
-      "sha256": "668199c34e291596e4f9e3dcc0a6e21a7d8440ba1cf5dc5a0ba94c95299dfc79"
+      "sha256": "7a5ef7b048afe70d619fabce372d7be4a21f4689ab4295b5a9504aaec37f628d"
     },
     "mot_scheduler.js": {
       "backupFile": "mot_scheduler.golden.js",

@@ -210,8 +210,32 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       for (const f of frames) {
         try {
           const state = await f.evaluate(() => {
-            const text = document.body.innerText || '';
-            const m = text.match(/(?:P\u00e1gina|Página|Pagina|P\u00e1g\.?|Pág\.?)\s+(\d+)\s+(?:de|of)\s+(\d+)/i);
+            const pageRegex = /(?:P\u00e1gina|Página|Pagina|P\u00e1g\.?|Pág\.?)\s+(\d+)\s+(?:de|of)\s+(\d+)/i;
+            
+            // 1. Buscar en elementos visibles interactivos o del paginador (botones, links, celdas)
+            const candidates = Array.from(document.querySelectorAll('button, a, span, div, td, li')).filter(el => {
+              const t = (el.innerText || '').trim();
+              if (!pageRegex.test(t) || t.length > 50) return false;
+              const rect = el.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0;
+            });
+
+            let m = null;
+            if (candidates.length > 0) {
+              const preferred = candidates.find(el => 
+                el.tagName === 'BUTTON' || 
+                el.tagName === 'A' || 
+                el.classList.contains('dropdown-toggle') || 
+                el.closest('.pagination, [class*="paging"], [id*="PAGING"]')
+              ) || candidates[0];
+              m = (preferred.innerText || '').trim().match(pageRegex);
+            }
+
+            if (!m) {
+              const text = document.body.innerText || '';
+              m = text.match(pageRegex);
+            }
+
             const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table[id*="Grid"] tr'));
             let validRows = 0;
             let firstCode = '';
@@ -354,40 +378,50 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
                 await f.evaluate(() => {
                   const el = document.querySelector('[data-gx-rows-opt="true"]');
                   if (el) {
-                    el.click();
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
                     if (el.parentElement) el.parentElement.click();
                   }
                 });
               }
 
               // Esperar que GeneXus recargue la tabla con las nuevas filas
-              await page.waitForTimeout(1500);
+              await page.waitForTimeout(2000);
               await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
 
               const prevTotal = totalPages;
               const prevRows = gridState.validRows;
-              for (let waitStep = 0; waitStep < 15; waitStep++) {
+              console.log(`[Ext-${extractionId}] Esperando actualización de grilla a ${targetSize} filas (previo: ${prevRows} filas, ${prevTotal} págs)...`);
+
+              for (let waitStep = 0; waitStep < 20; waitStep++) {
                 await page.waitForTimeout(1000);
                 const updated = await getGridState();
-                if (
-                  (updated.totalPages !== prevTotal && updated.totalPages >= 1) ||
-                  (targetSize > 10 && updated.validRows > 10) ||
-                  (targetSize === 5 && updated.validRows <= 5) ||
-                  (prevTotal === 1 && prevRows < 10)
-                ) {
+                
+                // Criterio de éxito: El total de páginas debe haber cambiado respecto al previo de 17 filas (ej. 88 -> 30)
+                // y las filas visibles deben reflejar la nueva densidad (>= 25 filas para target 50)
+                const pageCountChanged = (prevTotal > 1 && updated.totalPages !== prevTotal && updated.totalPages > 0);
+                const rowsUpdated = (targetSize >= 50 ? (updated.validRows >= 25 || updated.validRows === targetSize) : (updated.validRows === targetSize));
+                
+                if (pageCountChanged && rowsUpdated) {
                   gridState = updated;
                   totalPages = updated.totalPages;
                   sizeApplied = true;
+                  console.log(`[Ext-${extractionId}] ¡Filtro de ${targetSize} filas confirmado en paso ${waitStep + 1}! Total de páginas: ${totalPages} (filas visibles: ${gridState.validRows})`);
                   break;
                 }
               }
 
-              await page.waitForTimeout(2500);
-              gridState = await getGridState();
-              totalPages = gridState.totalPages;
+              // Verificación y sincronización final
+              await page.waitForTimeout(1500);
+              const finalCheck = await getGridState();
+              if (finalCheck.totalPages > 0 && (finalCheck.totalPages !== prevTotal || prevTotal === 1)) {
+                gridState = finalCheck;
+                totalPages = finalCheck.totalPages;
+                sizeApplied = true;
+              }
               console.log(`[Ext-${extractionId}] Vista actualizada: ${gridState.validRows} filas en pág 1, Total de páginas: ${totalPages}`);
-              sizeApplied = true;
-              break;
+              if (sizeApplied) break;
             }
           } catch (err) {
             console.log(`[Ext-${extractionId}] Aviso en intento ${attempt} de cambio de filas:`, err.message);
