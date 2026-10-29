@@ -191,6 +191,37 @@ runAssert('Regla de Negocio: Omite códigos con precio web mayor a 0,00 (numeric
   return true;
 });
 
+runAssert('Regla Anti-Corte: Fin de datos se evalúa por filas físicas en grilla (totalRowsInGrid === 0), NUNCA por count === 0', () => {
+  if (!scraperCode.includes('totalRowsInGrid === 0')) {
+    throw new Error('Falta verificación por filas físicas en grilla (totalRowsInGrid === 0). Provocará corte prematuro en páginas con 0 artículos guardados.');
+  }
+  if (scraperCode.includes('if (pageResults.count === 0)')) {
+    throw new Error('Detectada condición prohibida "if (pageResults.count === 0)". Corta la extracción prematuramente en páginas intermedias.');
+  }
+  return true;
+});
+
+runAssert('Paginación Robusta: getGridState() prioriza elementos visibles interactivos del paginador (pageRegex)', () => {
+  if (!scraperCode.includes('pageRegex') || !scraperCode.includes('candidates.find')) {
+    throw new Error('Falta detección robusta de paginador interactivo visible en getGridState().');
+  }
+  return true;
+});
+
+runAssert('Filtro 50 filas: Valida cambio de total de páginas (pageCountChanged) y densidad (rowsUpdated)', () => {
+  if (!scraperCode.includes('pageCountChanged') || !scraperCode.includes('rowsUpdated')) {
+    throw new Error('Falta validación estricta de actualización de 50 filas (pageCountChanged && rowsUpdated).');
+  }
+  return true;
+});
+
+runAssert('Navegación al siguiente lote: Scroll y disparo completo de eventos sobre el botón "Sig"', () => {
+  if (!scraperCode.includes('scrollIntoViewIfNeeded')) {
+    throw new Error('Falta scrollIntoViewIfNeeded() sobre el botón "Sig" para asegurar avance entre páginas.');
+  }
+  return true;
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Árbitro de Memoria y Blindaje del Guardián MOT (mot_scheduler.js)
 // ─────────────────────────────────────────────────────────────────────────────

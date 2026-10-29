@@ -1,7 +1,7 @@
 {
-  "version": "1.4.0",
-  "date": "2026-10-29T15:00:54.972Z",
-  "description": "Golden Master validado v1.4.0: Correccion de corte prematuro - navegacion completa hasta la ultima pagina sin abortar si una pagina tiene 0 articulos guardados",
+  "version": "1.4.1",
+  "date": "2026-10-29T15:22:00.000Z",
+  "description": "Golden Master validado v1.4.1: Suite ampliada con protecciones anti-corte prematuro, paginacion 50 filas estricta y blindaje MOT",
   "files": {
     "scraper.js": {
       "backupFile": "scraper.golden.js",
@@ -19,6 +19,10 @@
     "guardianCheckPausedByExtraction": "_pausedByExtraction",
     "safeDateMaskTyping": "fillGeneXusDate",
     "officialBuscarTrigger": "clickGeneXusBuscar",
-    "omitPriceGreaterThanZero": "numericPrice > 0"
+    "omitPriceGreaterThanZero": "numericPrice > 0",
+    "antiPrematureExit": "totalRowsInGrid === 0",
+    "strict50RowsValidation": "pageCountChanged && rowsUpdated",
+    "visiblePaginatorDetection": "pageRegex",
+    "nextButtonScrollAndDispatch": "scrollIntoViewIfNeeded"
   }
 }
