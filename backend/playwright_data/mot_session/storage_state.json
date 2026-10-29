@@ -171,16 +171,6 @@
       "sameSite": "Lax"
     },
     {
-      "name": "__Host-GAPS",
-      "value": "1:YINSP9QsDiIfm9YiOg3rWs427NKG_87PSpjF9iiTVhoWLQwYrHjDisXAtonH5YQJvWCeZ5PULwOYmw7y39Pf9im3fWdYVw:7OERgp6NGjCFlBET",
-      "domain": "accounts.google.com",
-      "path": "/",
-      "expires": 1827280726.302766,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "Lax"
-    },
-    {
       "name": "NID",
       "value": "Cv0CCAESrwIBOxGDSNRMFFNVhduH2_7XER2xXDRKFcBl2GxR9gwdxIcJEhjpLiBu_N1i1DIkHwl9xJhVLqB_Vjx5yehXIt7JUfmcQxh8wFLtKEJfcOB1XQ9pkvZ1PfY41IgtxEITFghWDURDdgNMyEmpv_4qvxeTlIIoJneu6xlx8vTk23XXRfD4HRbhZOjRfeBQIkMK3BNxkYjqNVCWFfJyOqlFZqZJ7NHDNQI3f8yXuwy9gcD99i_gx0p393FbwuixnD1awoBFTyWcV4ygkD2y8TL0mq_NFy-NSa5cpBot4g3C9SnvkoN91xh67SnmP_OzIPxfP-8uM4tveHdbkvKX1eojqsm2m0bLaWxbenuwL07fc_bS2EHlXK-jHLIvhDpFch5_MignC2sphRNHEjYunv8_x_EoATJFAdKsB89hkzLKIra1PiRkFpy7TuJ2OE9GCO5yjdFjuH1VrqpYEaz7y11N4DVwRthv3KoePi1S5yMkJO4qHC0txEICkHQK",
       "domain": ".google.com",
@@ -461,8 +451,18 @@
       "sameSite": "None"
     },
     {
+      "name": "__Host-GAPS",
+      "value": "1:fwWAQ8QxX3C0Zai5a0L64AF791HkeHga16pI1oX08COWKyHi0L8GAq9adcEEtjQWXf_JNv_teyRjC4eZfD5ZDU61SH1ztg:5jNpOVukd0CfGmyO",
+      "domain": "accounts.google.com",
+      "path": "/",
+      "expires": 1827783481.567723,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
       "name": "JSESSIONID",
-      "value": "B1562C2762D366041176BDD87F568B56",
+      "value": "41F1364D35453F402CE36E890B1FB795",
       "domain": "mot.supermercadosdia.com.ar",
       "path": "/",
       "expires": -1,
@@ -472,7 +472,7 @@
     },
     {
       "name": "GAMSessionGUID",
-      "value": "2a60ba9f-d27d-467c-8058-522bbdf77b8f",
+      "value": "30809cbb-8a62-4f16-8987-8035addd58e2",
       "domain": "mot.supermercadosdia.com.ar",
       "path": "/",
       "expires": -1,
