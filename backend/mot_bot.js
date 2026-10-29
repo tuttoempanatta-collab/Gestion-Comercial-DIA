@@ -1134,7 +1134,12 @@ async function getTaskDetail(rowIndex) {
       ? task.detailLink
       : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
 
-    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
+
+  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
     await _page.waitForTimeout(2000);
 
     const detail = await _page.evaluate(() => {
@@ -1201,6 +1206,11 @@ async function executeTemperatureControlOnMot(task, options = {}) {
   const fullUrl = task.detailLink.startsWith('http')
     ? task.detailLink
     : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+
+  await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
 
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(2500);
@@ -1386,9 +1396,19 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     throw new Error(`La tarea "${task.nombre}" no posee link de detalle en MOT.`);
   }
 
+  await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
+
   const fullUrl = task.detailLink.startsWith('http')
     ? task.detailLink
     : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+  await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
+
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(3000);
 
@@ -1572,9 +1592,19 @@ async function executeCaducidadesOnMot(task) {
     throw new Error(`La tarea "${task.nombre}" no posee link de detalle en MOT.`);
   }
 
+  await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
+
   const fullUrl = task.detailLink.startsWith('http')
     ? task.detailLink
     : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
+  await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
+
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(2500);
 
@@ -1655,7 +1685,12 @@ async function executeDirectControlOnMot(task, options = {}) {
     const fullUrl = task.detailLink.startsWith('http')
       ? task.detailLink
       : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
-    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
+
+  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
     await _page.waitForTimeout(2200);
 
     // En webvertarea, buscar #CUMPLIR
@@ -1850,7 +1885,12 @@ async function markTaskOnMot(params = {}) {
         const fullUrl = task.detailLink.startsWith('http')
           ? task.detailLink
           : `${MOT_BASE_URL}${task.detailLink.replace(/^\//, '')}`;
-        await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await ensureBrowser(true);
+  if (!_loggedIn || !_page || _page.isClosed()) {
+    await doLogin(true);
+  }
+
+  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
         await _page.waitForTimeout(2000);
 
         // Si dentro del detalle es una tarea con Responsable (Limpieza)
