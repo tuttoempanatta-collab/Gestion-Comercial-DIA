@@ -155,6 +155,7 @@ app.post('/api/settings', async (req, res) => {
 
 app.post('/api/cancel-extract', (req, res) => {
   const { extractionId } = req.body;
+  global._isExtractionRunning = false;
   if (!global.cancelledExtractions) global.cancelledExtractions = new Set();
   global.cancelledExtractions.add(extractionId);
   if (motScheduler && motScheduler.resumeAfterExtraction) {
@@ -167,6 +168,7 @@ app.post('/api/extract', async (req, res) => {
   const { startDate, endDate, pageSize, startPage, maxPages, stageName } = req.body;
   
   try {
+    global._isExtractionRunning = true;
     const extractionId = await createExtraction(startDate, endDate);
     const settings = await getSettings();
     
@@ -211,6 +213,7 @@ app.post('/api/extract', async (req, res) => {
       activeProgress[extractionId] = { percentage: 0, message: `Error: ${err.message}` };
     })
     .finally(async () => {
+      global._isExtractionRunning = false;
       // Árbitro de Memoria: Reactivar MOT Bot automáticamente al finalizar la extracción
       if (motScheduler && motScheduler.resumeAfterExtraction) {
         await motScheduler.resumeAfterExtraction();
@@ -219,6 +222,7 @@ app.post('/api/extract', async (req, res) => {
 
     res.json({ extractionId, message: 'Extraction started' });
   } catch (err) {
+    global._isExtractionRunning = false;
     if (motScheduler && motScheduler.resumeAfterExtraction) {
       await motScheduler.resumeAfterExtraction().catch(() => {});
     }
@@ -614,6 +618,9 @@ app.post('/api/mot-bot/mark-task', async (req, res) => {
 // POST arrancar el scheduler
 app.post('/api/mot-bot/start', async (req, res) => {
   try {
+    if (global._isExtractionRunning) {
+      return res.status(409).json({ ok: false, error: 'Extracción de ofertas en curso. MOT Bot bloqueado para proteger la memoria RAM.' });
+    }
     await motScheduler.start({ manual: true });
     res.json({ ok: true, status: motScheduler.getStatus() });
   } catch (err) {

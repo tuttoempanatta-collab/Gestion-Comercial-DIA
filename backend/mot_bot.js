@@ -612,6 +612,11 @@ function isMotHost(urlStr) {
 // ─── Login ────────────────────────────────────────────────────────────────────
 
 async function ensureBrowser(headless = true) {
+  if (global._isExtractionRunning) {
+    const err = new Error('[Árbitro Memoria] Apertura de Chromium denegada: Extracción de ofertas en curso (RAM reservada para el extractor).');
+    console.warn(`[MOT-Bot] ${err.message}`);
+    throw err;
+  }
   ensureSessionDir();
 
   const isHealthy = _browser && _browser.isConnected() && _page && !_page.isClosed();

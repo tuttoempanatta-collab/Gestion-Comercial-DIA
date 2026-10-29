@@ -1,7 +1,7 @@
 {
-  "version": "1.1.0",
-  "date": "2026-10-29T10:20:00.000Z",
-  "description": "Golden Master validado del modulo de extraccion DIA y Arbitro de Memoria MOT con omision de precios mayores a 0,00",
+  "version": "1.2.0",
+  "date": "2026-10-29T14:15:13.867Z",
+  "description": "Golden Master validado v1.2.0: Arbitro de Memoria con mutex global y blindaje de ciclo en vuelo contra colisiones de RAM",
   "files": {
     "scraper.js": {
       "backupFile": "scraper.golden.js",
@@ -9,7 +9,7 @@
     },
     "mot_scheduler.js": {
       "backupFile": "mot_scheduler.golden.js",
-      "sha256": "09386675c2caeb990d4ff65d8ce91b09fa201e48605bff2a74eef9f5277a855f"
+      "sha256": "34db3b483e110b0387fd3c1d6a5c171e77e507edbf20aa0a5f4a982d5cca38ed"
     }
   },
   "criticalRules": {

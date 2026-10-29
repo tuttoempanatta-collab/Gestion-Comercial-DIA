@@ -121,6 +121,10 @@ function checkDayRollover() {
 
 async function runCycle() {
   if (_isRunningCycle) return;
+  if (_pausedByExtraction || global._isExtractionRunning) {
+    _status = 'paused_by_extraction';
+    return;
+  }
   _isRunningCycle = true;
 
   try {
@@ -129,6 +133,11 @@ async function runCycle() {
     // Verificar si llegó la hora de cierre diario (22:40 hs) y no fue forzado en horario nocturno
     if (_autoScheduleEnabled && !isWithinOperatingWindow() && !_forcedNightRun) {
       await enterNightSleep('Horario de cierre diario alcanzado (22:40 hs).');
+      return;
+    }
+
+    if (_pausedByExtraction || global._isExtractionRunning) {
+      _status = 'paused_by_extraction';
       return;
     }
 
@@ -149,12 +158,26 @@ async function runCycle() {
       }
     }
 
+    if (_pausedByExtraction || global._isExtractionRunning) {
+      _status = 'paused_by_extraction';
+      return;
+    }
+
     console.log(`[MOT-Scheduler] Ejecutando ciclo (${argTime} hs AR)...`);
     _nextRunAt = new Date(Date.now() + 60 * 1000).toISOString();
 
     if (!isLoggedIn()) {
+      if (_pausedByExtraction || global._isExtractionRunning) {
+        _status = 'paused_by_extraction';
+        return;
+      }
       log(`🌅 [Auto-Bot] Conectando sesión automática en MOT (${argTime} hs)...`);
       await doLogin(true);
+    }
+
+    if (_pausedByExtraction || global._isExtractionRunning) {
+      _status = 'paused_by_extraction';
+      return;
     }
 
     _needsLogin = false;
@@ -166,13 +189,21 @@ async function runCycle() {
       if (_marcaciones.length > 200) _marcaciones.splice(200);
     }
 
-    _status    = 'running';
-    _lastError = null;
+    if (_pausedByExtraction || global._isExtractionRunning) {
+      _status = 'paused_by_extraction';
+    } else {
+      _status    = 'running';
+      _lastError = null;
+    }
   } catch (err) {
-    console.error('[MOT-Scheduler] Error en ciclo:', err.message);
-    _lastError = err.message;
-    _status    = 'error';
-    await captureDebugScreenshot('error').catch(() => {});
+    if (_pausedByExtraction || global._isExtractionRunning) {
+      _status = 'paused_by_extraction';
+    } else {
+      console.error('[MOT-Scheduler] Error en ciclo:', err.message);
+      _lastError = err.message;
+      _status    = 'error';
+      await captureDebugScreenshot('error').catch(() => {});
+    }
   } finally {
     _isRunningCycle = false;
   }
@@ -221,6 +252,10 @@ async function checkGuardianSchedule() {
 
   // Árbitro de Memoria: Si la extracción de ofertas está activa, NO despertar ni ejecutar MOT
   if (_pausedByExtraction) {
+    return;
+  }
+  if (global._isExtractionRunning) {
+    _status = 'paused_by_extraction';
     return;
   }
 
@@ -286,6 +321,12 @@ async function start(options = {}) {
 
   if (_pausedByExtraction && !force) {
     log('⚠️ [Árbitro Memoria] MOT Bot en pausa: Extracción de ofertas en curso para preservar RAM.', 'warn');
+    _status = 'paused_by_extraction';
+    return;
+  }
+  if (global._isExtractionRunning && !force) {
+    log('⚠️ [Árbitro Memoria] MOT Bot en pausa: Extracción de ofertas en curso para preservar RAM.', 'warn');
+    _status = 'paused_by_extraction';
     return;
   }
 
@@ -360,15 +401,29 @@ async function stop(options = {}) {
 async function pauseForExtraction() {
   log('🛑 [Árbitro Memoria] Pausando MOT Bot y cerrando Chromium para liberar RAM durante la extracción...', 'warn');
   _pausedByExtraction = true;
+  _status = 'paused_by_extraction';
+  _nextRunAt = null;
+
   if (_interval) {
     clearInterval(_interval);
     _interval = null;
   }
-  _status = 'paused_by_extraction';
-  _nextRunAt = null;
+
+  // Si había un ciclo de MOT en ejecución en este instante, esperar activamente a que termine
+  if (_isRunningCycle) {
+    log('⏳ [Árbitro Memoria] Esperando a que el ciclo en vuelo de MOT finalice antes de arrancar extracción...', 'info');
+    let waitCount = 0;
+    while (_isRunningCycle && waitCount < 20) {
+      await new Promise(r => setTimeout(r, 500));
+      waitCount++;
+    }
+  }
+
   try {
     await closeBrowser();
   } catch (_) {}
+
+  _status = 'paused_by_extraction';
   log('✅ [Árbitro Memoria] Navegador MOT cerrado. RAM liberada para el proceso de extracción.');
 }
 
@@ -377,6 +432,10 @@ async function pauseForExtraction() {
  */
 async function resumeAfterExtraction() {
   if (!_pausedByExtraction) return;
+  if (global._isExtractionRunning) {
+    log('⚠️ [Árbitro Memoria] Reanudación postergada: Extracción aún activa en el sistema.', 'warn');
+    return;
+  }
   _pausedByExtraction = false;
   log('🔄 [Árbitro Memoria] Proceso de extracción finalizado. Reactivando MOT Bot...', 'info');
   if (isWithinOperatingWindow() && _autoScheduleEnabled && !_pausedManuallyToday) {
@@ -479,9 +538,10 @@ function getTodayAlerts() {
 }
 
 function getStatus() {
+  const isPaused = _pausedByExtraction || !!global._isExtractionRunning;
   return {
-    status:               _status,
-    isPausedByExtraction: _pausedByExtraction,
+    status:               isPaused ? 'paused_by_extraction' : _status,
+    isPausedByExtraction: isPaused,
     needsLogin:           _needsLogin,
     loggedIn:             isLoggedIn(),
     startedAt:            _startedAt,

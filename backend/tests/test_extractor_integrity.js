@@ -221,6 +221,43 @@ runAssert('Método "start()" bloquea arranque si _pausedByExtraction está activ
   return true;
 });
 
+runAssert('Ciclo "runCycle()" aborta si hay extracción activa y no sobreescribe _status', () => {
+  if (!schedulerCode.includes('if (_pausedByExtraction || global._isExtractionRunning)')) {
+    throw new Error('runCycle() no protege contra extracción en curso.');
+  }
+  return true;
+});
+
+runAssert('Pausa de extracción espera a que termine cualquier ciclo en vuelo ("while (_isRunningCycle")', () => {
+  if (!schedulerCode.includes('while (_isRunningCycle')) {
+    throw new Error('pauseForExtraction() no espera a que termine el ciclo en vuelo.');
+  }
+  return true;
+});
+
+runAssert('getStatus() reporta paused_by_extraction durante extracción de ofertas', () => {
+  if (!schedulerCode.includes("isPaused ? 'paused_by_extraction' : _status")) {
+    throw new Error('getStatus() no reporta paused_by_extraction de forma blindada.');
+  }
+  return true;
+});
+
+runAssert('mot_bot.js bloquea apertura de navegador si global._isExtractionRunning está activo', () => {
+  const motBotCode = fs.readFileSync(path.join(BACKEND_DIR, 'mot_bot.js'), 'utf8');
+  if (!motBotCode.includes('if (global._isExtractionRunning)')) {
+    throw new Error('ensureBrowser en mot_bot.js no valida global._isExtractionRunning.');
+  }
+  return true;
+});
+
+runAssert('index.js bloquea /api/mot-bot/start con error 409 si la extracción está corriendo', () => {
+  const indexCode = fs.readFileSync(INDEX_PATH, 'utf8');
+  if (!indexCode.includes('if (global._isExtractionRunning)') || !indexCode.includes('409')) {
+    throw new Error('index.js no protege el endpoint /api/mot-bot/start contra colisiones.');
+  }
+  return true;
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. Contrato de Exportación Funcional
 // ─────────────────────────────────────────────────────────────────────────────
