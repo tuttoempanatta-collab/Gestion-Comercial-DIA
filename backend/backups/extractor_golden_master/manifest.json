@@ -1,11 +1,11 @@
 {
-  "version": "1.0.0",
-  "date": "2026-10-28T18:06:15.857Z",
-  "description": "Golden Master validado del modulo de extraccion DIA y Arbitro de Memoria MOT",
+  "version": "1.1.0",
+  "date": "2026-10-29T10:20:00.000Z",
+  "description": "Golden Master validado del modulo de extraccion DIA y Arbitro de Memoria MOT con omision de precios mayores a 0,00",
   "files": {
     "scraper.js": {
       "backupFile": "scraper.golden.js",
-      "sha256": "53a9dd11e89e7a763036b7510fcdacea1838df01329697ea85d783b74bf2a547"
+      "sha256": "668199c34e291596e4f9e3dcc0a6e21a7d8440ba1cf5dc5a0ba94c95299dfc79"
     },
     "mot_scheduler.js": {
       "backupFile": "mot_scheduler.golden.js",
@@ -18,6 +18,7 @@
     "forbiddenSingleProcess": "--single-process",
     "guardianCheckPausedByExtraction": "_pausedByExtraction",
     "safeDateMaskTyping": "fillGeneXusDate",
-    "officialBuscarTrigger": "clickGeneXusBuscar"
+    "officialBuscarTrigger": "clickGeneXusBuscar",
+    "omitPriceGreaterThanZero": "numericPrice > 0"
   }
 }

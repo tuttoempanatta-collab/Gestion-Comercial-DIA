@@ -477,6 +477,14 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             const rawPrice = tds[3]?.innerText.trim() || '0,00';
             const codigoStr = tds[0]?.innerText.trim() || '';
 
+            // Regla oficial de cartelería: Si el precio fidelizado en el portal web es mayor a 0,00,
+            // omitir el código porque ya tiene cartel impreso o precio fijo asignado.
+            const cleanPriceStr = rawPrice.replace(/\$/g, '').replace(/\./g, '').replace(',', '.').trim();
+            const numericPrice = parseFloat(cleanPriceStr) || 0;
+            if (numericPrice > 0) {
+              continue;
+            }
+
             const data = {
               codigo: codigoStr,
               articulo: tds[1]?.innerText.trim() || '',

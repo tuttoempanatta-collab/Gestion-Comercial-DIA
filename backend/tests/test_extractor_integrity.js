@@ -184,6 +184,13 @@ runAssert('Selectores de la tabla de Promociones presentes (#vDESDE, #vHASTA, #B
   return true;
 });
 
+runAssert('Regla de Negocio: Omite códigos con precio web mayor a 0,00 (numericPrice > 0 -> continue)', () => {
+  if (!scraperCode.includes('numericPrice > 0') && !scraperCode.includes('numericPrice>0')) {
+    throw new Error('Falta regla de omisión de artículos con precio fidelizado web mayor a 0,00 en scraper.js');
+  }
+  return true;
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Árbitro de Memoria y Blindaje del Guardián MOT (mot_scheduler.js)
 // ─────────────────────────────────────────────────────────────────────────────
