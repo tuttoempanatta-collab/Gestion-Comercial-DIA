@@ -720,8 +720,8 @@ async function extractTareasUrlFromPage() {
 /**
  * Realiza el login completo con Google OAuth en mot.supermercadosdia.com.ar.
  */
-async function doLogin(headless = true) {
-  log(`Iniciando login MOT con cuenta Google (${MOT_EMAIL}, headless=${headless})...`);
+async function doLogin(headless = true, forceFresh = false) {
+  log(`Iniciando login MOT con cuenta Google (${MOT_EMAIL}, headless=${headless}, forceFresh=${forceFresh})...`);
 
   if (_browser) {
     try { await _browser.close(); } catch (_) {}
@@ -731,22 +731,45 @@ async function doLogin(headless = true) {
     _tareasUrl = null;
   }
 
+  // Si forzamos login fresco, eliminar el archivo de sesión guardado para arrancar limpios
+  if (forceFresh && sessionExists()) {
+    try {
+      fs.unlinkSync(SESSION_FILE);
+      log('[Login] Archivo de sesión anterior eliminado para forzar login limpio.');
+    } catch (_) {}
+  }
+
   await ensureBrowser(headless);
 
-  try {
-    await _page.goto(MOT_HOME, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  } catch (err) {
-    log(`Aviso: Goto inicial lento (${err.message}). Continuando...`, 'warn');
-  }
-  await _page.waitForTimeout(2500);
+  if (!forceFresh) {
+    try {
+      await _page.goto(MOT_HOME, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch (err) {
+      log(`Aviso: Goto inicial lento (${err.message}). Continuando...`, 'warn');
+    }
+    await _page.waitForTimeout(2500);
 
-  // Verificar si la sesión guardada ya nos dejó en Home o Tareas
-  if (isMotHost(_page.url())) {
-    _loggedIn = true;
-    await extractTareasUrlFromPage();
-    log('Sesión MOT activa restaurada desde disco.');
-    await saveSession();
-    return true;
+    // Verificar si la sesión guardada nos dejó en Home o Tareas con usuario autenticado
+    if (isMotHost(_page.url())) {
+      const hasSession = await _page.evaluate(() => {
+        const gxInput = document.querySelector('input[name="GXState"]');
+        if (!gxInput || !gxInput.value) return false;
+        try {
+          const gx = JSON.parse(gxInput.value);
+          return !!(gx.vUSER || gx.vGAMUSER || gx.vSECUSERNAME || (gx.vDVELOP_MENU_MPAGE && gx.vDVELOP_MENU_MPAGE.length > 0));
+        } catch (_) { return false; }
+      }).catch(() => false);
+
+      if (hasSession) {
+        _loggedIn = true;
+        await extractTareasUrlFromPage();
+        log('Sesión MOT activa restaurada desde disco.');
+        await saveSession();
+        return true;
+      } else {
+        log('Sesión en disco no contiene datos de usuario válidos. Forzando login...', 'info');
+      }
+    }
   }
 
   // Asegurar que estamos en la página de login
@@ -1477,6 +1500,14 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
 
       if (gxErrors.length > 0) {
         log(`[Limpieza Aviso GeneXus] Mensajes en pantalla: ${gxErrors.join(' | ')}`, 'warn');
+        if (gxErrors.some(e => /403|servidor de aplicaciones/i.test(e))) {
+          if (!options._retriedAfter403) {
+            log('[Limpieza] Error 403 detectado en GeneXus (sesión expirada). Forzando login limpio en MOT...', 'warn');
+            await doLogin(true, true);
+            log(`[Limpieza] Reintentando marcación de "${task.nombre}" tras renovación de sesión limpia...`);
+            return await executeLimpiezaControlOnMot(task, { ...options, _retriedAfter403: true });
+          }
+        }
         if (gxErrors.some(e => /ingrese responsable/i.test(e))) {
           log(`[Limpieza Reintento] Reintentando click y tipeo forzado en input visible...`, 'warn');
           if (activeRespLocator) {
