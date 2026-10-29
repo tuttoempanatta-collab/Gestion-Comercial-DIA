@@ -736,11 +736,16 @@ async function doLogin(headless = true, forceFresh = false) {
     _tareasUrl = null;
   }
 
-  // Si forzamos login fresco, eliminar el archivo de sesión guardado para arrancar limpios
+  // Si forzamos login fresco, limpiar únicamente las cookies de MOT para forzar re-autenticación
+  // NUNCA eliminar cookies de Google accounts ni hacer unlinkSync de SESSION_FILE, ya que contienen la sesión Google SSO indispensable en entornos cloud.
   if (forceFresh && sessionExists()) {
     try {
-      fs.unlinkSync(SESSION_FILE);
-      log('[Login] Archivo de sesión anterior eliminado para forzar login limpio.');
+      const raw = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+      if (raw && Array.isArray(raw.cookies)) {
+        raw.cookies = raw.cookies.filter(c => !c.domain.includes('mot.supermercadosdia.com.ar'));
+        fs.writeFileSync(SESSION_FILE, JSON.stringify(raw, null, 2), 'utf8');
+        log('[Login] Cookies de MOT purgadas para renovación, manteniendo sesión Google SSO.');
+      }
     } catch (_) {}
   }
 
@@ -1449,41 +1454,23 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
     }
   }
 
-  // 2. Fallback y sincronización DOM / GeneXus:
-  // Asegurar que tanto el DOM como los estados internos de GeneXus (gx.fn.setCtrlValue, gx.O, onblur)
-  // tengan el valor del legajo registrado, previniendo el error "Ingrese Responsable."
-  const domSync = await _page.evaluate((leg) => {
-    const inputs = Array.from(document.querySelectorAll('input[id*="RESPONSABLE" i]'));
-    if (!inputs.length) return false;
+  // 2. Fallback únicamente si Playwright no pudo llenar el campo activo:
+  if (!filled) {
+    const domSync = await _page.evaluate((leg) => {
+      const inputs = Array.from(document.querySelectorAll('input[id*="RESPONSABLE" i]'));
+      const visible = inputs.find(i => i.offsetParent !== null || i.offsetWidth > 0) || inputs[0];
+      if (!visible) return false;
+      visible.value = String(leg);
+      visible.dispatchEvent(new Event('input', { bubbles: true }));
+      visible.dispatchEvent(new Event('change', { bubbles: true }));
+      visible.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    }, legajo).catch(() => false);
 
-    // Poblar todos los inputs coincidentes (tanto visibles como en componentes auxiliares)
-    for (const inp of inputs) {
-      inp.value = String(leg);
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
-      inp.dispatchEvent(new Event('change', { bubbles: true }));
-      inp.dispatchEvent(new Event('blur', { bubbles: true }));
-
-      if (window.gx && window.gx.fn && window.gx.fn.setCtrlValue) {
-        try { window.gx.fn.setCtrlValue(inp.id, String(leg)); } catch (_) {}
-      }
-      if (window.gx && window.gx.evt && window.gx.evt.onblur) {
-        try { window.gx.evt.onblur(inp, 20); } catch (_) {}
-      }
+    if (domSync) {
+      filled = true;
+      log(`[Limpieza] Legajo ${legajo} sincronizado en el estado DOM fallback.`);
     }
-
-    if (window.gx && window.gx.O) {
-      for (const k in window.gx.O) {
-        if (k.toLowerCase().includes('responsable')) {
-          window.gx.O[k] = String(leg);
-        }
-      }
-    }
-    return true;
-  }, legajo).catch(() => false);
-
-  if (domSync && !filled) {
-    filled = true;
-    log(`[Limpieza] Legajo ${legajo} sincronizado en el estado DOM / GeneXus.`);
   }
 
   if (filled) {
@@ -1543,9 +1530,9 @@ async function executeLimpiezaControlOnMot(task, options = {}) {
         log(`[Limpieza Aviso GeneXus] Mensajes en pantalla: ${gxErrors.join(' | ')}`, 'warn');
         if (gxErrors.some(e => /403|servidor de aplicaciones/i.test(e))) {
           if (!options._retriedAfter403) {
-            log('[Limpieza] Error 403 detectado en GeneXus (sesión expirada). Forzando login limpio en MOT...', 'warn');
-            await doLogin(true, true);
-            log(`[Limpieza] Reintentando marcación de "${task.nombre}" tras renovación de sesión limpia...`);
+            log('[Limpieza] Error 403 detectado en GeneXus. Renovando sesión MOT sin destruir SSO...', 'warn');
+            await doLogin(true, false);
+            log(`[Limpieza] Reintentando marcación de "${task.nombre}" tras renovación de sesión...`);
             return await executeLimpiezaControlOnMot(task, { ...options, _retriedAfter403: true });
           }
         }
