@@ -504,12 +504,18 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       const pageResults = await dataFrame.evaluate(async () => {
         const trs = Array.from(document.querySelectorAll('#GridContainerTbl tr, .Grid_WorkWith tr, table[id*="Grid"] tr'));
         let count = 0;
+        let totalRowsInGrid = 0;
         let firstCode = '';
         for (const row of trs) {
           const tds = row.querySelectorAll('td');
           if (tds.length >= 7 && !row.querySelector('th') && !row.classList.contains('Grid_WorkWithHeader')) {
             const rawPrice = tds[3]?.innerText.trim() || '0,00';
             const codigoStr = tds[0]?.innerText.trim() || '';
+
+            if (codigoStr && !isNaN(parseInt(codigoStr))) {
+              totalRowsInGrid++;
+              if (!firstCode) firstCode = codigoStr;
+            }
 
             // Regla oficial de cartelería: Si el precio fidelizado en el portal web es mayor a 0,00,
             // omitir el código porque ya tiene cartel impreso o precio fijo asignado.
@@ -530,7 +536,6 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             };
 
             if (data.codigo && !isNaN(parseInt(data.codigo))) {
-              if (!firstCode) firstCode = data.codigo;
               try {
                 const saved = await window.saveRowToDb(data);
                 if (saved) count++;
@@ -540,26 +545,27 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             }
           }
         }
-        return { count, firstCode };
+        return { count, totalRowsInGrid, firstCode };
       });
 
       totalItems += pageResults.count;
-      console.log(`[Ext-${extractionId}] Pág ${currentPage}: Guardados ${pageResults.count} artículos (acumulado: ${totalItems}, primer código: ${pageResults.firstCode || 'ninguno'})`);
+      console.log(`[Ext-${extractionId}] Pág ${currentPage}: Guardados ${pageResults.count} artículos con precio 0,00 (acumulado: ${totalItems}, filas en grilla: ${pageResults.totalRowsInGrid}, primer código: ${pageResults.firstCode || 'ninguno'})`);
 
       // Forzar liberación inmediata de memoria RAM tras procesar la página
       if (global.gc) {
         try { global.gc(); } catch (_) {}
       }
 
-      // Detección de fin si no hay filas o si la página se repite
-      if (pageResults.count === 0) {
-        console.log(`[Ext-${extractionId}] Fin de datos: 0 filas en página ${currentPage}.`);
+      // Detección de fin SOLO si la grilla física de GeneXus no tiene filas (tabla realmente vacía)
+      // NUNCA romper si pageResults.count === 0, ya que una página completa puede tener precios > 0,00 que se omiten legítimamente.
+      if (pageResults.totalRowsInGrid === 0) {
+        console.log(`[Ext-${extractionId}] Fin de datos: 0 filas físicas en grilla en página ${currentPage}.`);
         break;
       }
 
       if (pageResults.firstCode && pageResults.firstCode === lastFirstCode) {
         duplicatePagesCount++;
-        if (duplicatePagesCount >= 2) {
+        if (duplicatePagesCount >= 3) {
           console.log(`[Ext-${extractionId}] Página repetida consecutivamente (${pageResults.firstCode}). Finalizando extracción.`);
           break;
         }
@@ -612,7 +618,14 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
               if (!isDisabled) {
                 console.log(`[Ext-${extractionId}] Clic en botón "Sig" (avanzando a página ${currentPage + 1} de ${totalPages})...`);
-                await nextBtn.click().catch(() => {});
+                await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
+                await nextBtn.click({ timeout: 5000 }).catch(async () => {
+                  await nextBtn.evaluate(el => {
+                    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                    el.click();
+                  }).catch(() => {});
+                });
                 await page.waitForTimeout(1000);
                 await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 20000 }).catch(() => {});
 
