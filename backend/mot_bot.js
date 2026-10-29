@@ -795,46 +795,62 @@ async function doLogin(headless = true, forceFresh = false) {
     return true;
   }
 
+  // Esperar a que Google cargue la pantalla inicial (Account chooser o Email input)
+  await _page.waitForTimeout(3000);
+
   // Paso 1 en Google: Selector de cuentas (Account Chooser) si aparece
-  const accountItem = _page.locator(`[data-identifier="${MOT_EMAIL}"], [data-identifier*="t00624ar"], [data-identifier]`).first();
-  if (await accountItem.isVisible().catch(() => false)) {
+  const accountItem = _page.locator(`[data-identifier*="${MOT_EMAIL.split('@')[0]}"], [data-identifier]`).first();
+  if (await accountItem.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false)) {
     log(`Seleccionando cuenta ${MOT_EMAIL} en el selector de Google...`);
     await accountItem.click();
     await _page.waitForTimeout(3500);
   }
 
   // Paso 2 en Google: Campo de Email (si no estaba en el Account Chooser)
-  const emailInput = _page.locator('input[type="email"]').first();
-  if (await emailInput.isVisible().catch(() => false)) {
+  const emailInput = _page.locator('input[type="email"], #identifierId').first();
+  if (await emailInput.waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false)) {
     log(`Ingresando email ${MOT_EMAIL}...`);
+    await emailInput.fill('');
     await emailInput.fill(MOT_EMAIL);
-    await _page.keyboard.press('Enter');
-    await _page.waitForTimeout(3500);
+    const nextBtn = _page.locator('#identifierNext, button:has-text("Siguiente"), button:has-text("Next")').first();
+    if (await nextBtn.isVisible().catch(() => false)) {
+      await nextBtn.click();
+    } else {
+      await _page.keyboard.press('Enter');
+    }
+    await _page.waitForTimeout(4000);
   }
 
   // Paso 3 en Google: Campo de Contraseña
-  const passInput = _page.locator('input[type="password"], input[name="Passwd"]').first();
-  if (await passInput.isVisible().catch(() => false)) {
+  const passInput = _page.locator('input[type="password"], input[name="Passwd"], input[name="password"]').first();
+  if (await passInput.waitFor({ state: 'visible', timeout: 8000 }).then(() => true).catch(() => false)) {
     log('Ingresando contraseña de Google...');
+    await passInput.fill('');
     await passInput.fill(MOT_PASSWORD);
-    await _page.keyboard.press('Enter');
+    const passNext = _page.locator('#passwordNext, button:has-text("Siguiente"), button:has-text("Next")').first();
+    if (await passNext.isVisible().catch(() => false)) {
+      await passNext.click();
+    } else {
+      await _page.keyboard.press('Enter');
+    }
     await _page.waitForTimeout(6000);
   }
 
   // Paso 4 en Google: Pantalla de consentimiento OAuth (Continuar / Permitir)
-  if (_page.url().includes('accounts.google.com') && _page.url().includes('consent')) {
-    const allowBtn = _page.locator('button:has-text("Continuar"), button:has-text("Permitir"), button:has-text("Continue"), button:has-text("Allow")').first();
-    if (await allowBtn.isVisible().catch(() => false)) {
-      log('Aceptando pantalla de consentimiento OAuth...');
-      await allowBtn.click();
-      await _page.waitForTimeout(5000);
-    }
+  const allowBtn = _page.locator('button:has-text("Continuar"), button:has-text("Permitir"), button:has-text("Continue"), button:has-text("Allow")').first();
+  if (await allowBtn.waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false)) {
+    log('Aceptando pantalla de consentimiento OAuth...');
+    await allowBtn.click();
+    await _page.waitForTimeout(5000);
   }
 
   // Si estamos en modo visible y requiere algún paso extra
   if (!headless && !isMotHost(_page.url())) {
     log('Esperando que completes el login en la ventana de Chrome (máx 2 min)...');
     await _page.waitForURL(u => isMotHost(u.toString()), { timeout: 120000 });
+  } else {
+    // En headless, esperar que Google redirija de vuelta al host de MOT
+    await _page.waitForURL(u => isMotHost(u.toString()), { timeout: 25000 }).catch(() => {});
   }
 
   if (isMotHost(_page.url())) {
