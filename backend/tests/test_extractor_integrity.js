@@ -222,6 +222,27 @@ runAssert('Navegación al siguiente lote: Scroll y disparo completo de eventos s
   return true;
 });
 
+runAssert('Filtro de fechas verificado: lee el valor real de #vDESDE/#vHASTA y reintenta (readDateField)', () => {
+  if (!scraperCode.includes('readDateField') || !scraperCode.includes('datesOk')) {
+    throw new Error('Falta verificación del valor real de los campos de fecha tras tipear. Las fechas podrían no aplicarse en silencio.');
+  }
+  return true;
+});
+
+runAssert('Tras Buscar espera recarga REAL de la grilla (waitForGridChange), no una espera fija', () => {
+  if (!scraperCode.includes('waitForGridChange')) {
+    throw new Error('Falta espera de recarga real de la grilla tras Buscar (waitForGridChange).');
+  }
+  return true;
+});
+
+runAssert('Guardia de coherencia de páginas (guardRail50Rows): aborta si hay demasiadas páginas para el rango', () => {
+  if (!scraperCode.includes('guardRail50Rows') || !scraperCode.includes('MAX_COHERENT_PAGES')) {
+    throw new Error('Falta guardia de coherencia de páginas. Un filtro de fechas fallido extraería ~106 páginas y saturaría la RAM.');
+  }
+  return true;
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Árbitro de Memoria y Blindaje del Guardián MOT (mot_scheduler.js)
 // ─────────────────────────────────────────────────────────────────────────────

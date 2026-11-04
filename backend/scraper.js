@@ -152,37 +152,10 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       }
     }
 
-    // 3. Aplicar Filtros de Fecha
-    if (startDate || endDate) {
-      onProgress({ message: 'Aplicando filtros de fecha...', current: 5, total: 100, percentage: 10 });
-
-      const startFormatted = formatDateForPortal(startDate);
-      const endFormatted = formatDateForPortal(endDate);
-
-      console.log(`[Ext-${extractionId}] Aplicando filtros: Desde=${startFormatted || 'Inicio'}, Hasta=${endFormatted || 'Hoy'}`);
-
-      try {
-        if (startFormatted) {
-          await fillGeneXusDate(page, dataFrame, '#vDESDE, input[name*="vDESDE"], input[name*="DESDE"]', startFormatted, 'DESDE', extractionId);
-        }
-
-        if (endFormatted) {
-          await fillGeneXusDate(page, dataFrame, '#vHASTA, input[name*="vHASTA"], input[name*="HASTA"]', endFormatted, 'HASTA', extractionId);
-        }
-
-        await clickGeneXusBuscar(page, dataFrame, extractionId);
-
-        onProgress({ message: 'Esperando actualización de la grilla...', current: 5, total: 100, percentage: 11 });
-        await page.waitForTimeout(3000);
-        await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 20000 }).catch(() => {});
-        await page.waitForTimeout(1500);
-      } catch (e) {
-        console.log(`[Ext-${extractionId}] Error aplicando filtros:`, e.message);
-        onProgress({ message: `Aviso: Error en filtros (${e.message.slice(0, 40)})`, current: 5, total: 100, percentage: 10 });
-      }
-
-      onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 12 });
-    }
+    // 3. Los filtros de fecha se aplican más abajo con verificación (applyDateFilters),
+    //    una vez definido getGridState() para poder confirmar la recarga real de la grilla.
+    const startFormatted = formatDateForPortal(startDate);
+    const endFormatted = formatDateForPortal(endDate);
 
     // RECURSIVE function to find the data frame anywhere in the hierarchy
     const findDataFrameRecursive = async (parent) => {
@@ -265,12 +238,85 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       return { currentPage: 1, totalPages: 1, validRows: 0, firstCode: '' };
     };
 
+    // Lee el valor actual de un campo de fecha en cualquier frame
+    const readDateField = async (selector) => {
+      const frames = Array.from(new Set([dataFrame, ...(page.frames ? page.frames() : [])]));
+      for (const f of frames) {
+        try {
+          const el = f.locator(selector).first();
+          if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
+            return (await el.inputValue().catch(() => '')).trim();
+          }
+        } catch (_) {}
+      }
+      return '';
+    };
+
+    // Espera a que la grilla cambie realmente respecto a un estado previo (total de páginas o primer código)
+    const waitForGridChange = async (prev, maxSeconds = 25) => {
+      for (let i = 0; i < maxSeconds; i++) {
+        await page.waitForTimeout(1000);
+        await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 5000 }).catch(() => {});
+        const now = await getGridState();
+        if (now.validRows > 0 && (now.totalPages !== prev.totalPages || now.firstCode !== prev.firstCode)) {
+          return { changed: true, state: now };
+        }
+      }
+      return { changed: false, state: await getGridState() };
+    };
+
+    // 3-bis. Aplicar filtros de fecha CON VERIFICACIÓN (valor leído + recarga real de la grilla)
+    const DESDE_SEL = '#vDESDE, input[name*="vDESDE"], input[name*="DESDE"]';
+    const HASTA_SEL = '#vHASTA, input[name*="vHASTA"], input[name*="HASTA"]';
+
+    const applyDateFilters = async (attemptLabel = '') => {
+      if (!startFormatted && !endFormatted) return { ok: true, changed: false };
+      onProgress({ message: `Aplicando filtros de fecha${attemptLabel}...`, current: 5, total: 100, percentage: 10 });
+      console.log(`[Ext-${extractionId}] Aplicando filtros: Desde=${startFormatted || 'Inicio'}, Hasta=${endFormatted || 'Hoy'}`);
+
+      let datesOk = false;
+      for (let tryNum = 1; tryNum <= 3 && !datesOk; tryNum++) {
+        if (startFormatted) await fillGeneXusDate(page, dataFrame, DESDE_SEL, startFormatted, 'DESDE', extractionId, tryNum);
+        if (endFormatted) await fillGeneXusDate(page, dataFrame, HASTA_SEL, endFormatted, 'HASTA', extractionId, tryNum);
+        const vD = startFormatted ? await readDateField(DESDE_SEL) : '';
+        const vH = endFormatted ? await readDateField(HASTA_SEL) : '';
+        datesOk = (!startFormatted || vD === startFormatted) && (!endFormatted || vH === endFormatted);
+        onProgress({ message: `Verificación fechas (intento ${tryNum}): Desde="${vD}" Hasta="${vH}" ${datesOk ? 'OK' : '-> NO coinciden, reintentando'}`, current: 5, total: 100, percentage: 10 });
+      }
+      if (!datesOk) {
+        return { ok: false, reason: 'Los campos de fecha del portal no aceptaron el rango solicitado.' };
+      }
+
+      const before = await getGridState();
+      await clickGeneXusBuscar(page, dataFrame, extractionId);
+      onProgress({ message: 'Esperando actualización de la grilla...', current: 5, total: 100, percentage: 11 });
+      const res = await waitForGridChange(before, 25);
+      await page.waitForTimeout(1000);
+
+      // Re-verificar que el portal no haya reseteado las fechas tras Buscar
+      const vD2 = startFormatted ? await readDateField(DESDE_SEL) : '';
+      const vH2 = endFormatted ? await readDateField(HASTA_SEL) : '';
+      const stillOk = (!startFormatted || vD2 === startFormatted) && (!endFormatted || vH2 === endFormatted);
+      onProgress({
+        message: `Grilla tras Buscar: ${res.changed ? 'RECARGADA' : 'SIN CAMBIOS'} | Pág ${res.state.currentPage} de ${res.state.totalPages} | ${res.state.validRows} filas | 1er código ${res.state.firstCode || '-'} | Fechas: ${vD2} - ${vH2}`,
+        current: 12, total: 100, percentage: 12
+      });
+      return { ok: stillOk, changed: res.changed, state: res.state, reason: stillOk ? '' : 'El portal reseteó las fechas al buscar.' };
+    };
+
+    const dateResult = await applyDateFilters();
+    if (!dateResult.ok) {
+      throw new Error(`Filtro de fechas no aplicado: ${dateResult.reason}`);
+    }
+    onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 12 });
+
     // 4. Detectar estado inicial y aplicar el filtro de filas por página (ej. 50 filas)
     let gridState = await getGridState();
     let totalPages = gridState.totalPages;
     console.log(`[Ext-${extractionId}] Estado inicial tras búsqueda: Página ${gridState.currentPage} de ${totalPages} (${gridState.validRows} filas visibles)`);
 
     const targetSize = parseInt(pageSize) || 50;
+    const applyPageSize = async () => {
     if (targetSize !== 10 && gridState.validRows > 0) {
       onProgress({ message: `Aplicando filtro de ${targetSize} filas por página...`, current: 12, total: 100, percentage: 13 });
       console.log(`[Ext-${extractionId}] Aplicando configuración de ${targetSize} filas por página (actual: ${gridState.validRows} filas, ${totalPages} págs)...`);
@@ -474,6 +520,32 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         }
       }
     }
+    };
+
+    await applyPageSize();
+
+    // GUARDIA DE COHERENCIA DE PÁGINAS (guardRail50Rows):
+    // Con 50 filas, un rango corto (<= 10 días) no puede dar más de MAX_COHERENT_PAGES páginas.
+    // Si ocurre, las fechas no quedaron aplicadas: reaplicar fechas + Buscar + 50 filas. Si persiste, abortar.
+    const MAX_COHERENT_PAGES = 60;
+    const rangeDays = (startFormatted && endFormatted)
+      ? Math.round((parseDate(endFormatted) - parseDate(startFormatted)) / 86400000) + 1
+      : 999;
+    const isIncoherent = () => targetSize >= 50 && rangeDays <= 10 && gridState.validRows >= 25 && totalPages > MAX_COHERENT_PAGES;
+
+    for (let fix = 1; fix <= 2 && isIncoherent(); fix++) {
+      onProgress({ message: `Aviso: ${totalPages} páginas con ${gridState.validRows} filas es incoherente para ${rangeDays} días. Reaplicando fechas (intento ${fix})...`, current: 13, total: 100, percentage: 14 });
+      const r = await applyDateFilters(` (corrección ${fix})`);
+      gridState = await getGridState();
+      totalPages = gridState.totalPages;
+      if (r.ok && gridState.validRows > 0 && gridState.validRows < 25) {
+        await applyPageSize();
+      }
+    }
+    if (isIncoherent()) {
+      throw new Error(`Filtro de fechas no aplicado: la grilla muestra ${totalPages} páginas de ${gridState.validRows} filas para un rango de ${rangeDays} días. Extracción detenida para proteger el servidor.`);
+    }
+    onProgress({ message: `Grilla validada: ${totalPages} páginas de ${gridState.validRows} filas (rango ${rangeDays} días).`, current: 14, total: 100, percentage: 14 });
 
     // Si startPageParam > 1, usar el campo "Ir a página:" del popup de paginación
     if (startPageParam > 1) {
@@ -734,9 +806,9 @@ function formatDateForPortal(dateStr) {
   return `${day}/${month}/${year}`;
 }
 
-async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extractionId) {
+async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extractionId, tryNum = 1) {
   if (!valueStr) return false;
-  console.log(`[Ext-${extractionId}] Registrando campo GeneXus ${fieldName}: ${valueStr}...`);
+  console.log(`[Ext-${extractionId}] Registrando campo GeneXus ${fieldName}: ${valueStr} (intento ${tryNum})...`);
 
   const framesToTry = [frame, ...(page.frames ? page.frames() : [])];
   const uniqueFrames = Array.from(new Set(framesToTry));
@@ -746,26 +818,38 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
       const el = f.locator(selector).first();
       if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
         await el.click({ clickCount: 3 });
-        await page.waitForTimeout(200);
+        await page.waitForTimeout(250);
         await page.keyboard.press('Control+a');
         await page.keyboard.press('Delete');
-        await page.waitForTimeout(200);
+        await page.waitForTimeout(250);
 
-        const digitsOnly = valueStr.replace(/\D/g, '');
-        console.log(`[Ext-${extractionId}] Tipeando dígitos "${digitsOnly}" en campo ${fieldName} (frame: ${f.url()})`);
-
-        for (const digit of digitsOnly) {
-          await page.keyboard.type(digit);
-          await page.waitForTimeout(60);
+        if (tryNum === 1) {
+          // Método 1: tipeo de dígitos sobre la máscara 99/99/9999 (más lento en reintentos)
+          const digitsOnly = valueStr.replace(/\D/g, '');
+          for (const digit of digitsOnly) {
+            await page.keyboard.type(digit);
+            await page.waitForTimeout(90);
+          }
+        } else {
+          // Método 2: valor completo + eventos + API GeneXus
+          await el.fill(valueStr).catch(() => {});
+          await el.evaluate((input, v) => {
+            input.value = v;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            if (window.gx && window.gx.fn && window.gx.fn.setCtrlValue) {
+              try { window.gx.fn.setCtrlValue(input.id, v); } catch (_) {}
+            }
+          }, valueStr).catch(() => {});
         }
 
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(400);
         await page.keyboard.press('Tab');
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(600);
 
         const finalValue = await el.inputValue().catch(() => 'N/A');
         console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${finalValue}" (esperado: "${valueStr}").`);
-        return true;
+        return finalValue.trim() === valueStr;
       }
     } catch (e) {}
   }

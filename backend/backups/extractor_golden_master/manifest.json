@@ -1,11 +1,11 @@
 {
-  "version": "1.5.0",
-  "date": "2026-11-04T14:12:30.998Z",
-  "description": "Golden Master validado v1.5.0: Apertura y clic robusto en 50 filas + guardia estricta anti-desborde de 106 paginas",
+  "version": "1.5.1",
+  "date": "2026-11-04T14:31:28.770Z",
+  "description": "Golden Master v1.5.1: fechas verificadas (lectura de campos + recarga real tras Buscar) y guardia de coherencia de paginas",
   "files": {
     "scraper.js": {
       "backupFile": "scraper.golden.js",
-      "sha256": "b88eeca33ae65d271d1e77e1c7f714dc713f953546bd239b1475ab9d7842aa7e"
+      "sha256": "69956ed72163ca71788e2453e43b17d21507d451bbd3139093737443aa72c113"
     },
     "mot_scheduler.js": {
       "backupFile": "mot_scheduler.golden.js",
@@ -24,6 +24,8 @@
     "strict50RowsValidation": "pageCountChanged && rowsUpdated",
     "visiblePaginatorDetection": "pageRegex",
     "nextButtonScrollAndDispatch": "scrollIntoViewIfNeeded",
-    "guardRail50Rows": "guardRail50Rows"
+    "guardRail50Rows": "MAX_COHERENT_PAGES",
+    "verifiedDateFilter": "readDateField",
+    "realGridReload": "waitForGridChange"
   }
 }
