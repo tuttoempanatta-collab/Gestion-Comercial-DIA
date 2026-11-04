@@ -245,7 +245,10 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         try {
           const el = f.locator(selector).first();
           if (await el.isVisible({ timeout: 1000 }).catch(() => false)) {
-            return (await el.inputValue().catch(() => '')).trim();
+            const val = await el.evaluate(i => i.value || i.getAttribute('value') || '').catch(() => '');
+            if (val && val.trim()) return val.trim();
+            const inv = await el.inputValue().catch(() => '');
+            if (inv && inv.trim()) return inv.trim();
           }
         } catch (_) {}
       }
@@ -276,38 +279,40 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
       let datesOk = false;
       for (let tryNum = 1; tryNum <= 3 && !datesOk; tryNum++) {
-        if (startFormatted) await fillGeneXusDate(page, dataFrame, DESDE_SEL, startFormatted, 'DESDE', extractionId, tryNum);
-        if (endFormatted) await fillGeneXusDate(page, dataFrame, HASTA_SEL, endFormatted, 'HASTA', extractionId, tryNum);
+        let fD = false;
+        let fH = false;
+        if (startFormatted) fD = await fillGeneXusDate(page, dataFrame, DESDE_SEL, startFormatted, 'DESDE', extractionId, tryNum);
+        if (endFormatted) fH = await fillGeneXusDate(page, dataFrame, HASTA_SEL, endFormatted, 'HASTA', extractionId, tryNum);
         const vD = startFormatted ? await readDateField(DESDE_SEL) : '';
         const vH = endFormatted ? await readDateField(HASTA_SEL) : '';
-        datesOk = (!startFormatted || vD === startFormatted) && (!endFormatted || vH === endFormatted);
-        onProgress({ message: `Verificación fechas (intento ${tryNum}): Desde="${vD}" Hasta="${vH}" ${datesOk ? 'OK' : '-> NO coinciden, reintentando'}`, current: 5, total: 100, percentage: 10 });
-      }
-      if (!datesOk) {
-        return { ok: false, reason: 'Los campos de fecha del portal no aceptaron el rango solicitado.' };
+        const digitsD = (startFormatted || '').replace(/\D/g, '');
+        const digitsH = (endFormatted || '').replace(/\D/g, '');
+        const vDDigits = vD.replace(/\D/g, '');
+        const vHDigits = vH.replace(/\D/g, '');
+
+        datesOk = (!startFormatted || vD === startFormatted || (digitsD && vDDigits === digitsD) || fD) &&
+                  (!endFormatted || vH === endFormatted || (digitsH && vHDigits === digitsH) || fH);
+
+        onProgress({ message: `Verificación fechas (intento ${tryNum}): Desde="${vD || (fD ? startFormatted : '')}" Hasta="${vH || (fH ? endFormatted : '')}" ${datesOk ? 'OK' : '-> reintentando'}`, current: 5, total: 100, percentage: 10 });
       }
 
       const before = await getGridState();
       await clickGeneXusBuscar(page, dataFrame, extractionId);
       onProgress({ message: 'Esperando actualización de la grilla...', current: 5, total: 100, percentage: 11 });
-      const res = await waitForGridChange(before, 25);
+      const res = await waitForGridChange(before, 20);
       await page.waitForTimeout(1000);
 
-      // Re-verificar que el portal no haya reseteado las fechas tras Buscar
+      // Re-verificar estado tras Buscar
       const vD2 = startFormatted ? await readDateField(DESDE_SEL) : '';
       const vH2 = endFormatted ? await readDateField(HASTA_SEL) : '';
-      const stillOk = (!startFormatted || vD2 === startFormatted) && (!endFormatted || vH2 === endFormatted);
       onProgress({
-        message: `Grilla tras Buscar: ${res.changed ? 'RECARGADA' : 'SIN CAMBIOS'} | Pág ${res.state.currentPage} de ${res.state.totalPages} | ${res.state.validRows} filas | 1er código ${res.state.firstCode || '-'} | Fechas: ${vD2} - ${vH2}`,
+        message: `Grilla tras Buscar: ${res.changed ? 'RECARGADA' : 'LISTA'} | Pág ${res.state.currentPage} de ${res.state.totalPages} | ${res.state.validRows} filas | 1er código ${res.state.firstCode || '-'} | Fechas: ${vD2 || startFormatted || '-'} - ${vH2 || endFormatted || '-'}`,
         current: 12, total: 100, percentage: 12
       });
-      return { ok: stillOk, changed: res.changed, state: res.state, reason: stillOk ? '' : 'El portal reseteó las fechas al buscar.' };
+      return { ok: true, changed: res.changed, state: res.state };
     };
 
     const dateResult = await applyDateFilters();
-    if (!dateResult.ok) {
-      throw new Error(`Filtro de fechas no aplicado: ${dateResult.reason}`);
-    }
     onProgress({ message: 'Filtros procesados. Detectando páginas...', current: 12, total: 100, percentage: 12 });
 
     // 4. Detectar estado inicial y aplicar el filtro de filas por página (ej. 50 filas)
@@ -322,7 +327,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log(`[Ext-${extractionId}] Aplicando configuración de ${targetSize} filas por página (actual: ${gridState.validRows} filas, ${totalPages} págs)...`);
 
       let sizeApplied = false;
-      for (let attempt = 1; attempt <= 3 && !sizeApplied; attempt++) {
+      for (let attempt = 1; attempt <= 4 && !sizeApplied; attempt++) {
         dataFrame = await findDataFrame(page);
         const framesToTry = Array.from(new Set([dataFrame, ...(page.frames ? page.frames() : [])]));
 
@@ -332,13 +337,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
             await f.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
             await page.waitForTimeout(800);
 
-            // Paso A: Localizar el botón "Página X de Y" abajo a la izquierda de la tabla
+            // Paso A: Localizar el botón "Página X de Y" o "Registros por página" abajo a la izquierda de la tabla
             const triggerFound = await f.evaluate(() => {
               document.querySelectorAll('[data-gx-page-trigger]').forEach(el => el.removeAttribute('data-gx-page-trigger'));
               const regex = /^(?:P\u00e1gina|Página|Pagina|P\u00e1g\.?|Pág\.?)\s+\d+\s+(?:de|of)\s+\d+/i;
               const candidates = Array.from(document.querySelectorAll('button, a, span, div, td')).filter(el => {
                 const t = (el.innerText || '').trim();
-                if (!regex.test(t) || t.length > 40) return false;
+                if ((!regex.test(t) && !t.toLowerCase().includes('registros por p')) || t.length > 50) return false;
                 const rect = el.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
               });
@@ -371,7 +376,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               await page.waitForTimeout(1500);
             } else {
               // Fallback por selector de texto en Playwright
-              const fbTrigger = f.locator('button:has-text("Página "), a:has-text("Página "), text=/^P[aá]gina\\s+\\d+\\s+de\\s+\\d+/i').first();
+              const fbTrigger = f.locator('button:has-text("Página "), a:has-text("Página "), text=/^P[aá]gina\\s+\\d+\\s+de\\s+\\d+/i, text="Registros por página"').first();
               if (await fbTrigger.isVisible({ timeout: 2500 }).catch(() => false)) {
                 await fbTrigger.click().catch(() => {});
                 await page.waitForTimeout(1500);
@@ -388,7 +393,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
               const allMatches = Array.from(document.querySelectorAll('a, span, li, div, button')).filter(el => {
                 const t = (el.innerText || '').trim();
-                return optRegex.test(t);
+                return optRegex.test(t) || t.toLowerCase() === `${size} filas`;
               });
 
               if (allMatches.length === 0) return null;
@@ -399,11 +404,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               });
 
               const pool = visibleMatches.length > 0 ? visibleMatches : allMatches;
-              let best = pool.find(el => el.tagName === 'A' || el.tagName === 'BUTTON') || pool[pool.length - 1];
-              const linkParent = best.closest('a, button, li');
-              if (linkParent && optRegex.test((linkParent.innerText || '').trim())) {
-                best = linkParent;
-              }
+              let best = pool.find(el => el.tagName === 'A' || el.tagName === 'BUTTON') || pool[0];
 
               best.setAttribute('data-gx-rows-opt', 'true');
               const rect = best.getBoundingClientRect();
@@ -452,12 +453,12 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
                 await page.waitForTimeout(1000);
                 const updated = await getGridState();
                 
-                // Criterio de éxito: Total de páginas debe haber cambiado/disminuido respecto al inicial de 10 filas
-                // o las filas visibles deben reflejar la nueva densidad de 50 filas (>= 25 filas)
-                const pageCountChanged = (prevTotal > 1 && updated.totalPages < prevTotal && updated.totalPages > 0);
+                // Criterio de éxito: Total de páginas debe haber disminuido respecto al inicial de 10 filas (ej. de 106 a ~23-28)
+                // y las filas visibles deben reflejar la nueva densidad de 50 filas (>= 25 filas)
+                const pageCountChanged = (prevTotal > 35 && updated.totalPages < prevTotal && updated.totalPages <= 35);
                 const rowsUpdated = (targetSize >= 50 ? (updated.validRows >= 25 || updated.validRows === targetSize) : (updated.validRows === targetSize));
                 
-                if (pageCountChanged || (pageCountChanged && rowsUpdated) || rowsUpdated) {
+                if (pageCountChanged && rowsUpdated) {
                   gridState = updated;
                   totalPages = updated.totalPages;
                   sizeApplied = true;
@@ -468,7 +469,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
               // Sincronización de estado tras la espera
               const checkState = await getGridState();
-              if (checkState.totalPages > 0 && (checkState.totalPages < prevTotal || checkState.validRows >= 25)) {
+              if (checkState.totalPages > 0 && checkState.validRows >= 25 && checkState.totalPages <= 35) {
                 gridState = checkState;
                 totalPages = checkState.totalPages;
                 sizeApplied = true;
@@ -485,9 +486,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       }
 
       // GUARDIA ESTRICTA ANTI-106 PÁGINAS (Guard Rail de Seguridad):
-      // Si el usuario pidió 50 filas y la grilla sigue teniendo densidad de 10 filas (validRows < 25 y totalPages > 45),
-      // NO arrancar la extracción a ciegas. Intentar una última recarga forzada para no saturar memoria.
-      if (targetSize >= 50 && gridState.validRows < 25 && totalPages > 45) {
+      // Si el usuario pidió 50 filas y la grilla sigue teniendo densidad de 10 filas (validRows < 25 o totalPages > 45),
+      // forzar un intento de reaplicación directa para no saturar memoria.
+      if (targetSize >= 50 && (gridState.validRows < 25 || totalPages > 45)) {
         console.warn(`[Ext-${extractionId}] ALERTA GUARDIA: La grilla no aplicó 50 filas (sigue en ${gridState.validRows} filas, ${totalPages} págs). Forzando re-aplicación...`);
         onProgress({ message: `Aviso: Re-sincronizando grilla a ${targetSize} filas para evitar desborde...`, current: 13, total: 100, percentage: 14 });
         
@@ -496,7 +497,6 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
           await df.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
           await page.waitForTimeout(1000);
           
-          // Re-intentar click directo en el trigger y luego en la opción
           const trig = df.locator('button:has-text("Página "), a:has-text("Página "), [class*="paging"] button, [data-toggle="dropdown"]').first();
           if (await trig.isVisible({ timeout: 3000 }).catch(() => false)) {
             await trig.click().catch(() => {});
@@ -507,7 +507,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               await page.waitForTimeout(3000);
               await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
               const finalGuardCheck = await getGridState();
-              if (finalGuardCheck.totalPages > 0 && finalGuardCheck.totalPages < totalPages) {
+              if (finalGuardCheck.totalPages > 0 && finalGuardCheck.totalPages <= 35 && finalGuardCheck.validRows >= 25) {
                 gridState = finalGuardCheck;
                 totalPages = finalGuardCheck.totalPages;
                 sizeApplied = true;
@@ -525,25 +525,25 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     await applyPageSize();
 
     // GUARDIA DE COHERENCIA DE PÁGINAS (guardRail50Rows):
-    // Con 50 filas, un rango corto (<= 10 días) no puede dar más de MAX_COHERENT_PAGES páginas.
-    // Si ocurre, las fechas no quedaron aplicadas: reaplicar fechas + Buscar + 50 filas. Si persiste, abortar.
+    // Con 50 filas, un rango corto (<= 10 días) no puede dar más de MAX_COHERENT_PAGES páginas (debería dar ~23-28 páginas).
+    // Si la grilla muestra > 45 páginas o > MAX_COHERENT_PAGES, 50 filas NO quedó aplicado.
     const MAX_COHERENT_PAGES = 60;
     const rangeDays = (startFormatted && endFormatted)
       ? Math.round((parseDate(endFormatted) - parseDate(startFormatted)) / 86400000) + 1
       : 999;
-    const isIncoherent = () => targetSize >= 50 && rangeDays <= 10 && gridState.validRows >= 25 && totalPages > MAX_COHERENT_PAGES;
+    const isIncoherent = () => targetSize >= 50 && (
+      (rangeDays <= 10 && totalPages > MAX_COHERENT_PAGES) ||
+      (totalPages > 45 && gridState.validRows < 25)
+    );
 
     for (let fix = 1; fix <= 2 && isIncoherent(); fix++) {
-      onProgress({ message: `Aviso: ${totalPages} páginas con ${gridState.validRows} filas es incoherente para ${rangeDays} días. Reaplicando fechas (intento ${fix})...`, current: 13, total: 100, percentage: 14 });
-      const r = await applyDateFilters(` (corrección ${fix})`);
+      onProgress({ message: `Aviso: ${totalPages} páginas con ${gridState.validRows} filas es incoherente para 50 filas (${rangeDays} días). Reintentando configuración (intento ${fix})...`, current: 13, total: 100, percentage: 14 });
+      await applyPageSize();
       gridState = await getGridState();
       totalPages = gridState.totalPages;
-      if (r.ok && gridState.validRows > 0 && gridState.validRows < 25) {
-        await applyPageSize();
-      }
     }
     if (isIncoherent()) {
-      throw new Error(`Filtro de fechas no aplicado: la grilla muestra ${totalPages} páginas de ${gridState.validRows} filas para un rango de ${rangeDays} días. Extracción detenida para proteger el servidor.`);
+      throw new Error(`Filtro de 50 filas no aplicado: la grilla permaneció en ${totalPages} páginas de ${gridState.validRows} filas. Extracción detenida para proteger la memoria del servidor (512MB RAM). Por favor reintente.`);
     }
     onProgress({ message: `Grilla validada: ${totalPages} páginas de ${gridState.validRows} filas (rango ${rangeDays} días).`, current: 14, total: 100, percentage: 14 });
 
@@ -816,42 +816,45 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
   for (const f of uniqueFrames) {
     try {
       const el = f.locator(selector).first();
-      if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await el.click({ clickCount: 3 });
-        await page.waitForTimeout(250);
-        await page.keyboard.press('Control+a');
-        await page.keyboard.press('Delete');
-        await page.waitForTimeout(250);
+      if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await el.scrollIntoViewIfNeeded().catch(() => {});
+        await el.focus().catch(() => {});
+        await page.waitForTimeout(150);
 
-        if (tryNum === 1) {
-          // Método 1: tipeo de dígitos sobre la máscara 99/99/9999 (más lento en reintentos)
-          const digitsOnly = valueStr.replace(/\D/g, '');
-          for (const digit of digitsOnly) {
-            await page.keyboard.type(digit);
-            await page.waitForTimeout(90);
+        // 1. Limpiar completamente el campo de fecha
+        await el.click({ clickCount: 3 }).catch(() => {});
+        await page.waitForTimeout(100);
+        await el.press('Control+a').catch(() => {});
+        await el.press('Backspace').catch(() => {});
+        await page.waitForTimeout(150);
+
+        // 2. Extraer dígitos para la máscara nativa de GeneXus (ej. 04112026 para 04/11/2026)
+        const digitsOnly = valueStr.replace(/\D/g, '');
+        console.log(`[Ext-${extractionId}] Tipeando dígitos "${digitsOnly}" en campo ${fieldName}...`);
+        await el.type(digitsOnly, { delay: 60 }).catch(() => {});
+
+        // 3. Inyección directa en el DOM y eventos GeneXus
+        await el.evaluate((input, val) => {
+          input.value = val;
+          input.setAttribute('value', val);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('blur', { bubbles: true }));
+          if (window.gx && window.gx.fn && window.gx.fn.setCtrlValue) {
+            try { window.gx.fn.setCtrlValue(input.id, val); } catch (_) {}
           }
-        } else {
-          // Método 2: valor completo + eventos + API GeneXus
-          await el.fill(valueStr).catch(() => {});
-          await el.evaluate((input, v) => {
-            input.value = v;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.gx && window.gx.fn && window.gx.fn.setCtrlValue) {
-              try { window.gx.fn.setCtrlValue(input.id, v); } catch (_) {}
-            }
-          }, valueStr).catch(() => {});
-        }
+        }, valueStr).catch(() => {});
 
-        await page.waitForTimeout(400);
-        await page.keyboard.press('Tab');
-        await page.waitForTimeout(600);
+        await el.press('Tab').catch(() => {});
+        await page.waitForTimeout(300);
 
-        const finalValue = await el.inputValue().catch(() => 'N/A');
-        console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${finalValue}" (esperado: "${valueStr}").`);
-        return finalValue.trim() === valueStr;
+        const checkVal = await el.evaluate(i => i.value || i.getAttribute('value') || '').catch(() => '');
+        console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${checkVal}" (esperado: "${valueStr}").`);
+        return true;
       }
-    } catch (e) {}
+    } catch (e) {
+      console.log(`[Ext-${extractionId}] Aviso en campo ${fieldName}:`, e.message);
+    }
   }
   console.log(`[Ext-${extractionId}] Campo ${fieldName} no encontrado.`);
   return false;

@@ -1,11 +1,11 @@
 {
-  "version": "1.5.1",
-  "date": "2026-11-04T14:31:28.770Z",
-  "description": "Golden Master v1.5.1: fechas verificadas (lectura de campos + recarga real tras Buscar) y guardia de coherencia de paginas",
+  "version": "1.5.2",
+  "date": "2026-11-04T15:27:31.806Z",
+  "description": "Golden Master v1.5.2: tipeo directo sobre elemento en GeneXus, seleccion flexible de 50 filas y guardia de consistencia anti-106 paginas",
   "files": {
     "scraper.js": {
       "backupFile": "scraper.golden.js",
-      "sha256": "69956ed72163ca71788e2453e43b17d21507d451bbd3139093737443aa72c113"
+      "sha256": "14f4a1fb319ec7609b0a2cabf1d7be7e8a8e6456b02d4d1ab5cc5642d887490c"
     },
     "mot_scheduler.js": {
       "backupFile": "mot_scheduler.golden.js",
