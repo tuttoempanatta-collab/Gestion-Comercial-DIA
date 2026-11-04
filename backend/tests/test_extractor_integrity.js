@@ -243,6 +243,20 @@ runAssert('Guardia de coherencia de páginas (guardRail50Rows): aborta si hay de
   return true;
 });
 
+runAssert('Tipeo directo sobre elemento de fecha: fillGeneXusDate usa el.type(digitsOnly) para evitar pérdida de foco en iframes', () => {
+  if (!scraperCode.includes('el.type(digitsOnly') && !scraperCode.includes('el.type(digitsOnly,')) {
+    throw new Error('fillGeneXusDate debe usar el.type(digitsOnly) sobre el locator directamente para no perder foco en iframes.');
+  }
+  return true;
+});
+
+runAssert('Doble selector de paginador y filas: detecta "Registros por página" y popup desplegable', () => {
+  if (!scraperCode.includes('registros por p') || !scraperCode.includes('[data-gx-rows-opt]')) {
+    throw new Error('Falta soporte para el selector explícito "Registros por página" en el dropdown del paginador.');
+  }
+  return true;
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Árbitro de Memoria y Blindaje del Guardián MOT (mot_scheduler.js)
 // ─────────────────────────────────────────────────────────────────────────────

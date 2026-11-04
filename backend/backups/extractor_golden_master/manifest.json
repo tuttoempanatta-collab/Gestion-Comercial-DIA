@@ -1,7 +1,7 @@
 {
-  "version": "1.5.2",
-  "date": "2026-11-04T15:27:31.806Z",
-  "description": "Golden Master v1.5.2: tipeo directo sobre elemento en GeneXus, seleccion flexible de 50 filas y guardia de consistencia anti-106 paginas",
+  "version": "1.6.0",
+  "date": "2026-11-04T16:00:30.838Z",
+  "description": "Golden Master v1.6.0: Blindaje definitivo de 50 filas (28 pags confirmadas en produccion), tipeo directo el.type sobre GeneXus y guardia anti-desborde",
   "files": {
     "scraper.js": {
       "backupFile": "scraper.golden.js",
@@ -26,6 +26,8 @@
     "nextButtonScrollAndDispatch": "scrollIntoViewIfNeeded",
     "guardRail50Rows": "MAX_COHERENT_PAGES",
     "verifiedDateFilter": "readDateField",
-    "realGridReload": "waitForGridChange"
+    "realGridReload": "waitForGridChange",
+    "directElementDateTyping": "el.type(digitsOnly",
+    "doublePageDropdownDetection": "registros por p"
   }
 }
