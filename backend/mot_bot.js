@@ -24,7 +24,8 @@ const MOT_TAREAS   = 'https://mot.supermercadosdia.com.ar/com.mot.mot.tareastien
 const SESSION_DIR  = path.join(__dirname, 'playwright_data', 'mot_session');
 const SESSION_FILE = path.join(SESSION_DIR, 'storage_state.json');
 
-const MOT_EMAIL      = process.env.MOT_EMAIL      || 't00624ar@stores.diagroup.com';
+const rawEmail       = process.env.MOT_EMAIL      || 't00624ar@stores.diagroup.com';
+const MOT_EMAIL      = rawEmail.replace(/@tores\./i, '@stores.');
 const MOT_PASSWORD   = process.env.MOT_PASSWORD   || 'Tienda-/624';
 const DEFAULT_LEGAJO = process.env.MOT_LEGAJO     || '23250';
 
@@ -812,22 +813,24 @@ async function doLogin(headless = true, forceFresh = false) {
   const accountItem = _page.locator(`[data-identifier*="${MOT_EMAIL.split('@')[0]}"], [data-identifier]`).first();
   if (await accountItem.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false)) {
     log(`Seleccionando cuenta ${MOT_EMAIL} en el selector de Google...`);
-    await accountItem.click();
+    await accountItem.click({ force: true }).catch(async () => {
+      await accountItem.evaluate(el => el.click());
+    });
     await _page.waitForTimeout(3500);
   }
 
   // Paso 2 en Google: Campo de Email (si no estaba en el Account Chooser)
   const emailInput = _page.locator('input[type="email"], #identifierId').first();
-  if (await emailInput.waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false)) {
+  if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
     log(`Ingresando email ${MOT_EMAIL}...`);
     await emailInput.fill('');
     await emailInput.fill(MOT_EMAIL);
-    const nextBtn = _page.locator('#identifierNext, button:has-text("Siguiente"), button:has-text("Next")').first();
+    const nextBtn = _page.locator('#identifierNext button, #identifierNext, button:has-text("Siguiente"), button:has-text("Next")').first();
     if (await nextBtn.isVisible().catch(() => false)) {
-      await nextBtn.click();
-    } else {
-      await _page.keyboard.press('Enter');
+      await nextBtn.click({ force: true }).catch(() => {});
     }
+    await emailInput.press('Enter').catch(() => {});
+    await _page.keyboard.press('Enter').catch(() => {});
     await _page.waitForTimeout(4000);
   }
 
