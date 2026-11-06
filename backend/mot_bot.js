@@ -837,20 +837,22 @@ async function doLogin(headless = true, forceFresh = false) {
     log('Ingresando contraseña de Google...');
     await passInput.fill('');
     await passInput.fill(MOT_PASSWORD);
-    const passNext = _page.locator('#passwordNext, button:has-text("Siguiente"), button:has-text("Next")').first();
+    await _page.waitForTimeout(500);
+
+    const passNext = _page.locator('#passwordNext button, #passwordNext, button:has-text("Siguiente"), button:has-text("Next"), div[role="button"]:has-text("Siguiente")').first();
     if (await passNext.isVisible().catch(() => false)) {
-      await passNext.click();
-    } else {
-      await _page.keyboard.press('Enter');
+      await passNext.click().catch(() => {});
     }
+    await passInput.press('Enter').catch(() => {});
+    await _page.keyboard.press('Enter').catch(() => {});
     await _page.waitForTimeout(6000);
   }
 
   // Paso 4 en Google: Pantalla de consentimiento OAuth (Continuar / Permitir)
-  const allowBtn = _page.locator('button:has-text("Continuar"), button:has-text("Permitir"), button:has-text("Continue"), button:has-text("Allow")').first();
+  const allowBtn = _page.locator('button:has-text("Continuar"), button:has-text("Permitir"), button:has-text("Continue"), button:has-text("Allow"), div[role="button"]:has-text("Continuar"), #submit_approve_access').first();
   if (await allowBtn.waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false)) {
     log('Aceptando pantalla de consentimiento OAuth...');
-    await allowBtn.click();
+    await allowBtn.click().catch(() => {});
     await _page.waitForTimeout(5000);
   }
 
@@ -871,7 +873,13 @@ async function doLogin(headless = true, forceFresh = false) {
     return true;
   }
 
-  throw new Error(`No se pudo completar el login. URL actual: ${_page.url()}`);
+  const currentUrl = _page.url();
+  await captureDebugScreenshot('login_fail').catch(() => {});
+  const bodyText = await _page.evaluate(() => (document.body ? document.body.innerText : '')).catch(() => '');
+  const cleanSnippet = (bodyText || '').replace(/\s+/g, ' ').slice(0, 300);
+  log(`[Login Fallido] Texto en pantalla: "${cleanSnippet}"`, 'error');
+
+  throw new Error(`No se pudo completar el login. URL actual: ${currentUrl.slice(0, 100)}... | Pantalla: "${cleanSnippet}"`);
 }
 
 /**

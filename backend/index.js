@@ -669,6 +669,15 @@ app.post('/api/mot-bot/login', async (req, res) => {
   }
 });
 
+// GET ver último screenshot de debug del bot
+app.get('/api/mot-bot/screenshot', (req, res) => {
+  const dir = path.join(__dirname, 'screenshots');
+  if (!fs.existsSync(dir)) return res.status(404).send('No screenshots dir');
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.png')).sort().reverse();
+  if (files.length === 0) return res.status(404).send('No screenshot found');
+  res.sendFile(path.join(dir, files[0]));
+});
+
 // POST recibir archivo de sesión (storage_state.json)
 app.post('/api/mot-bot/session', async (req, res) => {
   try {
