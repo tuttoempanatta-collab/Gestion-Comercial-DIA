@@ -888,4 +888,12 @@ app.listen(PORT, () => {
   if (motScheduler.initAutoGuardian) {
     motScheduler.initAutoGuardian();
   }
+
+  // Keep-alive anti-expiración de sesión MOT: ping cada 10 min las 24 horas a com.mot.home
+  setInterval(async () => {
+    try {
+      const motBot = require('./mot_bot');
+      if (motBot.pingMotSession) await motBot.pingMotSession();
+    } catch (_) {}
+  }, 10 * 60 * 1000);
 });

@@ -629,6 +629,39 @@ function saveSessionData(jsonObj) {
   log('Archivo de sesión importado y guardado en disco.');
 }
 
+async function pingMotSession() {
+  if (!fs.existsSync(SESSION_FILE)) return false;
+  try {
+    const raw = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+    if (!raw || !Array.isArray(raw.cookies)) return false;
+    const cookieHeader = raw.cookies
+      .filter(c => c.domain && c.domain.includes('supermercadosdia'))
+      .map(c => `${c.name}=${c.value}`)
+      .join('; ');
+    if (!cookieHeader) return false;
+
+    const res = await fetch(MOT_HOME, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Cookie': cookieHeader,
+      },
+      redirect: 'manual'
+    });
+
+    const isAlive = res.status === 200 || (res.status === 302 && !res.headers.get('location')?.includes('login'));
+    if (isAlive) {
+      log('💓 [Keep-Alive MOT] Sesión de Tomcat validada y mantenida activa.');
+    } else {
+      log(`⚠️ [Keep-Alive MOT] Sesión MOT no respondió 200 (estado: ${res.status}).`, 'warn');
+    }
+    return isAlive;
+  } catch (err) {
+    log(`⚠️ [Keep-Alive MOT] Error en ping: ${err.message}`, 'warn');
+    return false;
+  }
+}
+
 function isMotHost(urlStr) {
   try {
     const u = new URL(urlStr);
@@ -2460,6 +2493,7 @@ module.exports = {
   isLoggedIn,
   sessionExists,
   saveSessionData,
+  pingMotSession,
   setCachedDashboard,
   getNowArgentina,
   MARK_BEFORE_MINUTES,
