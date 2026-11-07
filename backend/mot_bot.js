@@ -23,6 +23,7 @@ const MOT_TAREAS   = 'https://mot.supermercadosdia.com.ar/com.mot.mot.tareastien
 
 const SESSION_DIR  = path.join(__dirname, 'playwright_data', 'mot_session');
 const SESSION_FILE = path.join(SESSION_DIR, 'storage_state.json');
+const TASKS_CACHE_FILE = path.join(SESSION_DIR, 'tasks_cache.json');
 
 const rawEmail       = process.env.MOT_EMAIL      || 't00624ar@stores.diagroup.com';
 const MOT_EMAIL      = rawEmail.replace(/@tores\./i, '@stores.');
@@ -385,6 +386,33 @@ let _lastSyncAt  = null;
 let _cachedDate  = '';
 let _tiendaId    = '624';
 const _localMarkedMap = new Map(); // rowIndex -> { estadoCode, estadoTexto, horaCumplimiento, fecha }
+
+function loadCachedTasksFromDisk() {
+  if (fs.existsSync(TASKS_CACHE_FILE)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(TASKS_CACHE_FILE, 'utf8'));
+      if (raw && Array.isArray(raw.tasks) && raw.tasks.length > 0) {
+        _cachedTasks = raw.tasks;
+        if (raw.lastSyncAt) _lastSyncAt = raw.lastSyncAt;
+        if (raw.tienda && raw.tienda.fecha) _cachedDate = raw.tienda.fecha;
+      }
+    } catch (_) {}
+  }
+}
+loadCachedTasksFromDisk();
+
+function setCachedDashboard(dashboardData) {
+  if (dashboardData && Array.isArray(dashboardData.tasks) && dashboardData.tasks.length > 0) {
+    _cachedTasks = dashboardData.tasks;
+    if (dashboardData.lastSyncAt) _lastSyncAt = dashboardData.lastSyncAt;
+    if (dashboardData.tienda && dashboardData.tienda.fecha) _cachedDate = dashboardData.tienda.fecha;
+    ensureSessionDir();
+    fs.writeFileSync(TASKS_CACHE_FILE, JSON.stringify(dashboardData, null, 2), 'utf8');
+    log(`[Sync Dashboard] Recibidas y guardadas ${_cachedTasks.length} tareas sincronizadas.`);
+    return true;
+  }
+  return false;
+}
 
 const botLog = [];
 
@@ -1100,6 +1128,18 @@ async function readTasks() {
   _lastSyncAt  = new Date().toISOString();
   _cachedDate  = currentDateStr;
   _tiendaId    = extracted.tiendaId || '624';
+
+  try {
+    ensureSessionDir();
+    const stats = computeStats(_cachedTasks);
+    fs.writeFileSync(TASKS_CACHE_FILE, JSON.stringify({
+      ok: true,
+      tienda: { id: _tiendaId, fecha: _cachedDate },
+      lastSyncAt: _lastSyncAt,
+      stats,
+      tasks: _cachedTasks
+    }, null, 2), 'utf8');
+  } catch (_) {}
 
   log(`Tareas sincronizadas desde MOT: ${tasks.length} tareas (Tienda ${_tiendaId}, Fecha ${_cachedDate}).`);
   return tasks;
@@ -2420,6 +2460,7 @@ module.exports = {
   isLoggedIn,
   sessionExists,
   saveSessionData,
+  setCachedDashboard,
   getNowArgentina,
   MARK_BEFORE_MINUTES,
   MARK_AFTER_START_MINUTES,

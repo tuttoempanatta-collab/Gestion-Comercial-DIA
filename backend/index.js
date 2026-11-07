@@ -692,6 +692,17 @@ app.post('/api/mot-bot/session', async (req, res) => {
   }
 });
 
+// POST sincronizar caché de tareas del dashboard
+app.post('/api/mot-bot/sync-dashboard', async (req, res) => {
+  try {
+    const { setCachedDashboard } = require('./mot_bot');
+    const ok = setCachedDashboard(req.body);
+    res.json({ ok });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // GET legajos de turnos MOT (Mañana y Tarde)
 app.get('/api/mot-bot/legajos', async (req, res) => {
   try {
