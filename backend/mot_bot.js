@@ -1344,7 +1344,7 @@ async function executeTemperatureControlOnMot(task, options = {}) {
   let currentOpenCatName = '';
 
   for (let step = 0; step < 40; step++) {
-    const catSpan = _page.locator('#span_W0093W0024SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC_0001').first();
+    const catSpan = _page.locator('#span_W0093W0024SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC_0001, [id*="CTGCTRLTEMPDESC_0001"], [id*="SDTCTGEQUIPAMIENTOS__CTGCTRLTEMPDESC"]').first();
     if (!(await catSpan.isVisible().catch(() => false))) {
       break; // Ya no quedan categorías pendientes: todos los equipos fueron aprobados
     }
@@ -1353,14 +1353,14 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 
     // Si la fila del primer equipo pendiente no está visible (acordeón colapsado por postback GeneXus),
     // clickear la flecha de la categoría _0001 para desplegar los equipos:
-    let eqVisible = await _page.locator('#span_W0093W0024W0034vEQUIPAMIENTONOMB_0001').first().isVisible().catch(() => false);
+    let eqVisible = await _page.locator('#span_W0093W0024W0034vEQUIPAMIENTONOMB_0001, [id*="vEQUIPAMIENTONOMB_0001"], [id*="vEQUIPAMIENTONOMB"]').first().isVisible().catch(() => false);
     if (!eqVisible) {
-      const arrow = _page.locator('#span_W0093W0024vDETAILWEBCOMPONENT_0001, #W0093W0024GridContainerRow_0001 i.ArrowIcon').first();
+      const arrow = _page.locator('#span_W0093W0024vDETAILWEBCOMPONENT_0001, [id*="vDETAILWEBCOMPONENT_0001"], #W0093W0024GridContainerRow_0001 i.ArrowIcon, [id*="GridContainerRow_0001"] [class*="Arrow"], [id*="GridContainerRow_0001"] a').first();
       if (await arrow.isVisible().catch(() => false)) {
         await arrow.click({ timeout: 3000 }).catch(() => {});
         await _page.waitForTimeout(1800);
       }
-      eqVisible = await _page.locator('#span_W0093W0024W0034vEQUIPAMIENTONOMB_0001').first().isVisible().catch(() => false);
+      eqVisible = await _page.locator('#span_W0093W0024W0034vEQUIPAMIENTONOMB_0001, [id*="vEQUIPAMIENTONOMB_0001"], [id*="vEQUIPAMIENTONOMB"]').first().isVisible().catch(() => false);
     }
 
     if (!eqVisible) {
@@ -1369,11 +1369,11 @@ async function executeTemperatureControlOnMot(task, options = {}) {
     }
 
     const rowData = await _page.evaluate(() => {
-      const span = document.getElementById('span_W0093W0024W0034vEQUIPAMIENTONOMB_0001');
-      const eqIn = document.getElementById('W0093W0024W0034vTEMPERATURAEQUIPO_0001');
-      const prIn = document.getElementById('W0093W0024W0034vTEMPERATURAPRODUCTO_0001');
-      const apBt = document.getElementById('W0093W0024W0034APROBAR_0001');
-      const guid = document.getElementById('W0093W0024W0034vEQUIPAMIENTOGUID_0001');
+      const span = document.querySelector('[id*="vEQUIPAMIENTONOMB_0001"], [id*="vEQUIPAMIENTONOMB"]');
+      const eqIn = document.querySelector('input[id*="vTEMPERATURAEQUIPO_0001"], input[id*="vTEMPERATURAEQUIPO"]');
+      const prIn = document.querySelector('input[id*="vTEMPERATURAPRODUCTO_0001"], input[id*="vTEMPERATURAPRODUCTO"]');
+      const apBt = document.querySelector('input[id*="APROBAR_0001"], button[id*="APROBAR_0001"], input[value*="Aprobar" i]');
+      const guid = document.querySelector('input[id*="vEQUIPAMIENTOGUID_0001"], input[id*="vEQUIPAMIENTOGUID"]');
       if (!span || !eqIn || !prIn || !apBt) return null;
       return {
         nombre: span.innerText.trim(),
@@ -1417,11 +1417,13 @@ async function executeTemperatureControlOnMot(task, options = {}) {
 
     log(`[Motor IA -> ${rowData.nombre} (${catName})] Perfil: ${aiDecision.profileId} (${aiDecision.minC}°C a ${aiDecision.maxC}°C) | Ayer: ${aiDecision.prevEquipo}°C/${aiDecision.prevProducto}°C => Hoy: ${tempEqui}°C/${tempProd}°C`);
 
-    await _page.fill('#W0093W0024W0034vTEMPERATURAEQUIPO_0001', String(tempEqui), { timeout: 3000 }).catch(() => {});
-    await _page.fill('#W0093W0024W0034vTEMPERATURAPRODUCTO_0001', String(tempProd), { timeout: 3000 }).catch(() => {});
+    const eqField = _page.locator('input[id*="vTEMPERATURAEQUIPO_0001"], input[id*="vTEMPERATURAEQUIPO"]').first();
+    const prField = _page.locator('input[id*="vTEMPERATURAPRODUCTO_0001"], input[id*="vTEMPERATURAPRODUCTO"]').first();
+    await eqField.fill(String(tempEqui), { timeout: 3000 }).catch(() => {});
+    await prField.fill(String(tempProd), { timeout: 3000 }).catch(() => {});
     await _page.waitForTimeout(150);
 
-    const apBtn = _page.locator('#W0093W0024W0034APROBAR_0001').first();
+    const apBtn = _page.locator('input[id*="APROBAR_0001"], button[id*="APROBAR_0001"], input[value*="Aprobar" i]').first();
     if (await apBtn.isVisible().catch(() => false)) {
       await apBtn.click({ timeout: 3000 }).catch(() => {});
       await _page.waitForTimeout(1500);
@@ -1440,7 +1442,24 @@ async function executeTemperatureControlOnMot(task, options = {}) {
     };
   }
 
+  // 3. Chequeo de confirmación final en WebVerTarea si quedó visible
+  await _page.waitForTimeout(1000);
+  const detailBtn = _page.locator('#CUMPLIR, [id*="BTNCONFIRMAR"], input[value="Cumplir" i], button:has-text("Cumplir")').first();
+  if (await detailBtn.isVisible().catch(() => false)) {
+    log(`[Motor IA Temperatura] Presionando botón de confirmación final en "${task.nombre}"...`);
+    await detailBtn.click().catch(() => {});
+    await _page.waitForTimeout(2000);
+  }
+
   saveTempHistory(tempHistory);
+
+  if (totalAprobados === 0) {
+    return {
+      ok: false,
+      aprobados: 0,
+      reason: `No se pudieron cargar equipos de temperatura para "${task.nombre}" (campos no encontrados o ya completados en MOT).`,
+    };
+  }
 
   log(`✓ [Motor IA Temperatura] Control completado para "${task.nombre}" (${totalAprobados} equipos aprobados con legajo ${legajo}).`);
   return {
