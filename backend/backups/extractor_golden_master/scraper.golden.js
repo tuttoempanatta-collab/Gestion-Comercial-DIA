@@ -113,9 +113,25 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         await accionesGeneralesItem.waitFor({ state: 'visible', timeout: 15000 });
         await accionesGeneralesItem.click();
 
-        console.log(`[Ext-${extractionId}] Esperando carga de la tabla (#vDESDE)...`);
-        const desdeMenuCheck = page.locator('#vDESDE, input[name*="vDESDE"]').first();
-        await desdeMenuCheck.waitFor({ state: 'visible', timeout: 20000 });
+        console.log(`[Ext-${extractionId}] Esperando carga de la tabla (#vDESDE en cualquier frame)...`);
+        let foundDesde = false;
+        for (let waitSec = 0; waitSec < 20; waitSec++) {
+          for (const f of page.frames()) {
+            try {
+              const el = f.locator('#vDESDE, input[name*="vDESDE"]').first();
+              if (await el.isVisible({ timeout: 500 }).catch(() => false)) {
+                foundDesde = true;
+                dataFrame = f;
+                break;
+              }
+            } catch (_) {}
+          }
+          if (foundDesde) break;
+          await page.waitForTimeout(1000);
+        }
+        if (!foundDesde) {
+          throw new Error('Timeout esperando campo #vDESDE en frames.');
+        }
         isTableLoaded = true;
         console.log(`[Ext-${extractionId}] Tabla cargada exitosamente mediante el menú.`);
       } catch (menuError) {
@@ -278,11 +294,16 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       console.log(`[Ext-${extractionId}] Aplicando filtros: Desde=${startFormatted || 'Inicio'}, Hasta=${endFormatted || 'Hoy'}`);
 
       let datesOk = false;
-      for (let tryNum = 1; tryNum <= 3 && !datesOk; tryNum++) {
+      for (let tryNum = 1; tryNum <= 6 && !datesOk; tryNum++) {
+        dataFrame = await findDataFrame(page);
+
         let fD = false;
         let fH = false;
         if (startFormatted) fD = await fillGeneXusDate(page, dataFrame, DESDE_SEL, startFormatted, 'DESDE', extractionId, tryNum);
+        await page.waitForTimeout(300);
         if (endFormatted) fH = await fillGeneXusDate(page, dataFrame, HASTA_SEL, endFormatted, 'HASTA', extractionId, tryNum);
+        await page.waitForTimeout(400);
+
         const vD = startFormatted ? await readDateField(DESDE_SEL) : '';
         const vH = endFormatted ? await readDateField(HASTA_SEL) : '';
         const digitsD = (startFormatted || '').replace(/\D/g, '');
@@ -290,10 +311,19 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
         const vDDigits = vD.replace(/\D/g, '');
         const vHDigits = vH.replace(/\D/g, '');
 
-        datesOk = (!startFormatted || vD === startFormatted || (digitsD && vDDigits === digitsD) || fD) &&
-                  (!endFormatted || vH === endFormatted || (digitsH && vHDigits === digitsH) || fH);
+        const desdeOk = !startFormatted || (digitsD && vDDigits === digitsD) || vD === startFormatted;
+        const hastaOk = !endFormatted || (digitsH && vHDigits === digitsH) || vH === endFormatted;
+        datesOk = desdeOk && hastaOk;
 
         onProgress({ message: `Verificación fechas (intento ${tryNum}): Desde="${vD || (fD ? startFormatted : '')}" Hasta="${vH || (fH ? endFormatted : '')}" ${datesOk ? 'OK' : '-> reintentando'}`, current: 5, total: 100, percentage: 10 });
+
+        if (!datesOk) {
+          await page.waitForTimeout(1500);
+        }
+      }
+
+      if (!datesOk) {
+        throw new Error(`No se pudieron aplicar los filtros de fecha (Desde: ${startFormatted || '-'}, Hasta: ${endFormatted || '-'}). Se suspende la búsqueda para evitar desborde de memoria.`);
       }
 
       const before = await getGridState();
@@ -305,6 +335,13 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       // Re-verificar estado tras Buscar
       const vD2 = startFormatted ? await readDateField(DESDE_SEL) : '';
       const vH2 = endFormatted ? await readDateField(HASTA_SEL) : '';
+      const digitsH2 = (endFormatted || '').replace(/\D/g, '');
+      const vH2Digits = vH2.replace(/\D/g, '');
+
+      if (endFormatted && digitsH2 && vH2Digits && vH2Digits !== digitsH2 && vH2 !== endFormatted) {
+        throw new Error(`El portal restableció la Fecha Hasta a "${vH2}" en lugar de "${endFormatted}". Se cancela la consulta para no desbordar memoria.`);
+      }
+
       onProgress({
         message: `Grilla tras Buscar: ${res.changed ? 'RECARGADA' : 'LISTA'} | Pág ${res.state.currentPage} de ${res.state.totalPages} | ${res.state.validRows} filas | 1er código ${res.state.firstCode || '-'} | Fechas: ${vD2 || startFormatted || '-'} - ${vH2 || endFormatted || '-'}`,
         current: 12, total: 100, percentage: 12
@@ -816,6 +853,7 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
   for (const f of uniqueFrames) {
     try {
       const el = f.locator(selector).first();
+      await el.waitFor({ state: 'attached', timeout: 1500 }).catch(() => {});
       if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
         await el.scrollIntoViewIfNeeded().catch(() => {});
         await el.focus().catch(() => {});
@@ -839,14 +877,16 @@ async function fillGeneXusDate(page, frame, selector, valueStr, fieldName, extra
           input.setAttribute('value', val);
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.dispatchEvent(new Event('blur', { bubbles: true }));
           if (window.gx && window.gx.fn && window.gx.fn.setCtrlValue) {
             try { window.gx.fn.setCtrlValue(input.id, val); } catch (_) {}
           }
         }, valueStr).catch(() => {});
 
         await el.press('Tab').catch(() => {});
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(200);
+        await el.evaluate(input => {
+          input.dispatchEvent(new Event('blur', { bubbles: true }));
+        }).catch(() => {});
 
         const checkVal = await el.evaluate(i => i.value || i.getAttribute('value') || '').catch(() => '');
         console.log(`[Ext-${extractionId}] Campo ${fieldName} = "${checkVal}" (esperado: "${valueStr}").`);
