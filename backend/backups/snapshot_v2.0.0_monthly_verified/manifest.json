@@ -1,0 +1,37 @@
+{
+  "version": "2.0.0",
+  "date": "2026-11-11T13:30:00.000Z",
+  "description": "Golden Master v2.0.0: Extracción Mensual y Semanal Blindada con Verificación Estricta de Fechas, Sincronización Activa de Iframes, Arbitraje RAM para Render 512MB y Protección contra Búsquedas Sin Filtro",
+  "files": {
+    "scraper.js": {
+      "backupFile": "scraper.golden.js",
+      "sha256": "fcd509b2a47a84c8ea99ba3687e8fbb2d119dc829822d4cab5a35dbde5911cca"
+    },
+    "mot_scheduler.js": {
+      "backupFile": "mot_scheduler.golden.js",
+      "sha256": "34db3b483e110b0387fd3c1d6a5c171e77e507edbf20aa0a5f4a982d5cca38ed"
+    }
+  },
+  "criticalRules": {
+    "memoryLimitRendererProcess": "--renderer-process-limit=1",
+    "disableSitePerProcess": "--disable-features=site-per-process",
+    "forbiddenSingleProcess": "--single-process",
+    "guardianCheckPausedByExtraction": "_pausedByExtraction",
+    "safeDateMaskTyping": "fillGeneXusDate",
+    "officialBuscarTrigger": "clickGeneXusBuscar",
+    "omitPriceGreaterThanZero": "numericPrice > 0",
+    "antiPrematureExit": "totalRowsInGrid === 0",
+    "strict50RowsValidation": "pageCountChanged && rowsUpdated",
+    "visiblePaginatorDetection": "pageRegex",
+    "nextButtonScrollAndDispatch": "scrollIntoViewIfNeeded",
+    "guardRail50Rows": "MAX_COHERENT_PAGES",
+    "verifiedDateFilter": "readDateField",
+    "strictDateValidation": "datesOk = desdeOk && hastaOk",
+    "iframeScanReady": "Esperando carga de la tabla (#vDESDE en cualquier frame)",
+    "preventUnfilteredSearch": "Se suspende la búsqueda para evitar desborde de memoria",
+    "postSearchDateIntegrity": "Se cancela la consulta para no desbordar memoria",
+    "realGridReload": "waitForGridChange",
+    "directElementDateTyping": "el.type(digitsOnly",
+    "doublePageDropdownDetection": "registros por p"
+  }
+}

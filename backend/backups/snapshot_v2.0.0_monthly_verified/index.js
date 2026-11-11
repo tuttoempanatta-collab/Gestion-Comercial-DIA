@@ -1,0 +1,912 @@
+process.env.TZ = 'America/Argentina/Buenos_Aires';
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const motScheduler = require('./mot_scheduler');
+const { 
+  pool,
+  getDbStatus,
+  createExtraction, 
+  updateExtractionStatus, 
+  getHistory, 
+  getExtractionData, 
+  getSettings, 
+  updateSettings, 
+  getMotLegajosConfig,
+  updateMotLegajosConfig,
+  getMotSchedule,
+  updateMotSchedule,
+  deleteExtraction 
+} = require('./db');
+const { getCalendarWeeksInfo } = require('./mot_calendar');
+const { runScraper } = require('./scraper');
+const { fetchDescriptionsFromIET } = require('./iet_scraper');
+const { getMissingDescriptions } = require('./description_db');
+const xlsx = require('xlsx');
+const { createObjectCsvWriter } = require('csv-writer');
+
+// Multer: store upload in /tmp (ephemeral, just for processing)
+const upload = multer({ dest: '/tmp/' });
+
+const app = express();
+
+app.use(cors({
+  origin: true, // Allow all origins for now to solve connection issues
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`[Backend] ${req.method} ${req.path}`);
+  next();
+});
+
+const PORT = process.env.PORT || 3001;
+
+// Health check for Render
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Real-time Database Status endpoint
+app.get('/api/db-status', async (req, res) => {
+  try {
+    const status = await getDbStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Keep-Alive endpoint for automated ping (keeps Render and Supabase awake + wakes MOT Bot at 05:30 AR)
+app.get('/api/keep-alive', async (req, res) => {
+  try {
+    const start = Date.now();
+    const result = await pool.query('SELECT 1 as alive, CURRENT_TIMESTAMP as time');
+    const dbStatus = await getDbStatus();
+    if (motScheduler.checkGuardianSchedule) {
+      await motScheduler.checkGuardianSchedule();
+    }
+    const motStatus = motScheduler.getStatus();
+    res.json({
+      status: 'active',
+      uptime: process.uptime(),
+      motBot: {
+        status: motStatus.status,
+        wakeTime: motStatus.wakeTime,
+        sleepTime: motStatus.sleepTime,
+        serverTimeArg: motStatus.serverTimeArg,
+        isWithinActiveHours: motStatus.isWithinActiveHours,
+      },
+      db: {
+        provider: dbStatus.provider,
+        isSqlite: dbStatus.isSqlite,
+        responseTimeMs: Date.now() - start,
+        timestamp: result.rows?.[0]?.time || new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Internal 12-hour periodic ping to prevent Supabase idle timeout while backend process is alive
+const KEEP_ALIVE_INTERVAL = 12 * 60 * 60 * 1000;
+setInterval(async () => {
+  try {
+    await pool.query('SELECT 1');
+    console.log('[Database Keep-Alive] Internal ping executed successfully.');
+  } catch (err) {
+    console.warn('[Database Keep-Alive Warning]:', err.message);
+  }
+}, KEEP_ALIVE_INTERVAL);
+
+// Global enrichment progress
+let enrichmentProgress = { percentage: 0, message: '', status: 'idle' };
+
+// Active logs and progress for SSE
+let activeLogs = {};
+let activeProgress = {};
+
+app.get('/api/history', async (req, res) => {
+  try {
+    const history = await getHistory();
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/data/:extractionId', async (req, res) => {
+  const { extractionId } = req.params;
+  try {
+    const data = await getExtractionData(extractionId);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/settings', async (req, res) => {
+  try {
+    const settings = await getSettings();
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  try {
+    await updateSettings(req.body);
+    res.json({ message: 'Settings updated' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/cancel-extract', (req, res) => {
+  const { extractionId } = req.body;
+  global._isExtractionRunning = false;
+  if (!global.cancelledExtractions) global.cancelledExtractions = new Set();
+  global.cancelledExtractions.add(extractionId);
+  if (motScheduler && motScheduler.resumeAfterExtraction) {
+    motScheduler.resumeAfterExtraction().catch(() => {});
+  }
+  res.json({ status: 'cancelled' });
+});
+
+app.post('/api/extract', async (req, res) => {
+  const { startDate, endDate, pageSize, startPage, maxPages, stageName, keepMotPaused } = req.body;
+  
+  try {
+    global._isExtractionRunning = true;
+    const extractionId = await createExtraction(startDate, endDate);
+    const settings = await getSettings();
+    
+    // Árbitro de Memoria: Cerrar navegador de MOT y pausar su ciclo para evitar colisión de 512MB RAM en Render
+    if (motScheduler && motScheduler.pauseForExtraction) {
+      await motScheduler.pauseForExtraction();
+    }
+
+    const initialMsg = stageName ? `Iniciando ${stageName}...` : 'Iniciando proceso de extracción...';
+    activeLogs[extractionId] = [
+      { timestamp: new Date().toISOString(), message: '🛑 [Gestión de Memoria] MOT Bot pausado y Chromium cerrado. 100% de RAM libre asignada a la extracción.', percentage: 1 },
+      { timestamp: new Date().toISOString(), message: initialMsg, percentage: 1 }
+    ];
+    activeProgress[extractionId] = { percentage: 1, message: initialMsg };
+    
+    console.log(`[DEBUG] Finalizando preparación para Ext-${extractionId} (${stageName || 'Extracción'}). Llamando a runScraper...`);
+    
+    // Start scraper in background with stage options
+    runScraper(extractionId, startDate, endDate, settings, pageSize, (progressObj) => {
+      const normalized = typeof progressObj === 'string' 
+        ? { message: progressObj, percentage: 0 } 
+        : progressObj;
+
+      console.log(`[Ext-${extractionId}] ${normalized.message}`);
+      activeLogs[extractionId].push({ timestamp: new Date().toISOString(), ...normalized });
+      activeProgress[extractionId] = normalized;
+    }, { startPage, maxPages, stageName })
+    .then(async (count) => {
+      await updateExtractionStatus(extractionId, 'completed', count);
+      console.log(`[Ext-${extractionId}] Extracción finalizada con éxito. ${count} artículos procesados.`);
+    })
+    .catch(async (err) => {
+      await updateExtractionStatus(extractionId, 'failed', 0, err.message);
+      console.error(`[Ext-${extractionId}] Error en scraper:`, err.message);
+      if (activeLogs[extractionId]) {
+        activeLogs[extractionId].push({
+          timestamp: new Date().toISOString(),
+          message: `Error: ${err.message}`,
+          percentage: 0
+        });
+      }
+      activeProgress[extractionId] = { percentage: 0, message: `Error: ${err.message}` };
+    })
+    .finally(async () => {
+      if (!keepMotPaused) {
+        global._isExtractionRunning = false;
+        // Árbitro de Memoria: Reactivar MOT Bot automáticamente al finalizar la extracción
+        if (motScheduler && motScheduler.resumeAfterExtraction) {
+          await motScheduler.resumeAfterExtraction();
+        }
+      }
+    });
+
+    res.json({ extractionId, message: 'Extraction started' });
+  } catch (err) {
+    if (!keepMotPaused) {
+      global._isExtractionRunning = false;
+      if (motScheduler && motScheduler.resumeAfterExtraction) {
+        await motScheduler.resumeAfterExtraction().catch(() => {});
+      }
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para reanudar MOT Bot al concluir sesiones multietapa (ej. Extracción Mensual)
+app.post('/api/mot-bot/resume', async (req, res) => {
+  global._isExtractionRunning = false;
+  if (motScheduler && motScheduler.resumeAfterExtraction) {
+    await motScheduler.resumeAfterExtraction().catch(() => {});
+  }
+  res.json({ ok: true, message: 'MOT Bot reanudado exitosamente.' });
+});
+
+app.post('/api/extractions/merge', async (req, res) => {
+  const { mergeExtractions } = require('./db');
+  const { extractionIds } = req.body;
+  try {
+    const result = await mergeExtractions(extractionIds);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.post('/api/system/reset', async (req, res) => {
+
+  const { clearAll } = require('./db');
+  const { clearDescriptions } = require('./description_db');
+  try {
+    await clearAll();
+    await clearDescriptions();
+    enrichmentProgress = { percentage: 0, message: '', status: 'idle' };
+    res.json({ message: 'System reset successful' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/enrich', async (req, res) => {
+  const { codes } = req.body;
+  try {
+    const missing = await getMissingDescriptions(codes);
+    
+    if (missing.length === 0) {
+      return res.json({ message: 'All codes already have descriptions', count: 0 });
+    }
+
+    enrichmentProgress = { percentage: 0, message: 'Iniciando enriquecimiento...', status: 'running' };
+
+    // Run in background
+    fetchDescriptionsFromIET(missing, (msg) => {
+      enrichmentProgress.message = msg;
+      console.log(`[Enriquecimiento Manual] ${msg}`);
+    })
+    .then(() => {
+      enrichmentProgress = { percentage: 100, message: 'Enriquecimiento completado', status: 'completed' };
+    })
+    .catch((err) => {
+      enrichmentProgress = { percentage: 0, message: `Error: ${err.message}`, status: 'failed' };
+    });
+
+    res.json({ message: 'Enrichment started', count: missing.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/enrich/status', (req, res) => {
+  res.json(enrichmentProgress);
+});
+
+app.get('/api/logs/:extractionId', async (req, res) => {
+  const { extractionId } = req.params;
+  const targetId = parseInt(extractionId);
+
+  // If extraction is active in memory on this server, return logs directly without falling back to DB
+  if (activeLogs[targetId] !== undefined) {
+    return res.json({
+      logs: activeLogs[targetId],
+      progress: activeProgress[targetId] || { percentage: 0, message: 'Iniciando...' }
+    });
+  }
+
+  // Fallback to database if RAM logs were wiped due to server restart
+  try {
+    const dbRes = await pool.query('SELECT status, items_count, error_message FROM extractions WHERE id = $1', [targetId]);
+    if (dbRes.rows && dbRes.rows.length > 0) {
+      const ext = dbRes.rows[0];
+      if (ext.status === 'completed') {
+        return res.json({
+          logs: [{ timestamp: new Date().toISOString(), message: `Extracción finalizada con éxito. ${ext.items_count} artículos procesados.` }],
+          progress: { percentage: 100, message: 'Extracción completada' }
+        });
+      } else if (ext.status === 'failed') {
+        return res.json({
+          logs: [{ timestamp: new Date().toISOString(), message: `Error: ${ext.error_message || 'Error durante el proceso'}` }],
+          progress: { percentage: 0, message: `Error: ${ext.error_message || 'Proceso fallido'}` }
+        });
+      } else if (ext.status === 'running') {
+        // Server restarted while extraction was running
+        await updateExtractionStatus(targetId, 'failed', 0, 'El servidor se reinició durante el proceso (límite de memoria o timeout en hosting)');
+        return res.json({
+          logs: [{ timestamp: new Date().toISOString(), message: 'Error: El servidor se reinició durante el proceso (límite de memoria o timeout en hosting).' }],
+          progress: { percentage: 0, message: 'Error: Servidor reiniciado' }
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[Logs DB Fallback Error]:', err.message);
+  }
+
+  res.json({
+    logs: activeLogs[targetId] || [],
+    progress: activeProgress[targetId] || { percentage: 0 }
+  });
+});
+
+// Export endpoints
+app.get('/api/export/excel/:extractionId', async (req, res) => {
+  try {
+    const data = await getExtractionData(req.params.extractionId);
+    const worksheet = xlsx.utils.json_to_sheet(data);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, 'Acciones Comerciales');
+    
+    const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=dia_export_${req.params.extractionId}.xlsx`);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/export/csv/:extractionId', async (req, res) => {
+  try {
+    const data = await getExtractionData(req.params.extractionId);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=dia_export_${req.params.extractionId}.csv`);
+    
+    // Create a temporary CSV and send it
+    const csvWriter = createObjectCsvWriter({
+      path: 'temp.csv',
+      header: [
+        { id: 'codigo', title: 'Código' },
+        { id: 'articulo', title: 'Articulo' },
+        { id: 'combo', title: 'Combo' },
+        { id: 'precio_fidelizado', title: 'Precio' },
+        { id: 'precio_final', title: 'Precio Final Manual' },
+        { id: 'fecha_desde', title: 'Desde' },
+        { id: 'fecha_hasta', title: 'Hasta' },
+        { id: 'cantidades', title: 'Cantidades' }
+      ]
+    });
+    
+    await csvWriter.writeRecords(data);
+    const fs = require('fs');
+    const stream = fs.createReadStream('temp.csv');
+    stream.pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update single record
+app.put('/api/data/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  if (!req.body) {
+    return res.status(400).json({ error: 'Cuerpo de solicitud faltante' });
+  }
+
+  const { articulo, codigo, cantidades, precio_fidelizado, precio_final, combo } = req.body;
+  console.log(`[Backend] PUT /api/data/${id}`, req.body);
+  
+  try {
+    const targetId = parseInt(id);
+    if (isNaN(targetId)) {
+      return res.status(400).json({ error: 'ID inválido' });
+    }
+
+    const precioNum = precio_fidelizado !== undefined && precio_fidelizado !== null && precio_fidelizado !== ''
+      ? parseFloat(String(precio_fidelizado).replace(',', '.'))
+      : null;
+      
+    const precioFinalNum = precio_final !== undefined && precio_final !== null && precio_final !== ''
+      ? parseFloat(String(precio_final).replace(',', '.'))
+      : null;
+
+    const query = 'UPDATE commercial_actions SET articulo = $1, codigo = $2, cantidades = $3, precio_fidelizado = $4, precio_final = $5, combo = $6 WHERE id = $7';
+    const params = [
+      articulo || '',
+      codigo || '',
+      String(cantidades === undefined || cantidades === null ? '' : cantidades),
+      isNaN(precioNum) ? null : precioNum,
+      isNaN(precioFinalNum) ? null : precioFinalNum,
+      combo !== undefined && combo !== null ? String(combo) : '',
+      targetId
+    ];
+
+    const result = await pool.query(query, params);
+    
+    if (result.rowCount > 0) {
+      res.json({ message: 'Registro actualizado', id: targetId });
+    } else {
+      res.status(404).json({ error: 'No se encontró el registro' });
+    }
+  } catch (err) {
+    console.error(`[Backend] Error critico: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete single record
+app.delete('/api/data/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query('DELETE FROM commercial_actions WHERE id = $1', [id]);
+    res.json({ message: 'Record deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/extraction/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await deleteExtraction(id);
+    res.json({ message: 'Extraction deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CATALOG ENDPOINTS ─────────────────────────────────────────────────────────
+
+app.get('/api/catalog-status', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*) as total, MAX(updated_at) as last_update FROM catalog_items`
+    );
+    res.json({
+      total: parseInt(result.rows[0].total),
+      lastUpdate: result.rows[0].last_update
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file received' });
+
+  const tmpPath = req.file.path;
+  try {
+    // Read uploaded SQLite file
+    const Database = require('better-sqlite3');
+    const db = new Database(tmpPath, { readonly: true });
+    const items = db.prepare(
+      'SELECT ItemID, LoyaltyDescription, PriceAmount, CurrentQuantityInUnits FROM Item'
+    ).all();
+    db.close();
+
+    if (!items || items.length === 0) {
+      return res.status(422).json({ error: 'El archivo no contiene items en la tabla Item.' });
+    }
+
+    // Upsert all items to PostgreSQL / Supabase in fast multi-row batches
+    let imported = 0;
+    const BATCH = 200;
+    for (let i = 0; i < items.length; i += BATCH) {
+      const batch = items.slice(i, i + BATCH);
+      const values = [];
+      const placeholders = [];
+      batch.forEach((item, idx) => {
+        const base = idx * 4;
+        placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, CURRENT_TIMESTAMP)`);
+        values.push(
+          String(item.ItemID),
+          item.LoyaltyDescription || '',
+          parseFloat(item.PriceAmount) || 0,
+          parseFloat(item.CurrentQuantityInUnits) || 0
+        );
+      });
+
+      const sql = `
+        INSERT INTO catalog_items (item_id, loyalty_description, price_amount, current_quantity, updated_at)
+        VALUES ${placeholders.join(', ')}
+        ON CONFLICT (item_id) DO UPDATE SET
+          loyalty_description = EXCLUDED.loyalty_description,
+          price_amount = EXCLUDED.price_amount,
+          current_quantity = EXCLUDED.current_quantity,
+          updated_at = CURRENT_TIMESTAMP
+      `;
+      await pool.query(sql, values);
+      imported += batch.length;
+    }
+
+    // Fast bulk update of stock and price in commercial_actions
+    try {
+      await pool.query(`
+        UPDATE commercial_actions
+        SET stock = (SELECT COALESCE(current_quantity, 0) FROM catalog_items WHERE item_id = commercial_actions.codigo)
+        WHERE EXISTS (SELECT 1 FROM catalog_items WHERE item_id = commercial_actions.codigo)
+      `);
+    } catch (updateErr) {
+      console.warn('[Catalog Sync Warning]: Could not bulk update stock in commercial_actions:', updateErr.message);
+    }
+
+    // Clean up temp file
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    res.json({ imported, total: items.length });
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    console.error('[Catalog Upload Error]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Catalog items listing (paginated)
+app.get('/api/catalog-items', async (req, res) => {
+  const { search = '', page = 1, limit = 50 } = req.query;
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  try {
+    const where = search ? `WHERE item_id ILIKE $3 OR loyalty_description ILIKE $3` : '';
+    const params = search
+      ? [parseInt(limit), offset, `%${search}%`]
+      : [parseInt(limit), offset];
+    const data = await pool.query(
+      `SELECT item_id, loyalty_description, price_amount, current_quantity, updated_at
+       FROM catalog_items ${where}
+       ORDER BY item_id
+       LIMIT $1 OFFSET $2`,
+      params
+    );
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM catalog_items ${where}`,
+      search ? [`%${search}%`] : []
+    );
+    res.json({ items: data.rows, total: parseInt(countRes.rows[0].count) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── MOT BOT ENDPOINTS ────────────────────────────────────────────────────────
+
+// GET estado actual del bot
+app.get('/api/mot-bot/status', (req, res) => {
+  res.json(motScheduler.getStatus());
+});
+
+// GET bitácora de auditoría del Motor IA de Verificación (por día) e incidentes aprendidos
+app.get('/api/mot-bot/audit', (req, res) => {
+  try {
+    const motBot = require('./mot_bot');
+    res.json({ ok: true, audit: motBot.getAudit(req.query.date || undefined), incidents: motBot.getIncidents(50) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET lista completa de tareas, porcentajes y equipamiento desde MOT original
+app.get('/api/mot-bot/tasks', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
+    const data = await motScheduler.fetchDashboard(forceRefresh);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET detalle completo de una tarea (bloque, descripción, procedimientos) desde MOT.WebVerTarea
+app.get('/api/mot-bot/task-detail', async (req, res) => {
+  try {
+    const { row } = req.query;
+    if (!row) throw new Error('Se requiere el parámetro row (ej: 0001).');
+    const data = await motScheduler.fetchTaskDetail(String(row));
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST marcar una tarea en el MOT original desde nuestra web (C, NC, NA, LIMPIEZA, EQUIPO)
+app.post('/api/mot-bot/mark-task', async (req, res) => {
+  try {
+    const result = await motScheduler.markSingleTask(req.body || {});
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST arrancar el scheduler
+app.post('/api/mot-bot/start', async (req, res) => {
+  try {
+    if (global._isExtractionRunning) {
+      return res.status(409).json({ ok: false, error: 'Extracción de ofertas en curso. MOT Bot bloqueado para proteger la memoria RAM.' });
+    }
+    await motScheduler.start({ manual: true });
+    res.json({ ok: true, status: motScheduler.getStatus() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST detener el scheduler
+app.post('/api/mot-bot/stop', async (req, res) => {
+  try {
+    await motScheduler.stop({ manual: true });
+    res.json({ ok: true, status: motScheduler.getStatus() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST disparar manualmente el Segundo Chequeo Pre-Dormición con Motor IA
+app.post('/api/mot-bot/pre-sleep-sweep', async (req, res) => {
+  try {
+    const motBot = require('./mot_bot');
+    const result = await motBot.runPreSleepSweepAndResolve();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST reiniciar el bot a 0%
+app.post('/api/mot-bot/reset', async (req, res) => {
+  try {
+    await motScheduler.reset();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST iniciar login manual
+app.post('/api/mot-bot/login', async (req, res) => {
+  try {
+    const result = await motScheduler.doManualLogin();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET ver último screenshot de debug del bot
+app.get('/api/mot-bot/screenshot', (req, res) => {
+  const dir = path.join(__dirname, 'screenshots');
+  if (!fs.existsSync(dir)) return res.status(404).send('No screenshots dir');
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.png')).sort().reverse();
+  if (files.length === 0) return res.status(404).send('No screenshot found');
+  res.sendFile(path.join(dir, files[0]));
+});
+
+// POST recibir archivo de sesión (storage_state.json)
+app.post('/api/mot-bot/session', async (req, res) => {
+  try {
+    const { saveSessionData } = require('./mot_bot');
+    if (!req.body || Object.keys(req.body).length === 0) {
+      throw new Error('No se recibió el JSON de sesión válido.');
+    }
+    saveSessionData(req.body);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST sincronizar caché de tareas del dashboard
+app.post('/api/mot-bot/sync-dashboard', async (req, res) => {
+  try {
+    const { setCachedDashboard } = require('./mot_bot');
+    const ok = setCachedDashboard(req.body);
+    res.json({ ok });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET legajos de turnos MOT (Mañana y Tarde)
+app.get('/api/mot-bot/legajos', async (req, res) => {
+  try {
+    const motBot = require('./mot_bot');
+    const config = await getMotLegajosConfig();
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, ...config });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST agregar legajo a la lista
+app.post('/api/mot-bot/legajos', async (req, res) => {
+  try {
+    const { legajo, nombre } = req.body || {};
+    if (!legajo || !String(legajo).trim()) {
+      return res.status(400).json({ ok: false, error: 'Número de legajo requerido' });
+    }
+    const cleanLegajo = String(legajo).trim();
+    const cleanNombre = (nombre || '').trim() || `Legajo ${cleanLegajo}`;
+
+    const config = await getMotLegajosConfig();
+    const exists = config.legajos.some(x => String(x.legajo) === cleanLegajo);
+    if (!exists) {
+      config.legajos.push({ legajo: cleanLegajo, nombre: cleanNombre });
+      await updateMotLegajosConfig({ legajos: config.legajos });
+    }
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, ...config });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE eliminar legajo de la lista
+app.delete('/api/mot-bot/legajos/:legajo', async (req, res) => {
+  try {
+    const targetLegajo = String(req.params.legajo || '').trim();
+    const config = await getMotLegajosConfig();
+    config.legajos = config.legajos.filter(x => String(x.legajo) !== targetLegajo);
+    if (config.legajos.length === 0) {
+      config.legajos = [{ legajo: '23250', nombre: 'Turno Mañana' }];
+    }
+    if (config.manana === targetLegajo) config.manana = config.legajos[0].legajo;
+    if (config.tarde === targetLegajo) config.tarde = config.legajos[0].legajo;
+
+    await updateMotLegajosConfig(config);
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, ...config });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST guardar selección activa de legajos por turno (Mañana y Tarde)
+app.post('/api/mot-bot/legajos/selection', async (req, res) => {
+  try {
+    const { manana, tarde } = req.body || {};
+    const config = await getMotLegajosConfig();
+    if (manana) config.manana = String(manana).trim();
+    if (tarde) config.tarde = String(tarde).trim();
+
+    await updateMotLegajosConfig({ manana: config.manana, tarde: config.tarde });
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(config);
+    res.json({ ok: true, manana: config.manana, tarde: config.tarde });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET planificación de turnos semanal a 2 semanas (Semana Actual y Semana Siguiente)
+app.get('/api/mot-bot/schedule', async (req, res) => {
+  try {
+    const config = await getMotLegajosConfig();
+    const scheduleMap = await getMotSchedule();
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(scheduleMap);
+    const weeksInfo = getCalendarWeeksInfo(scheduleMap, config.manana, config.tarde);
+    res.json({
+      ok: true,
+      today: weeksInfo.today,
+      currentWeek: weeksInfo.currentWeek,
+      nextWeek: weeksInfo.nextWeek,
+      legajosList: config.legajos,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST guardar o actualizar días en la planificación de turnos
+app.post('/api/mot-bot/schedule', async (req, res) => {
+  try {
+    const { schedule } = req.body || {};
+    if (!schedule || typeof schedule !== 'object') {
+      return res.status(400).json({ ok: false, error: 'Objeto schedule requerido' });
+    }
+    const merged = await updateMotSchedule(schedule);
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(merged);
+
+    const config = await getMotLegajosConfig();
+    const weeksInfo = getCalendarWeeksInfo(merged, config.manana, config.tarde);
+    res.json({
+      ok: true,
+      today: weeksInfo.today,
+      currentWeek: weeksInfo.currentWeek,
+      nextWeek: weeksInfo.nextWeek,
+      message: 'Planificación semanal guardada correctamente',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST clonar/duplicar planificación de la semana actual a la semana siguiente
+app.post('/api/mot-bot/schedule/copy-week', async (req, res) => {
+  try {
+    const config = await getMotLegajosConfig();
+    const currentSchedule = await getMotSchedule();
+    const weeksInfo = getCalendarWeeksInfo(currentSchedule, config.manana, config.tarde);
+
+    const toUpdate = {};
+    for (let i = 0; i < 7; i++) {
+      const curDay = weeksInfo.currentWeek.days[i];
+      const nextDay = weeksInfo.nextWeek.days[i];
+      if (curDay && nextDay) {
+        toUpdate[nextDay.date] = {
+          manana: curDay.manana,
+          tarde: curDay.tarde,
+        };
+      }
+    }
+
+    const merged = await updateMotSchedule(toUpdate);
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(merged);
+
+    const updatedWeeks = getCalendarWeeksInfo(merged, config.manana, config.tarde);
+    res.json({
+      ok: true,
+      today: updatedWeeks.today,
+      currentWeek: updatedWeeks.currentWeek,
+      nextWeek: updatedWeeks.nextWeek,
+      message: 'Semana actual copiada exitosamente a la semana siguiente',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Manejo global de excepciones para evitar que errores no fatales reinicien el proceso Node.js
+process.on('uncaughtException', (err) => {
+  console.error('[Process Safeguard] Excepción no capturada:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process Safeguard] Rechazo no controlado en promesa:', reason);
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  // Cargar configuración de legajos de turnos MOT en memoria
+  getMotLegajosConfig().then(cfg => {
+    const motBot = require('./mot_bot');
+    motBot.setMotLegajosState(cfg);
+    console.log(`[MOT-Legajos] Configuración de turnos inicializada (Mañana: ${cfg.manana}, Tarde: ${cfg.tarde}, Total: ${cfg.legajos.length})`);
+  }).catch(() => {});
+
+  // Cargar cronograma semanal de turnos MOT en memoria
+  getMotSchedule().then(sched => {
+    const motBot = require('./mot_bot');
+    motBot.setMotScheduleMap(sched);
+    console.log(`[MOT-Schedule] Planificador semanal de turnos inicializado (${Object.keys(sched || {}).length} fechas programadas)`);
+  }).catch(() => {});
+
+  // Iniciar el Guardián Automático Diario del Robot MOT (05:30 AM a 22:40 HS Hora Argentina)
+  if (motScheduler.initAutoGuardian) {
+    motScheduler.initAutoGuardian();
+  }
+
+  // Keep-alive anti-expiración de sesión MOT: ping cada 10 min las 24 horas a com.mot.home
+  setInterval(async () => {
+    try {
+      const motBot = require('./mot_bot');
+      if (motBot.pingMotSession) await motBot.pingMotSession();
+    } catch (_) {}
+  }, 10 * 60 * 1000);
+});

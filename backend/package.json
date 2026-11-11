@@ -7,6 +7,8 @@
     "start": "node --expose-gc index.js",
     "test": "node tests/test_extractor_integrity.js",
     "test:extractor": "node tests/test_extractor_integrity.js",
+    "test:repair": "node tests/test_auto_repair.js",
+    "auto-repair": "node tests/test_auto_repair.js",
     "repair:extractor": "node tests/restore_extractor_golden.js"
   },
   "keywords": [],
