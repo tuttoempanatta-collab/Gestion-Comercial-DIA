@@ -453,9 +453,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
                 await page.waitForTimeout(1000);
                 const updated = await getGridState();
                 
-                // Criterio de éxito: Total de páginas debe haber disminuido respecto al inicial de 10 filas (ej. de 106 a ~23-28)
+                // Criterio de éxito: Total de páginas debe haber disminuido respecto al inicial de 10 filas
                 // y las filas visibles deben reflejar la nueva densidad de 50 filas (>= 25 filas)
-                const pageCountChanged = (prevTotal > 35 && updated.totalPages < prevTotal && updated.totalPages <= 35);
+                const pageCountChanged = (prevTotal > 1 ? (updated.totalPages < prevTotal) : true);
                 const rowsUpdated = (targetSize >= 50 ? (updated.validRows >= 25 || updated.validRows === targetSize) : (updated.validRows === targetSize));
                 
                 if (pageCountChanged && rowsUpdated) {
@@ -469,7 +469,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
 
               // Sincronización de estado tras la espera
               const checkState = await getGridState();
-              if (checkState.totalPages > 0 && checkState.validRows >= 25 && checkState.totalPages <= 35) {
+              if (checkState.totalPages > 0 && (targetSize >= 50 ? checkState.validRows >= 25 : checkState.validRows === targetSize)) {
                 gridState = checkState;
                 totalPages = checkState.totalPages;
                 sizeApplied = true;
@@ -486,9 +486,9 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
       }
 
       // GUARDIA ESTRICTA ANTI-106 PÁGINAS (Guard Rail de Seguridad):
-      // Si el usuario pidió 50 filas y la grilla sigue teniendo densidad de 10 filas (validRows < 25 o totalPages > 45),
+      // Si el usuario pidió 50 filas y la grilla sigue teniendo densidad de 10 filas (validRows < 25),
       // forzar un intento de reaplicación directa para no saturar memoria.
-      if (targetSize >= 50 && (gridState.validRows < 25 || totalPages > 45)) {
+      if (targetSize >= 50 && gridState.validRows < 25) {
         console.warn(`[Ext-${extractionId}] ALERTA GUARDIA: La grilla no aplicó 50 filas (sigue en ${gridState.validRows} filas, ${totalPages} págs). Forzando re-aplicación...`);
         onProgress({ message: `Aviso: Re-sincronizando grilla a ${targetSize} filas para evitar desborde...`, current: 13, total: 100, percentage: 14 });
         
@@ -507,7 +507,7 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
               await page.waitForTimeout(3000);
               await page.waitForSelector('.gx-mask, .Loading, #Loading', { state: 'hidden', timeout: 25000 }).catch(() => {});
               const finalGuardCheck = await getGridState();
-              if (finalGuardCheck.totalPages > 0 && finalGuardCheck.totalPages <= 35 && finalGuardCheck.validRows >= 25) {
+              if (finalGuardCheck.totalPages > 0 && finalGuardCheck.validRows >= 25) {
                 gridState = finalGuardCheck;
                 totalPages = finalGuardCheck.totalPages;
                 sizeApplied = true;
@@ -525,15 +525,15 @@ async function runScraper(extractionId, startDate, endDate, settings, pageSize =
     await applyPageSize();
 
     // GUARDIA DE COHERENCIA DE PÁGINAS (guardRail50Rows):
-    // Con 50 filas, un rango corto (<= 10 días) no puede dar más de MAX_COHERENT_PAGES páginas (debería dar ~23-28 páginas).
-    // Si la grilla muestra > 45 páginas o > MAX_COHERENT_PAGES, 50 filas NO quedó aplicado.
-    const MAX_COHERENT_PAGES = 60;
+    // Con 50 filas, un rango corto (<= 10 días) no puede exceder MAX_COHERENT_PAGES páginas (hasta ~7500 artículos).
+    // Si la grilla muestra densidad < 25 filas o supera el límite, 50 filas no quedó aplicado.
+    const MAX_COHERENT_PAGES = 150;
     const rangeDays = (startFormatted && endFormatted)
       ? Math.round((parseDate(endFormatted) - parseDate(startFormatted)) / 86400000) + 1
       : 999;
     const isIncoherent = () => targetSize >= 50 && (
       (rangeDays <= 10 && totalPages > MAX_COHERENT_PAGES) ||
-      (totalPages > 45 && gridState.validRows < 25)
+      gridState.validRows < 25
     );
 
     for (let fix = 1; fix <= 2 && isIncoherent(); fix++) {
