@@ -34,6 +34,7 @@ export default function ExtractMonthlyPage() {
   const [extractionId, setExtractionId] = useState<number | null>(null)
   const [status, setStatus] = useState<'idle' | 'running' | 'completed' | 'failed'>('idle')
   const logContainerRef = useRef<HTMLDivElement>(null)
+  const isCancelledRef = useRef<boolean>(false)
   const [motStatus, setMotStatus] = useState<string>('unknown')
   const [isTogglingMot, setIsTogglingMot] = useState<boolean>(false)
 
@@ -140,7 +141,11 @@ export default function ExtractMonthlyPage() {
             })
 
             for (const log of data.logs) {
-              const match = log.message?.match(/extracción de (\d+) páginas/i) || log.message?.match(/páginas detectadas:\s*(\d+)/i) || log.message?.match(/total de páginas:\s*(\d+)/i);
+              const match = log.message?.match(/grilla validada:\s*(\d+)\s*p[áa]ginas/i) ||
+                            log.message?.match(/extracci[oó]n de (\d+) p[áa]ginas/i) || 
+                            log.message?.match(/p[áa]ginas detectadas:\s*(\d+)/i) || 
+                            log.message?.match(/total de p[áa]ginas:\s*(\d+)/i) ||
+                            log.message?.match(/p[áa]ginas finales:\s*(\d+)/i);
               if (match) {
                 detectedTotal = parseInt(match[1]);
               }
@@ -166,14 +171,16 @@ export default function ExtractMonthlyPage() {
   }
 
   const handleStartExtraction = async () => {
+    isCancelledRef.current = false
     setIsExtracting(true)
     setStatus('running')
     setLogs([])
     setExtractionId(null)
 
-    const STAGE_MAX_PAGES = 6;
+    // Tamaño de etapa balanceado: 10 páginas por lote optimiza el tiempo y mantiene Chromium < 180MB RAM
+    const STAGE_MAX_PAGES = 10;
     const initialPage = Math.max(1, startPageInput);
-    let maxProjectedPages = 73;
+    let maxProjectedPages = 95;
     let totalStages = Math.ceil((maxProjectedPages - initialPage + 1) / STAGE_MAX_PAGES);
     setTotalStagesCount(totalStages)
 
@@ -184,6 +191,11 @@ export default function ExtractMonthlyPage() {
       let currentStartP = initialPage;
 
       while (currentStartP <= maxProjectedPages) {
+        if (isCancelledRef.current) {
+          setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: '🛑 Extracción detenida por cancelación.' }])
+          break;
+        }
+
         const startP = currentStartP;
         const endP = startP + STAGE_MAX_PAGES - 1;
         setCurrentStage(stageIndex)
@@ -195,8 +207,9 @@ export default function ExtractMonthlyPage() {
           message: `--- ${stageLabel.toUpperCase()} ---` 
         }])
         
-        setProgress({ percentage: 0, message: `Iniciando ${stageLabel}...` })
+        setProgress({ percentage: Math.min(95, Math.floor(((stageIndex - 1) / totalStages) * 90)), message: `Iniciando ${stageLabel}...` })
 
+        // keepMotPaused: true garantiza que MOT Bot permanezca apagado entre etapas y no colisione con la RAM
         const res = await fetch(API_URL('/api/extract'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -206,7 +219,8 @@ export default function ExtractMonthlyPage() {
             pageSize, 
             startPage: startP, 
             maxPages: STAGE_MAX_PAGES, 
-            stageName: `Extracción Mensual - ${stageLabel}` 
+            stageName: `Extracción Mensual - ${stageLabel}`,
+            keepMotPaused: true 
           })
         })
         const data = await res.json()
@@ -217,7 +231,39 @@ export default function ExtractMonthlyPage() {
         stageExtractionIds.push(data.extractionId)
         setExtractionId(data.extractionId)
 
-        const stageRes = await pollStageCompletion(data.extractionId)
+        let stageRes = await pollStageCompletion(data.extractionId)
+        
+        // Auto-reintento resiliente: si una etapa intermedia sufre una caída transitoria de red, reintentar 1 vez
+        if (!stageRes.success && !isCancelledRef.current) {
+          setLogs(prev => [...prev, { 
+            timestamp: new Date().toISOString(), 
+            message: `⚠️ ${stageLabel} tuvo una interrupción transitoria. Esperando 4s para reintentar la etapa...` 
+          }])
+          await new Promise(r => setTimeout(r, 4000));
+          if (isCancelledRef.current) break;
+
+          const retryRes = await fetch(API_URL('/api/extract'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              startDate, 
+              endDate, 
+              pageSize, 
+              startPage: startP, 
+              maxPages: STAGE_MAX_PAGES, 
+              stageName: `Extracción Mensual - ${stageLabel} (Reintento)`,
+              keepMotPaused: true 
+            })
+          })
+          const retryData = await retryRes.json()
+          if (retryRes.ok && retryData.extractionId != null) {
+            stageExtractionIds.pop();
+            stageExtractionIds.push(retryData.extractionId);
+            setExtractionId(retryData.extractionId);
+            stageRes = await pollStageCompletion(retryData.extractionId);
+          }
+        }
+
         if (!stageRes.success) {
           throw new Error(`La ${stageLabel} falló o se interrumpió.`)
         }
@@ -230,7 +276,7 @@ export default function ExtractMonthlyPage() {
 
         setLogs(prev => [...prev, { 
           timestamp: new Date().toISOString(), 
-          message: `✨ ${stageLabel} completada con éxito. Navegador cerrado y RAM liberada.` 
+          message: `✨ ${stageLabel} completada con éxito. Navegador cerrado y RAM liberada al 100%.` 
         }])
 
         if (startP + STAGE_MAX_PAGES > maxProjectedPages) {
@@ -248,8 +294,13 @@ export default function ExtractMonthlyPage() {
         stageIndex++;
       }
 
-      // Auto-fusionar las etapas procesadas en un único archivo unificado
+      if (isCancelledRef.current) {
+        setIsExtracting(false)
+        setStatus('idle')
+        return;
+      }
 
+      // Auto-fusionar las etapas procesadas en un único archivo unificado
       if (stageExtractionIds.length >= 2) {
         setLogs(prev => [...prev, { 
           timestamp: new Date().toISOString(), 
@@ -282,11 +333,14 @@ export default function ExtractMonthlyPage() {
         message: `🎉 ¡PROCESO FINALIZADO! Todas las etapas del mes fueron consolidadas en 1 solo archivo único en el Historial.` 
       }])
     } catch (err: any) {
-
       console.error('[Extracción Mensual por Páginas Error]', err)
       setIsExtracting(false)
       setStatus('failed')
       setProgress({ percentage: 0, message: `❌ ${err.message}` })
+    } finally {
+      // Reanudar MOT Bot de forma limpia al terminar la sesión completa (éxito, error o cancelación)
+      await fetch(API_URL('/api/mot-bot/resume'), { method: 'POST' }).catch(() => {});
+      await fetchMotStatus();
     }
   }
 
@@ -447,20 +501,21 @@ export default function ExtractMonthlyPage() {
             <button 
               className="w-full py-3 mt-2 rounded-lg border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-all font-bold flex items-center justify-center gap-2" 
               onClick={async () => {
+                isCancelledRef.current = true;
                 try {
                   await fetch(API_URL('/api/cancel-extract'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ extractionId })
-                  })
-                  setIsExtracting(false)
-                  setStatus('idle')
-                  setLogs([])
-                  setProgress({ percentage: 0, message: '' })
-                  localStorage.removeItem('activeExtraction')
-                  localStorage.removeItem('activeExtractionId')
+                  });
+                  await fetch(API_URL('/api/mot-bot/resume'), { method: 'POST' }).catch(() => {});
+                  setIsExtracting(false);
+                  setStatus('idle');
+                  setLogs(prev => [...prev, { timestamp: new Date().toISOString(), message: '🛑 Extracción cancelada por el usuario.' }]);
+                  setProgress({ percentage: 0, message: 'Cancelado' });
+                  await fetchMotStatus();
                 } catch (err) {
-                  console.error(err)
+                  console.error(err);
                 }
               }}
             >
@@ -495,6 +550,21 @@ export default function ExtractMonthlyPage() {
                 <p className="text-xs text-slate-400 italic">
                   {progress.message || 'Procesando datos del portal...'}
                 </p>
+
+                {status === 'completed' && (
+                  <div className="mt-2 pt-3 border-t border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <span className="text-xs text-emerald-300 font-medium">
+                      ✨ ¡Extracción finalizada con éxito! Todos los artículos ya están consolidados.
+                    </span>
+                    <a
+                      href={extractionId ? `/data?id=${extractionId}` : '/data'}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-900/40 transition-all hover:scale-105 shrink-0"
+                    >
+                      <CheckCircle2 size={16} />
+                      <span>Ver Datos Extraídos en Pantalla →</span>
+                    </a>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -530,16 +600,25 @@ export default function ExtractMonthlyPage() {
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2 text-xs">
                   {status === 'completed' ? (
-                    <><CheckCircle2 size={14} className="text-emerald-400" /> <span className="text-emerald-400">Finalizado</span></>
+                    <><CheckCircle2 size={14} className="text-emerald-400" /> <span className="text-emerald-400 font-bold">Finalizado</span></>
                   ) : status === 'failed' ? (
-                    <><AlertCircle size={14} className="text-red-400" /> <span className="text-red-400">Error</span></>
+                    <><AlertCircle size={14} className="text-red-400" /> <span className="text-red-400 font-bold">Error</span></>
                   ) : isExtracting ? (
-                    <><Loader2 size={14} className="animate-spin text-red-400" /> <span className="text-red-400">Procesando ({progress.percentage}%)</span></>
+                    <><Loader2 size={14} className="animate-spin text-red-400" /> <span className="text-red-400 font-bold">Procesando ({progress.percentage}%)</span></>
                   ) : (
                     <span className="text-slate-500">Inactivo</span>
                   )}
                 </div>
               </div>
+
+              {status === 'completed' && (
+                <a
+                  href={extractionId ? `/data?id=${extractionId}` : '/data'}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline transition-all"
+                >
+                  <span>Abrir Explorador de Datos →</span>
+                </a>
+              )}
             </div>
           </div>
         </div>

@@ -165,7 +165,7 @@ app.post('/api/cancel-extract', (req, res) => {
 });
 
 app.post('/api/extract', async (req, res) => {
-  const { startDate, endDate, pageSize, startPage, maxPages, stageName } = req.body;
+  const { startDate, endDate, pageSize, startPage, maxPages, stageName, keepMotPaused } = req.body;
   
   try {
     global._isExtractionRunning = true;
@@ -213,21 +213,34 @@ app.post('/api/extract', async (req, res) => {
       activeProgress[extractionId] = { percentage: 0, message: `Error: ${err.message}` };
     })
     .finally(async () => {
-      global._isExtractionRunning = false;
-      // Árbitro de Memoria: Reactivar MOT Bot automáticamente al finalizar la extracción
-      if (motScheduler && motScheduler.resumeAfterExtraction) {
-        await motScheduler.resumeAfterExtraction();
+      if (!keepMotPaused) {
+        global._isExtractionRunning = false;
+        // Árbitro de Memoria: Reactivar MOT Bot automáticamente al finalizar la extracción
+        if (motScheduler && motScheduler.resumeAfterExtraction) {
+          await motScheduler.resumeAfterExtraction();
+        }
       }
     });
 
     res.json({ extractionId, message: 'Extraction started' });
   } catch (err) {
-    global._isExtractionRunning = false;
-    if (motScheduler && motScheduler.resumeAfterExtraction) {
-      await motScheduler.resumeAfterExtraction().catch(() => {});
+    if (!keepMotPaused) {
+      global._isExtractionRunning = false;
+      if (motScheduler && motScheduler.resumeAfterExtraction) {
+        await motScheduler.resumeAfterExtraction().catch(() => {});
+      }
     }
     res.status(500).json({ error: err.message });
   }
+});
+
+// Endpoint para reanudar MOT Bot al concluir sesiones multietapa (ej. Extracción Mensual)
+app.post('/api/mot-bot/resume', async (req, res) => {
+  global._isExtractionRunning = false;
+  if (motScheduler && motScheduler.resumeAfterExtraction) {
+    await motScheduler.resumeAfterExtraction().catch(() => {});
+  }
+  res.json({ ok: true, message: 'MOT Bot reanudado exitosamente.' });
 });
 
 app.post('/api/extractions/merge', async (req, res) => {
