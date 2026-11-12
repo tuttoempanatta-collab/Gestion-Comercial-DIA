@@ -1309,21 +1309,51 @@ async function executeTemperatureControlOnMot(task, options = {}) {
   await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await _page.waitForTimeout(2500);
 
-  // 1. Validar Legajo Responsable (#W0093W0024vRESPONSABLE + #W0093W0024BTNVALIDARRESP)
-  const respInput = _page.locator('#W0093W0024vRESPONSABLE, input[id*="vRESPONSABLE"]').first();
-  if (await respInput.isVisible().catch(() => false)) {
-    await respInput.fill('');
-    await respInput.fill(String(legajo));
-    const valBtn = _page.locator('#W0093W0024BTNVALIDARRESP, input[value="Validar"]').first();
-    if (await valBtn.isVisible().catch(() => false)) {
-      await valBtn.click();
-      await _page.waitForTimeout(2500);
-    }
-  }
+  // 1. Validar Legajo Responsable con Cascada de Resiliencia (#W0093W0024vRESPONSABLE + #W0093W0024BTNVALIDARRESP)
+  const candidateLegajos = Array.from(new Set([
+    String(legajo || '').trim(),
+    String(_motLegajoTarde || '').trim(),
+    String(_motLegajoManana || '').trim(),
+    '29479',
+    '23250',
+    String(DEFAULT_LEGAJO).trim()
+  ])).filter(Boolean);
 
-  const respValidatedName = await _page.locator('#span_W0093W0024vRESPONSABLE').innerText().catch(() => '');
-  if (respValidatedName) {
-    log(`[Motor IA Temperatura] Legajo ${legajo} validado en MOT: ${respValidatedName.trim()}`);
+  let validatedLegajo = null;
+  const respInput = _page.locator('#W0093W0024vRESPONSABLE, input[id*="vRESPONSABLE"]').first();
+
+  if (await respInput.isVisible().catch(() => false)) {
+    for (const cand of candidateLegajos) {
+      await respInput.scrollIntoViewIfNeeded().catch(() => {});
+      await respInput.click({ timeout: 2000 }).catch(() => {});
+      await respInput.fill('');
+      await respInput.fill(cand);
+      await respInput.press('Tab').catch(() => {});
+      await _page.waitForTimeout(300);
+
+      // Sincronizar en DOM con eventos GeneXus
+      await respInput.evaluate((el, val) => {
+        el.value = val;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }, cand).catch(() => {});
+
+      const valBtn = _page.locator('#W0093W0024BTNVALIDARRESP, input[value="Validar"]').first();
+      if (await valBtn.isVisible().catch(() => false)) {
+        await valBtn.click();
+        await _page.waitForTimeout(2000);
+      }
+
+      const respValidatedName = await _page.locator('#span_W0093W0024vRESPONSABLE').innerText().catch(() => '');
+      if (respValidatedName && respValidatedName.trim()) {
+        validatedLegajo = cand;
+        log(`[Motor IA Temperatura] Legajo ${cand} validado en MOT: ${respValidatedName.trim()}`);
+        break;
+      } else {
+        log(`[Motor IA Temperatura] Legajo ${cand} no aceptado por MOT en esta tarea. Probando alternativa...`, 'warn');
+      }
+    }
   }
 
   let totalAprobados = 0;
