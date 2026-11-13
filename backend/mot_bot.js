@@ -1820,8 +1820,16 @@ async function executeCaducidadesOnMot(task) {
   const maxIterations = 100; // tope de seguridad
 
   for (let step = 0; step < maxIterations; step++) {
-    // Verificar si queda al menos un botón de Aprobar (tilde verde) en la primera fila pendiente
-    const apBtn = _page.locator('#W0093W0018W0023APROBAR_0001, [id*="GriddatapendienteContainerRow_0001"] [id*="APROBAR"], [id*="GriddatapendienteContainerRow_0001"] img[title*="Aprobar"]').first();
+    // Verificar si queda al menos un botón de Aprobar (tilde verde) en cualquier fila pendiente
+    const apBtn = _page.locator([
+      '#W0093W0018W0023APROBAR_0001',
+      '[id*="GriddatapendienteContainerRow_"] [id*="APROBAR"]',
+      '[id*="GriddatapendienteContainerRow_"] img[src*="icorrecto"]',
+      '[id*="GriddatapendienteContainerRow_"] img[title*="Aprobar" i]',
+      '[id*="GriddatapendienteContainerRow_"] [title*="Aprobar" i]',
+      '[id*="Griddatapendiente"] [id*="APROBAR"]',
+      '[id*="APROBAR_0001"]:visible'
+    ].join(', ')).first();
     const isVisible = await apBtn.isVisible().catch(() => false);
     if (!isVisible) {
       break; // Ya no quedan artículos pendientes por aprobar
@@ -1834,9 +1842,29 @@ async function executeCaducidadesOnMot(task) {
     }).catch(() => `Artículo ${step + 1}`);
 
     log(`[Motor IA Caducidades] Tildando verde artículo #${step + 1}: "${itemDesc}"...`);
-    await apBtn.click({ timeout: 4000 }).catch(() => {});
-    await _page.waitForTimeout(2000);
-    approvedCount++;
+    let clicked = false;
+    await apBtn.click({ timeout: 4000, force: true }).then(() => { clicked = true; }).catch(async () => {
+      clicked = await apBtn.evaluate(el => { el.click(); return true; }).catch(() => false);
+    });
+
+    if (!clicked) {
+      clicked = await _page.evaluate(() => {
+        const btn = document.querySelector('[id*="GriddatapendienteContainerRow_"] [id*="APROBAR"], [id*="GriddatapendienteContainerRow_"] img[src*="icorrecto"], [id*="Griddatapendiente"] img[title*="Aprobar" i]');
+        if (btn) {
+          btn.click();
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+    }
+
+    if (clicked) {
+      approvedCount++;
+      await _page.waitForTimeout(2000);
+    } else {
+      log(`[Motor IA Caducidades] No se pudo hacer clic en el tilde verde para "${itemDesc}".`, 'warn');
+      break;
+    }
   }
 
   // 2. Si quedó algún botón general de Cumplir visible en la pantalla de detalle, clickearlo
@@ -1848,6 +1876,7 @@ async function executeCaducidadesOnMot(task) {
     await handleMotivePopupIfPresent('Caducidades revisadas en tienda');
   }
 
+  _caducidadesAuditedDate = getTodayStrArg();
   log(`✓ [Motor IA Caducidades] Control completado exitosamente: ${approvedCount} artículo(s) tildado(s) en riesgo.`);
   return {
     ok: true,
@@ -2289,6 +2318,7 @@ async function markWithRetry(task, executor, options = {}) {
 
 const _failedAttempts = new Map(); // key -> { count, lastTs }
 let _failedDate = '';
+let _caducidadesAuditedDate = '';
 const MAX_FAILED_CYCLES = 3;
 const FAILED_RETRY_BACKOFF_MS = 15 * 60 * 1000; // 15 min de espera para reintentar tareas pendientes / fuera de hora
 
@@ -2296,6 +2326,7 @@ async function markDueTasks(markedToday = new Set()) {
   if (_failedDate !== getTodayStrArg()) {
     _failedAttempts.clear();
     _failedDate = getTodayStrArg();
+    _caducidadesAuditedDate = '';
   }
   return await withLock(async () => {
     const results = [];
@@ -2348,14 +2379,25 @@ async function markDueTasks(markedToday = new Set()) {
       const key = `${task.nombre}|${task.horarioInicio}-${task.horarioCierre}`;
 
       // 1. Detección proactiva de tareas ya cumplidas en el APK oficial o servidor MOT
-      if ((task.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(task.estadoCode)) || (task.horaCumplimiento && task.horaCumplimiento !== '00:00')) {
-        if (!markedToday.has(key)) {
-          markedToday.add(key);
-          markedToday.add(task.nombre);
-          const horaTxt = task.horaCumplimiento ? ` a las ${task.horaCumplimiento} hs` : '';
-          log(`📱 [APK Oficial Detectado] Tarea "${task.nombre}" ya cumplida en el APK oficial (${task.estadoTexto || task.estadoCode}${horaTxt}). Omitiendo re-ejecución.`);
+      const isAlreadyDone = (task.estadoCode && ['C', 'FT', 'NC', 'NA'].includes(task.estadoCode)) || (task.horaCumplimiento && task.horaCumplimiento !== '00:00');
+      const isCaducidadTask = task.tipoControl === 'Caducidad' || /caducidad/i.test(task.nombre);
+      const isCadAuditedToday = _caducidadesAuditedDate === getTodayStrArg();
+
+      if (isAlreadyDone) {
+        // Excepción de Integridad: En MOT, Caducidades puede marcarse "C" en webtareashoy
+        // por toque manual en la tienda, pero sus "Artículos en riesgo" internos pueden requerir tilde verde.
+        if (isCaducidadTask && !isCadAuditedToday) {
+          log(`🔍 [Auditoría Caducidades] "${task.nombre}" figura cumplida a nivel grilla (${task.horaCumplimiento || task.estadoCode}), pero verificando si quedan artículos en riesgo pendientes de tilde verde...`);
+          // Dejar continuar para que executeCaducidadesOnMot tilde los artículos pendientes
+        } else {
+          if (!markedToday.has(key)) {
+            markedToday.add(key);
+            markedToday.add(task.nombre);
+            const horaTxt = task.horaCumplimiento ? ` a las ${task.horaCumplimiento} hs` : '';
+            log(`📱 [APK Oficial Detectado] Tarea "${task.nombre}" ya cumplida en el APK oficial (${task.estadoTexto || task.estadoCode}${horaTxt}). Omitiendo re-ejecución.`);
+          }
+          continue;
         }
-        continue;
       }
 
       if (markedToday.has(key) || markedToday.has(task.nombre)) continue;
@@ -2400,7 +2442,9 @@ async function markDueTasks(markedToday = new Set()) {
             return res;
           }
           if (t.tipoControl === 'Caducidad' || /caducidad/i.test(t.nombre)) {
-            return await executeCaducidadesOnMot(t);
+            const res = await executeCaducidadesOnMot(t);
+            _caducidadesAuditedDate = getTodayStrArg();
+            return res;
           }
           if (t.tipoControl === 'Limpieza') {
             return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo, motivo });
@@ -2519,7 +2563,9 @@ async function runPreSleepSweepAndResolve() {
             return await executeTemperatureControlOnMot(t, { responsable: shiftLegajo });
           }
           if (t.tipoControl === 'Caducidad' || /caducidad/i.test(t.nombre)) {
-            return await executeCaducidadesOnMot(t);
+            const res = await executeCaducidadesOnMot(t);
+            _caducidadesAuditedDate = getTodayStrArg();
+            return res;
           }
           if (t.tipoControl === 'Limpieza') {
             return await executeLimpiezaControlOnMot(t, { responsable: shiftLegajo });

@@ -338,9 +338,44 @@ runAssert('scraper.js exporta la función asíncrona "runScraper"', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. Comparación con el Golden Master
+// 7. Blindaje de Marcaciones Especiales MOT (Temperatura y Caducidades)
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n\x1b[36m[Fase 7: Comparación con Snapshot Golden Master]\x1b[0m');
+console.log('\n\x1b[36m[Fase 7: Blindaje de Marcaciones Especiales MOT (Temperatura y Caducidades)]\x1b[0m');
+
+const motBotFullCode = fs.readFileSync(path.join(BACKEND_DIR, 'mot_bot.js'), 'utf8');
+
+runAssert('Control de temperatura soporta tags img, :visible y fallback DOM click para botones GeneXus', () => {
+  if (!motBotFullCode.includes('#W0093W0024W0034APROBAR_0001') || !motBotFullCode.includes('img[id*="APROBAR_0001"]') || !motBotFullCode.includes('apBtn.evaluate(el => el.click())')) {
+    throw new Error('mot_bot.js no contiene selectores completos para tags img o fallback de click en botones de temperatura.');
+  }
+  return true;
+});
+
+runAssert('Control de temperatura despacha eventos change y blur para sincronizar inputs GeneXus', () => {
+  if (!motBotFullCode.includes("eqField.dispatchEvent('change')") || !motBotFullCode.includes("prField.dispatchEvent('change')")) {
+    throw new Error('mot_bot.js no despacha eventos change/blur en inputs de temperatura.');
+  }
+  return true;
+});
+
+runAssert('Caducidades audita y tilda artículos en riesgo con selector universal icorrecto y fallback', () => {
+  if (!motBotFullCode.includes('img[src*="icorrecto"]') || !motBotFullCode.includes('GriddatapendienteContainerRow_') || !motBotFullCode.includes('apBtn.evaluate(el => { el.click(); return true; })')) {
+    throw new Error('executeCaducidadesOnMot no contiene selectores universales ni fallback de click.');
+  }
+  return true;
+});
+
+runAssert('markDueTasks no omite Caducidades por estado C en cabecera sin auditar artículos en riesgo', () => {
+  if (!motBotFullCode.includes('isCaducidadTask && !isCadAuditedToday')) {
+    throw new Error('markDueTasks omite Caducidades sin auditar si quedan artículos en riesgo pendientes.');
+  }
+  return true;
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Comparación con el Golden Master
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n\x1b[36m[Fase 8: Comparación con Snapshot Golden Master]\x1b[0m');
 
 let hasDrift = false;
 let goldenFilesValid = true;

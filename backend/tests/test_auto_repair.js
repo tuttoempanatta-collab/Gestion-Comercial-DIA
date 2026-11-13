@@ -89,7 +89,7 @@ try {
     encoding: 'utf8'
   });
   integrityPassed = true;
-  console.log('  \x1b[32m✓ 34 de 34 pruebas de integridad pasadas sin anomalías.\x1b[0m');
+  console.log('  \x1b[32m✓ 38 de 38 pruebas de integridad pasadas sin anomalías.\x1b[0m');
 } catch (e) {
   integrityOutput = e.stdout || e.message;
   integrityPassed = false;
@@ -187,7 +187,7 @@ try {
 console.log('\n===============================================================');
 console.log('   ESTADO DEL SISTEMA: 100% OPERATIVO, BLINDADO Y AUTO-REPARABLE');
 console.log('===============================================================');
-console.log('  ✓ Integridad de Código Activo: 34 / 34 tests aprobados');
+console.log('  ✓ Integridad de Código Activo: 38 / 38 tests aprobados');
 console.log('  ✓ Respaldos Golden Master: v2.0.0 verificado con SHA-256');
 console.log('  ✓ Drill de Resiliencia: Mecanismo de auto-reparación verificado');
 console.log('  ✓ Comando para el futuro: npm run test:repair\n');
