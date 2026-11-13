@@ -1306,8 +1306,23 @@ async function executeTemperatureControlOnMot(task, options = {}) {
     await doLogin(true);
   }
 
-  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-  await _page.waitForTimeout(2500);
+  // Si ya estamos en webtareashoy, preferir click nativo sobre la fila para preservar headers y evitar bloqueo WAF
+  let navigatedViaClick = false;
+  try {
+    if (_page && !_page.isClosed() && _page.url().includes('webtareashoy')) {
+      const rowLink = _page.locator(`#span_MAESTROTAREANOMBRE_${task.rowIndex} a, tr[id*="${task.rowIndex}"] a, a:has-text("${task.nombre}")`).first();
+      if (await rowLink.isVisible().catch(() => false)) {
+        await rowLink.click({ timeout: 5000 }).catch(() => {});
+        await _page.waitForTimeout(2500);
+        navigatedViaClick = true;
+      }
+    }
+  } catch (_) {}
+
+  if (!navigatedViaClick) {
+    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await _page.waitForTimeout(2500);
+  }
 
   // 1. Validar Legajo Responsable con Cascada de Resiliencia (#W0093W0024vRESPONSABLE + #W0093W0024BTNVALIDARRESP)
   const candidateLegajos = Array.from(new Set([
@@ -1402,7 +1417,7 @@ async function executeTemperatureControlOnMot(task, options = {}) {
       const span = document.querySelector('[id*="vEQUIPAMIENTONOMB_0001"], [id*="vEQUIPAMIENTONOMB"]');
       const eqIn = document.querySelector('input[id*="vTEMPERATURAEQUIPO_0001"], input[id*="vTEMPERATURAEQUIPO"]');
       const prIn = document.querySelector('input[id*="vTEMPERATURAPRODUCTO_0001"], input[id*="vTEMPERATURAPRODUCTO"]');
-      const apBt = document.querySelector('input[id*="APROBAR_0001"], button[id*="APROBAR_0001"], input[value*="Aprobar" i]');
+      const apBt = document.querySelector('#W0093W0024W0034APROBAR_0001, [id*="W0034"][id*="APROBAR_0001"], [id*="APROBAR_0001"], [id*="vAPROBAR_0001"], img[title*="Aprobar" i], [title*="Aprobar" i], input[value*="Aprobar" i]');
       const guid = document.querySelector('input[id*="vEQUIPAMIENTOGUID_0001"], input[id*="vEQUIPAMIENTOGUID"]');
       if (!span || !eqIn || !prIn || !apBt) return null;
       return {
@@ -1450,14 +1465,61 @@ async function executeTemperatureControlOnMot(task, options = {}) {
     const eqField = _page.locator('input[id*="vTEMPERATURAEQUIPO_0001"], input[id*="vTEMPERATURAEQUIPO"]').first();
     const prField = _page.locator('input[id*="vTEMPERATURAPRODUCTO_0001"], input[id*="vTEMPERATURAPRODUCTO"]').first();
     await eqField.fill(String(tempEqui), { timeout: 3000 }).catch(() => {});
+    await eqField.dispatchEvent('change').catch(() => {});
+    await eqField.dispatchEvent('blur').catch(() => {});
     await prField.fill(String(tempProd), { timeout: 3000 }).catch(() => {});
-    await _page.waitForTimeout(150);
+    await prField.dispatchEvent('change').catch(() => {});
+    await prField.dispatchEvent('blur').catch(() => {});
+    await _page.waitForTimeout(200);
 
-    const apBtn = _page.locator('input[id*="APROBAR_0001"], button[id*="APROBAR_0001"], input[value*="Aprobar" i]').first();
+    const apBtn = _page.locator([
+      '#W0093W0024W0034APROBAR_0001',
+      '#W0093W0024W0034vAPROBAR_0001',
+      '[id*="W0034"][id*="APROBAR_0001"]',
+      'img[id*="APROBAR_0001"]',
+      'img[id*="APROBAR"]',
+      'input[id*="APROBAR_0001"]',
+      'button[id*="APROBAR_0001"]',
+      '[id*="APROBAR_0001"]',
+      'img[title*="Aprobar" i]',
+      'img[alt*="Aprobar" i]',
+      '[title*="Aprobar" i]',
+      'input[value*="Aprobar" i]'
+    ].join(', ')).first();
+
+    let clicked = false;
     if (await apBtn.isVisible().catch(() => false)) {
-      await apBtn.click({ timeout: 3000 }).catch(() => {});
-      await _page.waitForTimeout(1500);
+      await apBtn.click({ timeout: 4000, force: true }).catch(async () => {
+        await apBtn.evaluate(el => el.click()).catch(() => {});
+      });
+      clicked = true;
+    } else {
+      clicked = await _page.evaluate(() => {
+        const candidates = Array.from(document.querySelectorAll(
+          '#W0093W0024W0034APROBAR_0001, [id*="W0034"][id*="APROBAR_0001"], [id*="APROBAR_0001"], [id*="vAPROBAR_0001"], img[title*="Aprobar" i], [title*="Aprobar" i], input[value*="Aprobar" i]'
+        ));
+        const visibleEl = candidates.find(el => {
+          if (el.tagName === 'INPUT' && el.type === 'hidden') return false;
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return style.display !== 'none' && style.visibility !== 'hidden' && (rect.width > 0 || rect.height > 0);
+        }) || candidates[0];
+
+        if (visibleEl) {
+          visibleEl.click();
+          return true;
+        }
+        return false;
+      }).catch(() => false);
+    }
+
+    if (clicked) {
       totalAprobados++;
+      log(`[Motor IA Temperatura] Equipo "${rowData.nombre}" aprobado exitosamente (${totalAprobados} equipos aprobados).`);
+      await _page.waitForTimeout(2000);
+    } else {
+      log(`[Motor IA Temperatura] No se pudo hacer clic en el botón Aprobar para el equipo "${rowData.nombre}".`, 'warn');
+      break;
     }
 
     tempHistory.byDate[todayStr][rowData.nombre] = {
@@ -1730,8 +1792,23 @@ async function executeCaducidadesOnMot(task) {
     await doLogin(true);
   }
 
-  await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
-  await _page.waitForTimeout(2500);
+  // Si ya estamos en webtareashoy, preferir click nativo sobre la fila para preservar headers y evitar bloqueo WAF
+  let navigatedViaClick = false;
+  try {
+    if (_page && !_page.isClosed() && _page.url().includes('webtareashoy')) {
+      const rowLink = _page.locator(`#span_MAESTROTAREANOMBRE_${task.rowIndex} a, tr[id*="${task.rowIndex}"] a, a:has-text("${task.nombre}")`).first();
+      if (await rowLink.isVisible().catch(() => false)) {
+        await rowLink.click({ timeout: 5000 }).catch(() => {});
+        await _page.waitForTimeout(2500);
+        navigatedViaClick = true;
+      }
+    }
+  } catch (_) {}
+
+  if (!navigatedViaClick) {
+    await _page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await _page.waitForTimeout(2500);
+  }
 
   // 1. Detectar cantidad inicial de artículos en riesgo
   const initialCount = await _page.evaluate(() => {
@@ -1917,6 +1994,10 @@ async function markTaskOnMot(params = {}) {
     const accion = (params.accion || 'C').toUpperCase();
     const motivo = params.motivo || 'Operación en tienda';
     log(`Ejecutando acción [${accion}] sobre tarea [${task.rowIndex}] "${task.nombre}" (tipo: ${task.tipoControl})...`);
+
+    // Resetear contador de fallos para esta tarea para permitir reintento inmediato
+    const key = `${task.nombre}|${task.horarioInicio}-${task.horarioCierre}`;
+    _failedAttempts.delete(key);
 
     const applyLocalMark = (code) => {
       const now = getNowArgentina();
@@ -2526,6 +2607,7 @@ module.exports = {
   getMotDashboard,
   getTaskDetail,
   markTaskOnMot,
+  executeTemperatureControlOnMot,
   executeCaducidadesOnMot,
   markDueTasks,
   runPreSleepSweepAndResolve,
