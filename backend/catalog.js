@@ -40,8 +40,7 @@ module.exports = {
       );
       if (res.rows.length > 0) {
         const row = res.rows[0];
-        const hasPortalPrice = item.precio_fidelizado && item.precio_fidelizado !== '0,00' && item.precio_fidelizado !== '0';
-        if (!hasPortalPrice && row.price_amount !== null && row.price_amount !== undefined) {
+        if (row.price_amount !== null && row.price_amount !== undefined) {
           const numPrice = parseFloat(row.price_amount);
           if (!isNaN(numPrice) && numPrice > 0) {
             item.precio_fidelizado = String(numPrice.toFixed(2)).replace('.', ',');
@@ -65,8 +64,7 @@ module.exports = {
       const stmt = db.prepare('SELECT LoyaltyDescription, PriceAmount, CurrentQuantityInUnits FROM Item WHERE ItemID = ?');
       const result = stmt.get(String(item.codigo));
       if (result) {
-        const hasPortalPrice = item.precio_fidelizado && item.precio_fidelizado !== '0,00' && item.precio_fidelizado !== '0';
-        if (!hasPortalPrice && result.PriceAmount !== null && result.PriceAmount !== undefined) {
+        if (result.PriceAmount !== null && result.PriceAmount !== undefined) {
           const numPrice = parseFloat(result.PriceAmount);
           if (!isNaN(numPrice) && numPrice > 0) {
             item.precio_fidelizado = String(numPrice.toFixed(2)).replace('.', ',');

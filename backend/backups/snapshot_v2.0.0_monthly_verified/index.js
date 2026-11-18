@@ -531,13 +531,28 @@ app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
 
     // Fast bulk update of stock and price in commercial_actions
     try {
+      // 1. Actualizar stock en todas las acciones comerciales existentes
       await pool.query(`
         UPDATE commercial_actions
         SET stock = (SELECT COALESCE(current_quantity, 0) FROM catalog_items WHERE item_id = commercial_actions.codigo)
         WHERE EXISTS (SELECT 1 FROM catalog_items WHERE item_id = commercial_actions.codigo)
       `);
+
+      // 2. Actualizar precio_fidelizado con el precio más reciente del catálogo .db
+      await pool.query(`
+        UPDATE commercial_actions
+        SET precio_fidelizado = (
+          SELECT REPLACE(CAST(ROUND(CAST(price_amount AS numeric), 2) AS text), '.', ',')
+          FROM catalog_items
+          WHERE item_id = commercial_actions.codigo AND price_amount > 0
+        )
+        WHERE EXISTS (
+          SELECT 1 FROM catalog_items
+          WHERE item_id = commercial_actions.codigo AND price_amount > 0
+        )
+      `);
     } catch (updateErr) {
-      console.warn('[Catalog Sync Warning]: Could not bulk update stock in commercial_actions:', updateErr.message);
+      console.warn('[Catalog Sync Warning]: Could not bulk update stock/prices in commercial_actions:', updateErr.message);
     }
 
     // Clean up temp file

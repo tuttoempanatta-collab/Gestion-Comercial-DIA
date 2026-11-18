@@ -100,8 +100,37 @@ module.exports = {
   },
 
   getExtractionData: async (extractionId) => {
-    const res = await pool.query('SELECT * FROM commercial_actions WHERE extraction_id = $1', [extractionId]);
-    return res.rows;
+    const query = `
+      SELECT 
+        ca.*,
+        ci.price_amount AS catalog_price,
+        ci.current_quantity AS catalog_stock,
+        ci.loyalty_description AS catalog_desc
+      FROM commercial_actions ca
+      LEFT JOIN catalog_items ci ON ci.item_id = ca.codigo
+      WHERE ca.extraction_id = $1
+      ORDER BY ca.id ASC
+    `;
+    const res = await pool.query(query, [extractionId]);
+    return res.rows.map(row => {
+      // Priorizar SIEMPRE el precio más actualizado del catálogo .db si existe
+      if (row.catalog_price !== null && row.catalog_price !== undefined) {
+        const numPrice = parseFloat(row.catalog_price);
+        if (!isNaN(numPrice) && numPrice > 0) {
+          row.precio_fidelizado = String(numPrice.toFixed(2)).replace('.', ',');
+        }
+      }
+      if (row.catalog_stock !== null && row.catalog_stock !== undefined) {
+        row.stock = Math.max(0, Math.round(row.catalog_stock));
+      }
+      if (row.catalog_desc && (!row.articulo || row.articulo === row.codigo)) {
+        row.articulo = row.catalog_desc;
+      }
+      delete row.catalog_price;
+      delete row.catalog_stock;
+      delete row.catalog_desc;
+      return row;
+    });
   },
 
   getSettings: async () => {
@@ -236,17 +265,37 @@ module.exports = {
       const startDate = firstExt.start_date;
       const endDate = lastExt.end_date;
 
-      // 2. Fetch all commercial actions for these extractions
-      const actionsRes = await client.query(
-        'SELECT * FROM commercial_actions WHERE extraction_id = ANY($1::int[]) ORDER BY id ASC',
-        [extractionIds]
-      );
+      // 2. Fetch all commercial actions for these extractions with current catalog data
+      const actionsRes = await client.query(`
+        SELECT 
+          ca.*,
+          ci.price_amount AS catalog_price,
+          ci.current_quantity AS catalog_stock,
+          ci.loyalty_description AS catalog_desc
+        FROM commercial_actions ca
+        LEFT JOIN catalog_items ci ON ci.item_id = ca.codigo
+        WHERE ca.extraction_id = ANY($1::int[]) 
+        ORDER BY ca.id ASC
+      `, [extractionIds]);
 
       // 3. Deduplicate by codigo
       const uniqueMap = new Map();
       for (const item of actionsRes.rows) {
         const code = (item.codigo || '').toString().trim();
         if (!code) continue;
+
+        if (item.catalog_price !== null && item.catalog_price !== undefined) {
+          const numPrice = parseFloat(item.catalog_price);
+          if (!isNaN(numPrice) && numPrice > 0) {
+            item.precio_fidelizado = String(numPrice.toFixed(2)).replace('.', ',');
+          }
+        }
+        if (item.catalog_stock !== null && item.catalog_stock !== undefined) {
+          item.stock = Math.max(0, Math.round(item.catalog_stock));
+        }
+        if (item.catalog_desc && (!item.articulo || item.articulo === item.codigo)) {
+          item.articulo = item.catalog_desc;
+        }
 
         if (!uniqueMap.has(code)) {
           uniqueMap.set(code, { ...item });

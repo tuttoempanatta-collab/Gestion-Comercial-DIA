@@ -373,9 +373,39 @@ runAssert('markDueTasks no omite Caducidades por estado C en cabecera sin audita
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. Comparación con el Golden Master
+// 8. Sincronización de Precios del Catálogo .db y Cartelería
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n\x1b[36m[Fase 8: Comparación con Snapshot Golden Master]\x1b[0m');
+console.log('\n\x1b[36m[Fase 8: Sincronización de Precios del Catálogo .db y Cartelería]\x1b[0m');
+
+const dbCode = fs.readFileSync(path.join(BACKEND_DIR, 'db.js'), 'utf8');
+const catalogCode = fs.readFileSync(path.join(BACKEND_DIR, 'catalog.js'), 'utf8');
+const indexFullCode = fs.readFileSync(INDEX_PATH, 'utf8');
+
+runAssert('getExtractionData prioriza dinámicamente el precio y stock más actualizados de catalog_items (.db)', () => {
+  if (!dbCode.includes('ci.price_amount AS catalog_price') || !dbCode.includes('row.catalog_price !== null')) {
+    throw new Error('getExtractionData no realiza LEFT JOIN con catalog_items para priorizar precios actualizados.');
+  }
+  return true;
+});
+
+runAssert('index.js actualiza precio_fidelizado y stock en commercial_actions al subir nuevo catalog.db', () => {
+  if (!indexFullCode.includes('UPDATE commercial_actions') || !indexFullCode.includes('price_amount > 0')) {
+    throw new Error('upload-catalog en index.js no actualiza precios en commercial_actions.');
+  }
+  return true;
+});
+
+runAssert('catalog.js prioriza siempre el precio del catálogo .db ante cualquier extracción', () => {
+  if (catalogCode.includes('!hasPortalPrice && row.price_amount')) {
+    throw new Error('enrichWithCatalog condiciona el precio del catálogo a !hasPortalPrice.');
+  }
+  return true;
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Comparación con el Golden Master
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n\x1b[36m[Fase 9: Comparación con Snapshot Golden Master]\x1b[0m');
 
 let hasDrift = false;
 let goldenFilesValid = true;
