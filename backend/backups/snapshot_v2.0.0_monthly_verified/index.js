@@ -529,13 +529,24 @@ app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
       imported += batch.length;
     }
 
+    // Keep local fallback catalog.db in sync and refresh memory cache
+    try {
+      const { reloadCatalog } = require('./catalog');
+      const catalogPath = path.join(__dirname, 'catalog.db');
+      fs.copyFileSync(tmpPath, catalogPath);
+      if (typeof reloadCatalog === 'function') reloadCatalog();
+      console.log('[Catalog Sync] Local catalog.db updated and cache refreshed.');
+    } catch (copyErr) {
+      console.warn('[Catalog Sync Warning] Could not sync local catalog.db file:', copyErr.message);
+    }
+
     // Fast bulk update of stock and price in commercial_actions
     try {
       // 1. Actualizar stock en todas las acciones comerciales existentes
       await pool.query(`
         UPDATE commercial_actions
-        SET stock = (SELECT COALESCE(current_quantity, 0) FROM catalog_items WHERE item_id = commercial_actions.codigo)
-        WHERE EXISTS (SELECT 1 FROM catalog_items WHERE item_id = commercial_actions.codigo)
+        SET stock = (SELECT COALESCE(current_quantity, 0) FROM catalog_items WHERE item_id = TRIM(commercial_actions.codigo))
+        WHERE EXISTS (SELECT 1 FROM catalog_items WHERE item_id = TRIM(commercial_actions.codigo))
       `);
 
       // 2. Actualizar precio_fidelizado con el precio más reciente del catálogo .db
@@ -544,11 +555,11 @@ app.post('/api/upload-catalog', upload.single('catalog'), async (req, res) => {
         SET precio_fidelizado = (
           SELECT REPLACE(CAST(ROUND(CAST(price_amount AS numeric), 2) AS text), '.', ',')
           FROM catalog_items
-          WHERE item_id = commercial_actions.codigo AND price_amount > 0
+          WHERE item_id = TRIM(commercial_actions.codigo) AND price_amount > 0
         )
         WHERE EXISTS (
           SELECT 1 FROM catalog_items
-          WHERE item_id = commercial_actions.codigo AND price_amount > 0
+          WHERE item_id = TRIM(commercial_actions.codigo) AND price_amount > 0
         )
       `);
     } catch (updateErr) {

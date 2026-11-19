@@ -107,7 +107,7 @@ module.exports = {
         ci.current_quantity AS catalog_stock,
         ci.loyalty_description AS catalog_desc
       FROM commercial_actions ca
-      LEFT JOIN catalog_items ci ON ci.item_id = ca.codigo
+      LEFT JOIN catalog_items ci ON ci.item_id = TRIM(ca.codigo)
       WHERE ca.extraction_id = $1
       ORDER BY ca.id ASC
     `;
@@ -273,7 +273,7 @@ module.exports = {
           ci.current_quantity AS catalog_stock,
           ci.loyalty_description AS catalog_desc
         FROM commercial_actions ca
-        LEFT JOIN catalog_items ci ON ci.item_id = ca.codigo
+        LEFT JOIN catalog_items ci ON ci.item_id = TRIM(ca.codigo)
         WHERE ca.extraction_id = ANY($1::int[]) 
         ORDER BY ca.id ASC
       `, [extractionIds]);

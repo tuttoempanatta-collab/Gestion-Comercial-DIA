@@ -7,6 +7,15 @@ const catalogPath = path.join(__dirname, 'catalog.db');
 
 let catalogDb = null;
 
+function reloadCatalog() {
+  if (catalogDb) {
+    try {
+      catalogDb.close();
+    } catch (_) {}
+    catalogDb = null;
+  }
+}
+
 function getLocalCatalogDb() {
   if (catalogDb) return catalogDb;
   if (fs.existsSync(catalogPath)) {
@@ -25,6 +34,7 @@ function getLocalCatalogDb() {
 const { getDescription } = require('./description_db');
 
 module.exports = {
+  reloadCatalog,
   enrichWithCatalog: async (item) => {
     // 1. Enrich description from IET data
     const enrichedDescription = await getDescription(item.codigo);
