@@ -923,6 +923,12 @@ app.listen(PORT, () => {
     console.log(`[MOT-Schedule] Planificador semanal de turnos inicializado (${Object.keys(sched || {}).length} fechas programadas)`);
   }).catch(() => {});
 
+  // Restaurar sesión de MOT desde la base de datos si no existe en disco local
+  try {
+    const motBot = require('./mot_bot');
+    if (motBot.restoreSessionFromDb) motBot.restoreSessionFromDb().catch(() => {});
+  } catch (_) {}
+
   // Iniciar el Guardián Automático Diario del Robot MOT (05:30 AM a 22:40 HS Hora Argentina)
   if (motScheduler.initAutoGuardian) {
     motScheduler.initAutoGuardian();

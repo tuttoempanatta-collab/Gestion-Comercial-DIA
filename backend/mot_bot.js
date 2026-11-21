@@ -617,16 +617,51 @@ function ensureSessionDir() {
   if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 }
 
+async function restoreSessionFromDb() {
+  try {
+    const { pool } = require('./pool');
+    const res = await pool.query("SELECT value FROM settings WHERE key = 'mot_storage_state'");
+    if (res.rows && res.rows.length > 0 && res.rows[0].value) {
+      ensureSessionDir();
+      fs.writeFileSync(SESSION_FILE, res.rows[0].value, 'utf8');
+      log('[Keep-Alive MOT] Sesión de storage_state restaurada desde base de datos.');
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
 async function saveSession() {
   ensureSessionDir();
   if (_context) await _context.storageState({ path: SESSION_FILE });
   log('Sesión guardada en disco.');
+
+  // Sincronizar en DB settings
+  try {
+    const { pool } = require('./pool');
+    if (fs.existsSync(SESSION_FILE)) {
+      const dataStr = fs.readFileSync(SESSION_FILE, 'utf8');
+      await pool.query(
+        'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
+        ['mot_storage_state', dataStr]
+      );
+    }
+  } catch (_) {}
 }
 
 function saveSessionData(jsonObj) {
   ensureSessionDir();
   fs.writeFileSync(SESSION_FILE, JSON.stringify(jsonObj, null, 2));
   log('Archivo de sesión importado y guardado en disco.');
+
+  // Sincronizar en DB settings
+  try {
+    const { pool } = require('./pool');
+    pool.query(
+      'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value',
+      ['mot_storage_state', JSON.stringify(jsonObj)]
+    ).catch(() => {});
+  } catch (_) {}
 }
 
 async function pingMotSession() {
@@ -707,6 +742,9 @@ async function ensureBrowser(headless = true) {
       locale: 'es-AR',
       timezoneId: 'America/Argentina/Buenos_Aires',
     };
+    if (!sessionExists()) {
+      await restoreSessionFromDb();
+    }
     if (sessionExists()) {
       contextOptions.storageState = SESSION_FILE;
     }
@@ -2670,6 +2708,7 @@ module.exports = {
   isLoggedIn,
   sessionExists,
   saveSessionData,
+  restoreSessionFromDb,
   pingMotSession,
   setCachedDashboard,
   getNowArgentina,
